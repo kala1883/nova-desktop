@@ -1,0 +1,102 @@
+# NOVA 架构评估与渐进迁移方案
+
+本方案依据当前代码及 Microsoft Win32 官方文档。日期：2026-09-07。
+
+## 结论
+
+采用**静态链接的模块化 C 单进程**：一个 UI 线程拥有所有窗口和可变业务状态；按需启动一个后台工作线程处理图标、文件与 Shell 服务。优先划清依赖、生命周期和资源上限，而不是引入框架、数据库、常驻服务或通用插件系统。
+
+分成多个 `.c` 文件本身不会降低内存，也没有必然的运行时开销。实质收益来自减少重复 Shell 调用、限制缓存和队列、避免消息线程阻塞，以及可独立测试的状态转换。
+
+## 当前问题（代码证据）
+
+| 位置 | 问题 | 影响 / 优先级 |
+|---|---|---|
+| `main.c / refresh_apps` | 搜索每次 EN_CHANGE 都重建图像列表，再读所有匹配文件的图标 | 重复 I/O、Shell 扩展阻塞、GDI 对象分配；P1 |
+| `main.c / dispatch_launch` | ShellExecuteW 仍同步运行在 UI 线程 | 慢关联程序可短暂卡住 UI；计时器只分散发起时间，不等于后台执行；P1 |
+| `main.c / save_config` | 用户操作同步逐字段写临时 INI | 操作越多写入越频繁；固定 `.tmp` 名、不检查最后 flush、掉电保证不足；P1 |
+| `main.c` | 数据、绘制、输入、注册表、持久化等共享静态全局状态 | 生命周期隐含，改一处难评估其他影响；P1 |
+| `main.c / insert_path` | 固定 MAX_PATH，路径比较策略分散，默认项目依赖 PATH / 当前目录 | 长路径受限，启动目标易受环境影响；P1 |
+| `tests/core.c` | 为访问静态函数直接包含 main.c | 测试与窗口实现紧耦合；迁移后逐步移除；P2 |
+| 自绘标题栏、ListView | 手工命中测试 / DPI 与系统控件混合 | 需回归键盘、最大化、缩放、多显示器与辅助功能；P2 |
+
+性能事实：以前的 1.45 MB 是主动清空工作集后的瞬时结果，不能当作真实内存需求；句柄总数稳定也不能证明 GDI 无泄漏。需同时测私有提交、工作集、GDI/USER 对象和交互延迟。
+
+## 目标依赖与职责
+
+```text
+src/
+  main.c                    初始化、组装、消息循环、退出（目标 <150 行）
+  core/
+    workspace.[ch]          工作区数据规则；无 HWND、文件 I/O、线程
+    launch_queue.[ch]       有界队列、快照、取消、结果；通过回调派发
+    model.[ch]              AppState、稳定 ID、校验、版本迁移（后续）
+  app/
+    controller.[ch]         命令编排：操作 model -> 保存 -> 通知 UI（后续）
+    jobs.[ch]               有界任务、代次、结果回收（后续）
+  platform/
+    shell_icons.[ch]        图标提取与所有权；不修改系统图像列表
+    launcher_win32.[ch]     ShellExecuteExW、错误码、工作目录（后续）
+    config_win32.[ch]       读取、校验、原子替换、备份（后续）
+    startup_win32.[ch]      当前用户登录启动项（后续）
+  ui/
+    hold_drag.[ch]          长按、捕获、取消、目标命中；回调业务层
+    window.[ch]             窗口过程与控件生命周期（后续）
+    caption.[ch]            标题栏、命中、置顶（后续）
+    workspace_view.[ch]     图标、筛选、选择、滚动（后续）
+    theme.[ch]              字体、尺寸、颜色、DPI（后续）
+```
+
+UI 依赖 controller 与 core 的只读视图；controller 依赖 core 和平台接口；core 不反向引用 UI。平台函数返回结果结构，禁止内部 MessageBox 或修改工作区。仅 UI 层决定提示文案与刷新范围。新增 Windows 集成功能优先扩展平台接口；不用“所有模块共用的全局变量头文件”替代设计。
+
+## 状态与资源所有权
+
+- 一个 AppState 在主线程持有。工作线程只接收不可变任务快照，结果带稳定 item_id 与 generation；搜索/切换后丢弃过期结果。
+- 导入、排序、跨区移动都经过命令；先验证容量、索引、重复路径，再提交。失败不半删半加。
+- HICON 明确 owned / borrowed；本轮 shell_icons 返回 owned HICON，调用者必须 DestroyIcon。系统 HIMAGELIST 只借用，绝不修改或销毁。
+- 字体、画刷按主题/DPI 创建一次，销毁窗口时统一释放。图标缓存先按需创建，设数量和字节上限。
+- 定时器只在有工作时存在。关闭时取消待启动项；拖动在 Esc、失焦、丢失捕获时停止。禁止 TerminateThread。
+
+## 并发、缓存与性能预算（目标，尚未达标声明）
+
+1. UI 只做内存筛选、布局与局部绘制。100 ms 搜索去抖；不要每次按键重新提取图标。
+2. 一个惰性后台线程，COM 初始化/卸载在同一线程完成。队列最多 64 项，启动快照最多 20 项；启动请求优先于装饰性图标查询。空闲用事件阻塞等待，不轮询。
+3. 图标缓存 key 包含规范路径、尺寸、DPI、文件更新时间；建议最多 128 项且约 2 MB 像素预算，LRU 淘汰。搜索复用缓存。只有 DPI 或图标版本改变才重建图像。
+4. UI 收到完成消息时校验 generation，仅更新相应图标。PostMessage 失败必须回收结果；窗口销毁后不再投递。线程任务不能持有已销毁控件。
+5. Shell 扩展是进程内第三方代码：后台线程改善响应，不提供安全隔离，也无法保证取消正在进行的 Shell 调用。若支持不可信网络目录或插件，可选按需 helper 进程隔离；不要默认付出多进程常驻成本。
+6. 配置写入可去抖 300–500 ms，显式退出做最后一次提交。使用同目录唯一临时文件、完整写入检查、FlushFileBuffers、替换/备份；读取限制大小与条目数，损坏时回退备份而非静默覆盖。
+7. 不使用 EmptyWorkingSet / 强制缩减工作集作为优化指标。建议本地空闲 CPU <0.1%（说明总核/单核口径）、常用操作 P95 <50 ms，实际内存预算通过无自动化注入的 Release 基准确定。
+
+## 安全设计
+
+- 普通用户运行，保持 asInvoker；开机启动仅改自己的 HKCU Run 值，禁用只移除此值。
+- 导入与执行分离。拖入只记录路径；双击工作区才触发批量执行，脚本也会执行，因此界面明确说明。批量过程禁止重复入队，Esc 只取消尚未发出的项目，不杀死已启动应用。
+- 使用 Shell API 的目标/参数字段，不把用户路径拼进 cmd / powershell 命令字符串；不使用 runas 自动提权。未来参数功能需分字段持久化。
+- 默认内置程序使用已解析绝对路径，配置中的相对路径要按明确基目录解析；不能把当前目录当作可信程序搜索源。
+- 自身 DLL 加载使用可信搜索路径与绝对路径；对任意扩展 DLL 不作进程内自动加载。导入文件中的文字不能成为应用控制指令。
+- 配置使用 schema_version、文件长度与字符串边界校验；保存错误应保留内存状态并提示，不声称成功。同步或共享目录等更强攻击场景需要另行设计 ACL / 重解析点策略。
+
+## 本轮已实施与后续顺序
+
+已实施：workspace 数据结构与移动规则、launch_queue 队列快照、无快捷方式叠加的图标读取、hold_drag 长按交互，均独立编译；新增模块测试不包含 main.c、不启动真实应用。UI 仍由 main.c 编排，旧持久化/注册表代码尚未迁走。
+
+下一步按风险顺序：
+
+1. 抽出 config/startup/launcher 接口，先补兼容旧配置的回归；引入 AppState 与稳定 ID。
+2. 抽出窗口/标题栏/主题，把 main.c 缩为组装入口；迁移现有窗口测试，移除 include main.c。
+3. 引入后台 jobs 和有界图标缓存，测搜索/网络路径响应与内存后再考虑额外线程。
+4. 补 Unicode 长路径、多屏 DPI、配置损坏恢复；有明确插件需求再引入隔离 helper。
+
+## 验证矩阵
+
+- 单元：前后排序、尾部放置、跨区移动、满容量与重复失败不改变数据、批量快照、失败计数、取消和重复点击。
+- Win32 集成：长按阈值、点击/双击不误拖、捕获丢失、Esc、过滤态禁止排序、鼠标释放在窗外、快捷方式图标与启动路径保留。
+- 启动测试使用 fake callback，不在自动测试中运行用户工作区的脚本或应用。
+- 性能：Release / 无调试器和 UI 自动化，记录硬件、系统/DPI；采样空闲 60 秒、100 次切换/搜索、20 项批量发起。跟踪 Private Bytes、Working Set、CPU、GDI/USER 对象、任务与缓存峰值；另列外部应用资源，不能归入 NOVA 内存指标。
+
+## 官方依据
+
+- [SHGetFileInfoW](https://learn.microsoft.com/en-us/windows/win32/api/shellapi/nf-shellapi-shgetfileinfow)：系统图像列表只读、图标所有权、COM 初始化，以及建议后台调用以免 UI 阻塞。
+- [ShellExecuteExW](https://learn.microsoft.com/en-us/windows/win32/api/shellapi/nf-shellapi-shellexecuteexw)：Shell 启动及 COM/Shell 扩展相关约束。
+- [SetCapture](https://learn.microsoft.com/en-us/windows/win32/api/winuser/nf-winuser-setcapture)：鼠标捕获与释放约束。
+- [DLL Security](https://learn.microsoft.com/en-us/windows/win32/dlls/dynamic-link-library-security)：可信 DLL 搜索路径、防止不安全目录参与加载。
