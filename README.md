@@ -12,10 +12,11 @@ required.
 
 ## Highlights
 
-- **12 file-manager layouts** — four panes, two columns, two rows, a single
-  pane, four three-pane arrangements, and three/four-column or row layouts.
-- **Independent tabs and history** — up to 12 tabs per pane, with separate
-  paths and back/forward history.
+- **12 resizable file-manager layouts** — four panes, two columns, two rows, a
+  single pane, four three-pane arrangements, and three/four-column or row
+  layouts. Drag pane dividers to resize them; proportions are restored locally.
+- **Independent tabs and history** — up to 12 clearly highlighted tabs per pane,
+  with separate paths and back/forward history.
 - **Native Windows file operations** — selection, sorting, filtering, context
   menus, thumbnails, clipboard operations, drag and drop, rename, delete, and
   new-folder actions use Windows Shell behavior.

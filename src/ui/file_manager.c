@@ -29,6 +29,8 @@
 #define VIEW_IDLE_MS 30000
 #define HISTORY_LIMIT 24
 #define SAVE_TIMER 2
+#define SPLIT_SCALE 10000
+#define SPLIT_MIN_LOGICAL 96
 enum { C_LAYOUT=200, C_FAVORITES, C_VIEW, C_COPY, C_CUT, C_PASTE, C_RENAME,
        C_DELETE, C_NEWFOLDER, C_HELP, C_BACK=240, C_FORWARD, C_UP, C_GO,
        C_NEWTAB, C_CLOSETAB, C_REFRESH, C_ADDRESS, C_TABS };
@@ -53,16 +55,21 @@ struct Pane {
     Tab *items[TAB_LIMIT];
     int count, selected, index;
 };
+typedef struct Splitter {
+    BOOL vertical;
+    int coordinate, range_start, range_end;
+} Splitter;
 static struct {
     HWND window, status, toolbar[10], tooltip, hot_button;
     HFONT font, icon_font;
     HBRUSH background, panel;
     Pane panes[4];
-    int active, layout, dpi;
+    int active, layout, dpi, splits[12][3];
+    int drag_layout, drag_split, drag_original;
     wchar_t settings[MAX_PATH], favorites[FAVORITE_LIMIT][LOCATION_SIZE];
     int favorite_count;
     int tooltips_added;
-    BOOL loading, closing, navigation_tree, dirty, test_mode;
+    BOOL loading, closing, navigation_tree, dirty, test_mode, splitter_dragging;
     int command_runs;
     wchar_t last_command[LOCATION_SIZE],last_command_directory[LOCATION_SIZE];
     ULONGLONG notice_until;
@@ -82,7 +89,7 @@ static void failure(const wchar_t *action,HRESULT hr){
     wchar_t text[320];swprintf(text,320,nova_text(L"%ls（0x%08lX）。请检查路径、设备连接或访问权限。",L"%ls (0x%08lX). Check the path, device connection, and access permissions."),action,(unsigned long)hr);status_text(text);
 }
 static void activate(Pane *p){
-    if(fm.active!=p->index){int old=fm.active;fm.active=p->index;InvalidateRect(fm.panes[old].window,NULL,FALSE);InvalidateRect(p->window,NULL,FALSE);}
+    if(fm.active!=p->index){int old=fm.active;fm.active=p->index;InvalidateRect(fm.panes[old].window,NULL,FALSE);InvalidateRect(fm.panes[old].tabs,NULL,FALSE);InvalidateRect(p->window,NULL,FALSE);InvalidateRect(p->tabs,NULL,FALSE);}
 }
 static void focus_view(Tab *t){
     IShellView *view=NULL;
@@ -239,7 +246,7 @@ static void select_tab(Pane *p,int index){
     if(index<0||index>=p->count)return;
     p->selected=index;TabCtrl_SetCurSel(p->tabs,index);
     for(int i=0;i<p->count;i++)ShowWindow(p->items[i]->host,i==index?SW_SHOW:SW_HIDE);
-    SetWindowTextW(p->address,current(p)->location);EnableWindow(p->close,p->count>1);EnableWindow(p->add,p->count<TAB_LIMIT);
+    SetWindowTextW(p->address,current(p)->location);EnableWindow(p->close,p->count>1);EnableWindow(p->add,p->count<TAB_LIMIT);InvalidateRect(p->tabs,NULL,FALSE);
     arrange();
 }
 static void close_tab(Pane *p){
@@ -358,6 +365,20 @@ static LRESULT draw_button(DRAWITEMSTRUCT *d){
     HFONT old=(HFONT)SelectObject(d->hDC,fm.icon_font);DrawTextW(d->hDC,button_glyph(d->CtlID),-1,&r,DT_CENTER|DT_VCENTER|DT_SINGLELINE|DT_NOPREFIX);SelectObject(d->hDC,old);
     if(d->itemState&ODS_FOCUS){RECT focus=d->rcItem;InflateRect(&focus,-3,-3);DrawFocusRect(d->hDC,&focus);}return TRUE;
 }
+static LRESULT draw_tab(Pane *p,DRAWITEMSTRUCT *d){
+    if(d->itemID==(UINT)-1)return TRUE;
+    wchar_t text[128]=L"";TCITEMW item={0};item.mask=TCIF_TEXT;item.pszText=text;item.cchTextMax=128;TabCtrl_GetItem(d->hwndItem,(int)d->itemID,&item);
+    BOOL selected=(int)d->itemID==p->selected;
+    COLORREF fill=selected?RGB(53,77,122):RGB(232,236,242);
+    COLORREF ink=selected?RGB(255,255,255):RGB(35,45,59);
+    HBRUSH brush=CreateSolidBrush(fill);FillRect(d->hDC,&d->rcItem,brush);DeleteObject(brush);
+    RECT edge=d->rcItem;HBRUSH border=CreateSolidBrush(selected?(p->index==fm.active?RGB(105,151,224):RGB(82,111,157)):RGB(195,203,214));
+    if(selected){edge.bottom=edge.top+scale(3);FillRect(d->hDC,&edge,border);}else{edge.left=edge.right-1;FillRect(d->hDC,&edge,border);}DeleteObject(border);
+    RECT label=d->rcItem;label.left+=scale(8);label.right-=scale(8);label.top+=selected?scale(2):0;
+    SetBkMode(d->hDC,TRANSPARENT);SetTextColor(d->hDC,ink);HFONT old=(HFONT)SelectObject(d->hDC,fm.font);
+    DrawTextW(d->hDC,text,-1,&label,DT_CENTER|DT_VCENTER|DT_SINGLELINE|DT_END_ELLIPSIS|DT_NOPREFIX);SelectObject(d->hDC,old);
+    if(d->itemState&ODS_FOCUS){RECT focus=d->rcItem;InflateRect(&focus,-3,-3);DrawFocusRect(d->hDC,&focus);}return TRUE;
+}
 static void pane_layout(Pane *p){
     if(!p->window)return;
     RECT r;GetClientRect(p->window,&r);int w=r.right,h=r.bottom,s=scale(4),bh=scale(28);
@@ -372,6 +393,26 @@ static void pane_layout(Pane *p){
     }
 }
 /* Same layout vocabulary as the reference. Geometry is shared with integration tests. */
+static int split_count(int layout){
+    if(layout==3)return 0;
+    if(layout==8||layout==9)return 3;
+    if(layout==0||(layout>=4&&layout<=7)||layout==10||layout==11)return 2;
+    return 1;
+}
+static BOOL split_vertical(int layout,int index){
+    if(layout==0)return index==0;
+    if(layout==1||layout==8||layout==10)return TRUE;
+    if(layout==2||layout==9||layout==11)return FALSE;
+    if(layout==4||layout==5)return index==0;
+    return index==1;
+}
+static int default_split(int layout,int index){
+    if(layout==8||layout==9){const int values[]={2500,5000,7500};return values[index];}
+    if(layout==10||layout==11){const int values[]={3333,6667};return values[index];}
+    return 5000;
+}
+static int split_value(int layout,int index){int value=fm.splits[layout][index];return value>=200&&value<=9800?value:default_split(layout,index);}
+static int split_pixel(int layout,int index,int total){return MulDiv(total,split_value(layout,index),SPLIT_SCALE);}
 static int pane_rects(int layout,int width,int height,RECT out[4]){
     int count=4;
     for(int i=0;i<4;i++)SetRect(&out[i],0,0,width,height);
@@ -379,14 +420,52 @@ static int pane_rects(int layout,int width,int height,RECT out[4]){
     if(layout==1||layout==2)count=2;
     else if(layout>=4&&layout<=7)count=3;
     else if(layout==10||layout==11)count=3;
-    if(layout==0){for(int i=0;i<4;i++)SetRect(&out[i],(i%2)*width/2,(i/2)*height/2,(i%2+1)*width/2,(i/2+1)*height/2);}
-    else if(layout==1||layout==8||layout==10){for(int i=0;i<count;i++)SetRect(&out[i],i*width/count,0,(i+1)*width/count,height);}
-    else if(layout==2||layout==9||layout==11){for(int i=0;i<count;i++)SetRect(&out[i],0,i*height/count,width,(i+1)*height/count);}
-    else if(layout==4){SetRect(&out[0],0,0,width/2,height);SetRect(&out[1],width/2,0,width,height/2);SetRect(&out[2],width/2,height/2,width,height);}
-    else if(layout==5){SetRect(&out[0],0,0,width/2,height/2);SetRect(&out[1],0,height/2,width/2,height);SetRect(&out[2],width/2,0,width,height);}
-    else if(layout==6){SetRect(&out[0],0,0,width,height/2);SetRect(&out[1],0,height/2,width/2,height);SetRect(&out[2],width/2,height/2,width,height);}
-    else if(layout==7){SetRect(&out[0],0,0,width/2,height/2);SetRect(&out[1],width/2,0,width,height/2);SetRect(&out[2],0,height/2,width,height);}
+    int a=split_pixel(layout,0,split_vertical(layout,0)?width:height),b=split_pixel(layout,1,split_vertical(layout,1)?width:height);
+    if(layout==0){SetRect(&out[0],0,0,a,b);SetRect(&out[1],a,0,width,b);SetRect(&out[2],0,b,a,height);SetRect(&out[3],a,b,width,height);}
+    else if(layout==1){SetRect(&out[0],0,0,a,height);SetRect(&out[1],a,0,width,height);}
+    else if(layout==2){SetRect(&out[0],0,0,width,a);SetRect(&out[1],0,a,width,height);}
+    else if(layout==8||layout==10){int edges[5]={0,a,b,layout==8?split_pixel(layout,2,width):width,width};for(int i=0;i<count;i++)SetRect(&out[i],edges[i],0,edges[i+1],height);}
+    else if(layout==9||layout==11){int edges[5]={0,a,b,layout==9?split_pixel(layout,2,height):height,height};for(int i=0;i<count;i++)SetRect(&out[i],0,edges[i],width,edges[i+1]);}
+    else if(layout==4){SetRect(&out[0],0,0,a,height);SetRect(&out[1],a,0,width,b);SetRect(&out[2],a,b,width,height);}
+    else if(layout==5){SetRect(&out[0],0,0,a,b);SetRect(&out[1],0,b,a,height);SetRect(&out[2],a,0,width,height);}
+    else if(layout==6){SetRect(&out[0],0,0,width,a);SetRect(&out[1],0,a,b,height);SetRect(&out[2],b,a,width,height);}
+    else if(layout==7){SetRect(&out[0],0,0,b,a);SetRect(&out[1],b,0,width,a);SetRect(&out[2],0,a,width,height);}
     return count;
+}
+static BOOL splitter_geometry(int layout,int index,int width,int height,Splitter *out){
+    if(index<0||index>=split_count(layout))return FALSE;
+    out->vertical=split_vertical(layout,index);out->coordinate=split_pixel(layout,index,out->vertical?width:height);
+    out->range_start=0;out->range_end=out->vertical?height:width;
+    if(index==1&&layout==4)out->range_start=split_pixel(layout,0,width);
+    else if(index==1&&layout==5)out->range_end=split_pixel(layout,0,width);
+    else if(index==1&&layout==6)out->range_start=split_pixel(layout,0,height);
+    else if(index==1&&layout==7)out->range_end=split_pixel(layout,0,height);
+    return TRUE;
+}
+static int hit_splitter(POINT point,int *split){
+    RECT r;GetClientRect(fm.window,&r);int top=scale(46),height=r.bottom-top-scale(27),tolerance=scale(6);point.y-=top;
+    if(point.y<0||point.y>height)return 0;
+    for(int i=0;i<split_count(fm.layout);i++){Splitter s;splitter_geometry(fm.layout,i,r.right,height,&s);
+        int across=s.vertical?point.y:point.x,delta=(s.vertical?point.x:point.y)-s.coordinate;
+        if(across>=s.range_start&&across<=s.range_end&&delta>=-tolerance&&delta<=tolerance){*split=i;return s.vertical?1:2;}
+    }return 0;
+}
+static void update_splitter(POINT point){
+    RECT r;GetClientRect(fm.window,&r);int height=r.bottom-scale(46)-scale(27),vertical=split_vertical(fm.drag_layout,fm.drag_split);
+    int total=vertical?r.right:height,coordinate=vertical?point.x:point.y-scale(46);if(total<=0)return;
+    int count=split_count(fm.drag_layout),minimum=min(scale(SPLIT_MIN_LOGICAL),total/(count+1));if(minimum<scale(24))minimum=scale(24);
+    int low=minimum,high=total-minimum;
+    if((fm.drag_layout==8||fm.drag_layout==9||fm.drag_layout==10||fm.drag_layout==11)){
+        if(fm.drag_split>0)low=split_pixel(fm.drag_layout,fm.drag_split-1,total)+minimum;
+        if(fm.drag_split+1<count)high=split_pixel(fm.drag_layout,fm.drag_split+1,total)-minimum;
+    }
+    if(low>high)return;if(coordinate<low)coordinate=low;if(coordinate>high)coordinate=high;
+    fm.splits[fm.drag_layout][fm.drag_split]=MulDiv(coordinate,SPLIT_SCALE,total);arrange();
+}
+static void cancel_splitter(BOOL restore){
+    if(!fm.splitter_dragging)return;
+    if(restore)fm.splits[fm.drag_layout][fm.drag_split]=fm.drag_original;
+    fm.splitter_dragging=FALSE;if(GetCapture()==fm.window)ReleaseCapture();arrange();
 }
 static void arrange(void){
     if(!fm.window)return;
@@ -412,6 +491,16 @@ static void arrange(void){
 }
 static int session_int(const wchar_t *section,const wchar_t *key,int fallback){return store_int(L"files",section,key,fallback);}
 static void session_get(const wchar_t *section,const wchar_t *key,const wchar_t *fallback,wchar_t *value,int size){store_get(L"files",section,key,fallback,value,size);}
+static void load_split_positions(void){
+    for(int layout=0;layout<12;layout++){
+        int count=split_count(layout),valid=TRUE;
+        for(int i=0;i<count;i++){wchar_t key[32];swprintf(key,32,L"Split%d_%d",layout,i);fm.splits[layout][i]=session_int(L"Manager",key,default_split(layout,i));
+            if(fm.splits[layout][i]<200||fm.splits[layout][i]>9800)valid=FALSE;
+            if(i&&split_vertical(layout,i)==split_vertical(layout,i-1)&&fm.splits[layout][i]<=fm.splits[layout][i-1]+200)valid=FALSE;
+        }
+        if(!valid)for(int i=0;i<count;i++)fm.splits[layout][i]=default_split(layout,i);
+    }
+}
 static BOOL migrate_session(void){
     if(session_int(L"Manager",L"Migrated",0))return TRUE;
     if(!store_begin())return FALSE;
@@ -444,6 +533,7 @@ static BOOL flush_session(void){
     BOOL ok=TRUE;wchar_t section[32],key[32];
     ok=store_set_int(L"files",L"Manager",L"Layout",fm.layout)&&ok;
     ok=store_set_int(L"files",L"Manager",L"NavigationTree",fm.navigation_tree)&&ok;
+    for(int layout=0;layout<12;layout++)for(int i=0;i<split_count(layout);i++){swprintf(key,32,L"Split%d_%d",layout,i);ok=store_set_int(L"files",L"Manager",key,fm.splits[layout][i])&&ok;}
     ok=store_set_int(L"files",L"Manager",L"FavoriteCount",fm.favorite_count)&&ok;
     for(int i=0;i<fm.favorite_count;i++){swprintf(key,32,L"Item%d",i);ok=store_set(L"files",L"Favorites",key,fm.favorites[i])&&ok;}
     for(int i=0;i<4;i++){
@@ -470,7 +560,7 @@ static LRESULT CALLBACK pane_proc(HWND h,UINT msg,WPARAM wp,LPARAM lp){
     case WM_COMMAND:activate(p);if(HIWORD(wp)==BN_CLICKED)command(p,LOWORD(wp));return 0;
     case WM_NOTIFY:if(((NMHDR*)lp)->hwndFrom==p->tabs&&((NMHDR*)lp)->code==TCN_SELCHANGE){activate(p);select_tab(p,TabCtrl_GetCurSel(p->tabs));save_session();}return 0;
     case WM_SIZE:pane_layout(p);return 0;
-    case WM_DRAWITEM:return draw_button((DRAWITEMSTRUCT*)lp);
+    case WM_DRAWITEM:{DRAWITEMSTRUCT *draw=(DRAWITEMSTRUCT*)lp;return draw->hwndItem==p->tabs?draw_tab(p,draw):draw_button(draw);}
     case WM_CTLCOLOREDIT:SetTextColor((HDC)wp,RGB(236,241,249));SetBkColor((HDC)wp,RGB(22,29,42));return (LRESULT)fm.panel;
     case WM_PAINT:{PAINTSTRUCT ps;HDC dc=BeginPaint(h,&ps);RECT r;GetClientRect(h,&r);FillRect(dc,&r,fm.panel);
         if(p->index==fm.active){HBRUSH b=CreateSolidBrush(RGB(105,151,224));FrameRect(dc,&r,b);DeleteObject(b);}EndPaint(h,&ps);return 0;}
@@ -481,7 +571,7 @@ static void initialize_panes(void){
     for(int i=0;i<4;i++){
         Pane *p=&fm.panes[i];p->index=i;
         p->window=CreateWindowExW(WS_EX_CONTROLPARENT,PANE_CLASS,nova_text(L"目录窗格",L"Folder pane"),WS_CHILD|WS_VISIBLE|WS_CLIPCHILDREN,0,0,300,300,fm.window,NULL,GetModuleHandleW(NULL),p);
-        p->tabs=child(p->window,WC_TABCONTROLW,nova_text(L"目录标签",L"Folder tabs"),TCS_FOCUSNEVER,C_TABS);
+        p->tabs=child(p->window,WC_TABCONTROLW,nova_text(L"目录标签",L"Folder tabs"),TCS_FOCUSNEVER|TCS_OWNERDRAWFIXED,C_TABS);
         p->add=button(p->window,nova_text(L"新页",L"New tab"),C_NEWTAB);p->close=button(p->window,nova_text(L"关页",L"Close tab"),C_CLOSETAB);
         p->back=button(p->window,nova_text(L"后退",L"Back"),C_BACK);p->forward=button(p->window,nova_text(L"前进",L"Forward"),C_FORWARD);p->up=button(p->window,nova_text(L"上级",L"Up"),C_UP);p->refresh=button(p->window,nova_text(L"刷新",L"Refresh"),C_REFRESH);
         p->address=child(p->window,L"EDIT",L"",ES_AUTOHSCROLL,C_ADDRESS);SendMessageW(p->address,EM_SETLIMITTEXT,LOCATION_SIZE-1,0);SendMessageW(p->address,EM_SETCUEBANNER,TRUE,(LPARAM)nova_text(L"目录或命令（> 强制命令）  Ctrl+L",L"Folder or command (> forces command)  Ctrl+L"));
@@ -514,13 +604,22 @@ static LRESULT CALLBACK manager_proc(HWND h,UINT msg,WPARAM wp,LPARAM lp){
         const wchar_t **names=nova_english?names_en:names_zh,**tips=nova_english?tips_en:tips_zh;
         for(int i=0;i<10;i++){fm.toolbar[i]=button(h,names[i],C_LAYOUT+i);add_tip(fm.toolbar[i],tips[i]);}
         fm.status=child(h,L"STATIC",nova_text(L"正在加载目录…",L"Loading folders…"),SS_LEFTNOWORDWRAP,300);
-        fm.layout=session_int(L"Manager",L"Layout",0);if(fm.layout<0||fm.layout>11)fm.layout=0;
+        fm.layout=session_int(L"Manager",L"Layout",0);if(fm.layout<0||fm.layout>11)fm.layout=0;load_split_positions();
         fm.navigation_tree=session_int(L"Manager",L"NavigationTree",0)!=0;
         fm.favorite_count=session_int(L"Manager",L"FavoriteCount",0);if(fm.favorite_count<0||fm.favorite_count>FAVORITE_LIMIT)fm.favorite_count=0;
         for(int i=0;i<fm.favorite_count;i++){wchar_t key[32];swprintf(key,32,L"Item%d",i);session_get(L"Favorites",key,L"",fm.favorites[i],LOCATION_SIZE);}
         initialize_panes();fm.loading=FALSE;fm.active=0;arrange();SetTimer(h,1,1500,NULL);
         BOOL dark=TRUE;DwmSetWindowAttribute(h,20,&dark,sizeof(dark));return 0;}
     case WM_SIZE:arrange();return 0;
+    case WM_SETCURSOR:
+        if(LOWORD(lp)==HTCLIENT){POINT point;int split;GetCursorPos(&point);ScreenToClient(h,&point);int axis=hit_splitter(point,&split);if(axis){SetCursor(LoadCursorW(NULL,axis==1?IDC_SIZEWE:IDC_SIZENS));return TRUE;}}
+        break;
+    case WM_LBUTTONDOWN:{POINT point={GET_X_LPARAM(lp),GET_Y_LPARAM(lp)};int split,axis=hit_splitter(point,&split);if(axis){
+        fm.splitter_dragging=TRUE;fm.drag_layout=fm.layout;fm.drag_split=split;fm.drag_original=fm.splits[fm.layout][split];SetCapture(h);SetCursor(LoadCursorW(NULL,axis==1?IDC_SIZEWE:IDC_SIZENS));return 0;}break;}
+    case WM_MOUSEMOVE:if(fm.splitter_dragging){POINT point={GET_X_LPARAM(lp),GET_Y_LPARAM(lp)};update_splitter(point);SetCursor(LoadCursorW(NULL,split_vertical(fm.drag_layout,fm.drag_split)?IDC_SIZEWE:IDC_SIZENS));return 0;}break;
+    case WM_LBUTTONUP:if(fm.splitter_dragging){POINT point={GET_X_LPARAM(lp),GET_Y_LPARAM(lp)};update_splitter(point);fm.splitter_dragging=FALSE;if(GetCapture()==h)ReleaseCapture();save_session();return 0;}break;
+    case WM_CANCELMODE:cancel_splitter(TRUE);return 0;
+    case WM_CAPTURECHANGED:if(fm.splitter_dragging)cancel_splitter(TRUE);return 0;
     case WM_GETMINMAXINFO:((MINMAXINFO*)lp)->ptMinTrackSize.x=scale(880);((MINMAXINFO*)lp)->ptMinTrackSize.y=scale(640);return 0;
     case WM_COMMAND:
         if(LOWORD(wp)==C_LAYOUT){
@@ -530,7 +629,7 @@ static LRESULT CALLBACK manager_proc(HWND h,UINT msg,WPARAM wp,LPARAM lp){
         }
         if(LOWORD(wp)==C_FAVORITES){popup_favorites();return 0;}
         if(LOWORD(wp)==C_VIEW){view_menu();return 0;}
-        if(LOWORD(wp)==C_HELP){MessageBoxW(h,nova_text(L"每个窗格独立浏览目录，可使用系统右键菜单、排序、拖放和缩略图。\n\nCtrl+L：目录/命令地址栏（支持环境变量）\n输入目录：在当前窗格切换\n输入命令：以当前目录为 cmd 工作目录执行\n> 命令：强制按命令执行\nAlt+左 / 右：后退 / 前进\nAlt+上：上级目录\nCtrl+T / Ctrl+W：新建 / 关闭标签\nCtrl+Tab：下一个标签\nF6：下一个窗格\nF5：刷新\nCtrl+C / X / V：复制 / 剪切 / 粘贴\nF2：重命名    Delete：删除\nCtrl+Shift+N：新建文件夹\n\n复制后点击目标窗格再粘贴；拖放行为和覆盖提示由 Windows 处理。\n目录标签、布局和收藏在关闭后恢复。",L"Each pane browses independently and supports Windows context menus, sorting, drag and drop, and thumbnails.\n\nCtrl+L: folder/command address bar (environment variables supported)\nEnter a folder: navigate the current pane\nEnter a command: run it with the current folder as the cmd working directory\n> command: force command mode\nAlt+Left / Right: back / forward\nAlt+Up: parent folder\nCtrl+T / Ctrl+W: new / close tab\nCtrl+Tab: next tab\nF6: next pane\nF5: refresh\nCtrl+C / X / V: copy / cut / paste\nF2: rename    Delete: delete\nCtrl+Shift+N: new folder\n\nAfter copying, click the destination pane and paste. Windows handles drag-and-drop behavior and overwrite prompts.\nFolder tabs, layout, and favorites are restored after closing."),nova_text(L"NOVA 文件管理",L"NOVA File Manager"),MB_OK);return 0;}
+        if(LOWORD(wp)==C_HELP){MessageBoxW(h,nova_text(L"每个窗格独立浏览目录，可使用系统右键菜单、排序、拖放和缩略图。拖动窗格边界可调整大小。\n\nCtrl+L：目录/命令地址栏（支持环境变量）\n输入目录：在当前窗格切换\n输入命令：以当前目录为 cmd 工作目录执行\n> 命令：强制按命令执行\nAlt+左 / 右：后退 / 前进\nAlt+上：上级目录\nCtrl+T / Ctrl+W：新建 / 关闭标签\nCtrl+Tab：下一个标签\nF6：下一个窗格\nF5：刷新\nCtrl+C / X / V：复制 / 剪切 / 粘贴\nF2：重命名    Delete：删除\nCtrl+Shift+N：新建文件夹\n\n复制后点击目标窗格再粘贴；拖放行为和覆盖提示由 Windows 处理。\n目录标签、布局、窗格比例和收藏在关闭后恢复。",L"Each pane browses independently and supports Windows context menus, sorting, drag and drop, and thumbnails. Drag a pane divider to resize it.\n\nCtrl+L: folder/command address bar (environment variables supported)\nEnter a folder: navigate the current pane\nEnter a command: run it with the current folder as the cmd working directory\n> command: force command mode\nAlt+Left / Right: back / forward\nAlt+Up: parent folder\nCtrl+T / Ctrl+W: new / close tab\nCtrl+Tab: next tab\nF6: next pane\nF5: refresh\nCtrl+C / X / V: copy / cut / paste\nF2: rename    Delete: delete\nCtrl+Shift+N: new folder\n\nAfter copying, click the destination pane and paste. Windows handles drag-and-drop behavior and overwrite prompts.\nFolder tabs, layouts, pane proportions, and favorites are restored after closing."),nova_text(L"NOVA 文件管理",L"NOVA File Manager"),MB_OK);return 0;}
         command(&fm.panes[fm.active],LOWORD(wp));return 0;
     case WM_DRAWITEM:return draw_button((DRAWITEMSTRUCT*)lp);
     case WM_CTLCOLORSTATIC:SetTextColor((HDC)wp,RGB(167,181,202));SetBkColor((HDC)wp,RGB(14,19,29));return (LRESULT)fm.background;
@@ -540,7 +639,7 @@ static LRESULT CALLBACK manager_proc(HWND h,UINT msg,WPARAM wp,LPARAM lp){
     case WM_SHOWWINDOW:if(wp)PostMessageW(h,WM_APP+42,0,0);return 0;
     case WM_APP+42:arrange();return 0;
     case WM_APP+41:save_session();return 0;
-    case WM_CLOSE:save_session();flush_session();fm.closing=TRUE;DestroyWindow(h);return 0;
+    case WM_CLOSE:cancel_splitter(FALSE);save_session();flush_session();fm.closing=TRUE;DestroyWindow(h);return 0;
     case WM_DESTROY:
         fm.closing=TRUE;KillTimer(h,1);KillTimer(h,SAVE_TIMER);
         for(int i=0;i<4;i++){for(int j=0;j<fm.panes[i].count;j++)release_tab(fm.panes[i].items[j]);fm.panes[i].count=0;}
@@ -563,6 +662,7 @@ HWND file_manager_open(HWND owner,const wchar_t *settings_directory){
 }
 BOOL file_manager_message(MSG *msg){
     if(!fm.window||!IsWindowVisible(fm.window)||!(msg->hwnd==fm.window||IsChild(fm.window,msg->hwnd)))return FALSE;
+    if(fm.splitter_dragging&&(msg->message==WM_KEYDOWN||msg->message==WM_SYSKEYDOWN)&&msg->wParam==VK_ESCAPE){SendMessageW(fm.window,WM_CANCELMODE,0,0);return TRUE;}
     Pane *p=&fm.panes[fm.active];
     for(int i=0;i<4;i++)if(msg->hwnd==fm.panes[i].window||IsChild(fm.panes[i].window,msg->hwnd)){
         p=&fm.panes[i];
@@ -593,5 +693,5 @@ BOOL file_manager_message(MSG *msg){
     if(!IsDialogMessageW(fm.window,msg)){TranslateMessage(msg);DispatchMessageW(msg);}return TRUE;
 }
 void file_manager_close(void){if(fm.window)SendMessageW(fm.window,WM_CLOSE,0,0);}
-void file_manager_hide(void){if(fm.window){save_session();flush_session();ShowWindow(fm.window,SW_HIDE);evict_views(GetTickCount64());}}
+void file_manager_hide(void){if(fm.window){cancel_splitter(FALSE);save_session();flush_session();ShowWindow(fm.window,SW_HIDE);evict_views(GetTickCount64());}}
 void file_manager_update_visibility(void){if(fm.window)arrange();}

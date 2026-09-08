@@ -6,8 +6,13 @@ static void pump(unsigned milliseconds){
     ULONGLONG until=GetTickCount64()+milliseconds;
     do{MSG msg;while(GetTickCount64()<until&&PeekMessageW(&msg,NULL,0,0,PM_REMOVE)){if(!file_manager_message(&msg)){TranslateMessage(&msg);DispatchMessageW(&msg);}}Sleep(10);}while(GetTickCount64()<until);
 }
+static BOOL same_path(const wchar_t *a,const wchar_t *b){
+    wchar_t long_a[MAX_PATH],long_b[MAX_PATH];
+    if(!GetLongPathNameW(a,long_a,MAX_PATH)||!GetLongPathNameW(b,long_b,MAX_PATH))return !lstrcmpiW(a,b);
+    return !lstrcmpiW(long_a,long_b);
+}
 static BOOL wait_location(Tab *t,const wchar_t *path){
-    for(int i=0;i<100;i++){pump(50);if(!t->pending&&!lstrcmpiW(t->location,path))return TRUE;}return FALSE;
+    for(int i=0;i<100;i++){pump(50);if(!t->pending&&same_path(t->location,path))return TRUE;}return FALSE;
 }
 static BOOL CALLBACK find_tree(HWND h,LPARAM data){wchar_t cls[64];GetClassNameW(h,cls,64);if(!lstrcmpW(cls,L"SysTreeView32"))*(BOOL*)data=TRUE;return TRUE;}
 static int live_views(void){int n=0;for(int i=0;i<4;i++)for(int j=0;j<fm.panes[i].count;j++)if(fm.panes[i].items[j]->browser)n++;return n;}
@@ -33,8 +38,19 @@ int wmain(void){
     puts("PASS compact icon toolbar retains accessible names and 42 tooltips");
     HWND embedded=fm.window;file_manager_hide();assert(!IsWindowVisible(embedded));assert(file_manager_open(host,root)==embedded);assert(IsWindowVisible(embedded));
     for(int i=0;i<4;i++)assert(fm.panes[i].count==1&&current(&fm.panes[i])->browser);
+    for(int i=0;i<4;i++)assert((GetWindowLongPtrW(fm.panes[i].tabs,GWL_STYLE)&TCS_OWNERDRAWFIXED)!=0);
+    fm.layout=0;arrange();RECT manager_rect;GetClientRect(fm.window,&manager_rect);int content_height=manager_rect.bottom-scale(46)-scale(27);
+    POINT divider={split_pixel(0,0,manager_rect.right),scale(46)+content_height/2};int divider_index=-1;
+    assert(hit_splitter(divider,&divider_index)==1&&divider_index==0);
+    int original_split=fm.splits[0][0];SendMessageW(fm.window,WM_LBUTTONDOWN,0,MAKELPARAM(divider.x,divider.y));assert(fm.splitter_dragging&&GetCapture()==fm.window);
+    SendMessageW(fm.window,WM_MOUSEMOVE,MK_LBUTTON,MAKELPARAM(divider.x+scale(80),divider.y));SendMessageW(fm.window,WM_LBUTTONUP,0,MAKELPARAM(divider.x+scale(80),divider.y));
+    assert(!fm.splitter_dragging&&fm.splits[0][0]>original_split);int resized_split=fm.splits[0][0];RECT resized[4];pane_rects(0,manager_rect.right,content_height,resized);assert(resized[0].right>manager_rect.right/2);
+    pump(500);assert(session_int(L"Manager",L"Split0_0",-1)==resized_split);
+    divider.x=split_pixel(0,0,manager_rect.right);SendMessageW(fm.window,WM_LBUTTONDOWN,0,MAKELPARAM(divider.x,divider.y));assert(fm.splitter_dragging);
+    SendMessageW(fm.window,WM_MOUSEMOVE,MK_LBUTTON,MAKELPARAM(divider.x-scale(40),divider.y));SendMessageW(fm.window,WM_CANCELMODE,0,0);assert(!fm.splitter_dragging&&fm.splits[0][0]==resized_split);
+    puts("PASS pane dividers resize, cancel safely, debounce to SQLite, and directory tabs use a clear owner-drawn selection state");
     Pane *p=&fm.panes[0];Tab *t=current(p);
-    fm.test_mode=TRUE;SetWindowTextW(p->address,L"echo nova");open_address(p);assert(fm.command_runs==1&&!lstrcmpW(fm.last_command,L"echo nova")&&!lstrcmpiW(fm.last_command_directory,root));
+    fm.test_mode=TRUE;SetWindowTextW(p->address,L"echo nova");open_address(p);assert(fm.command_runs==1&&!lstrcmpW(fm.last_command,L"echo nova")&&same_path(fm.last_command_directory,root));
     SetWindowTextW(p->address,L"> C:\\Tools\\demo.exe --check");open_address(p);assert(fm.command_runs==2&&!lstrcmpW(fm.last_command,L"C:\\Tools\\demo.exe --check"));fm.test_mode=FALSE;
     SetWindowTextW(p->address,L"中文源目录");open_address(p);assert(wait_location(t,a));assert(lstrcmpiW(current(&fm.panes[1])->location,a));
     puts("PASS each pane switches relative directories and dispatches commands with its own working directory");
@@ -42,7 +58,7 @@ int wmain(void){
     pump(700);
     assert(SUCCEEDED(navigate(t,b)));assert(wait_location(t,b));
     command(p,C_BACK);assert(wait_location(t,a));command(p,C_FORWARD);assert(wait_location(t,b));
-    assert(add_tab(p,a));assert(wait_location(current(p),a));assert(p->count==2);select_tab(p,0);assert(current(p)==t);assert(!lstrcmpiW(t->location,b));
+    assert(add_tab(p,a));assert(wait_location(current(p),a));assert(p->count==2);select_tab(p,0);assert(current(p)==t);assert(same_path(t->location,b));
     select_tab(p,1);close_tab(p);assert(p->count==1&&current(p)==t);
     assert(SUCCEEDED(navigate(t,a)));assert(wait_location(t,a));
     PIDLIST_ABSOLUTE id=NULL;assert(SUCCEEDED(SHParseDisplayName(file,NULL,&id,0,NULL)));
@@ -72,7 +88,7 @@ int wmain(void){
         assert(area==800000);fm.layout=layout;arrange();
     }
     fm.layout=4;fm.navigation_tree=TRUE;fm.favorite_count=1;lstrcpyW(fm.favorites[0],a);save_session();file_manager_close();pump(100);
-    assert(file_manager_open(host,root));pump(700);assert(fm.layout==4&&fm.navigation_tree&&fm.favorite_count==1&&!lstrcmpW(fm.favorites[0],a));assert(wait_location(current(&fm.panes[0]),a));
+    assert(file_manager_open(host,root));pump(700);assert(fm.layout==4&&fm.navigation_tree&&fm.favorite_count==1&&!lstrcmpW(fm.favorites[0],a));assert(fm.splits[0][0]==resized_split);assert(wait_location(current(&fm.panes[0]),a));
     BOOL has_tree=FALSE;EnumChildWindows(fm.window,find_tree,(LPARAM)&has_tree);assert(has_tree);
     file_manager_close();pump(100);
     puts("PASS 12 non-overlapping layouts, session/favorite persistence and reopen lifecycle");
