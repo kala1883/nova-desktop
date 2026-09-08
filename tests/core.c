@@ -18,6 +18,10 @@ int wmain(int argc,wchar_t **argv) {
     puts("PASS legacy numbered placeholder repaired in SQLite data");
     store_set_int(L"app",L"Nova",L"Active",-5);load_config();assert(active_space==0);
     puts("PASS malformed active workspace bounded");
+    assert(store_set_int(L"app",L"Nova",L"Language",1));nova_english=FALSE;load_config();
+    assert(nova_english&&!lstrcmpW(nova_text(L"中文",L"English"),L"English"));
+    nova_english=FALSE;assert(store_set_int(L"app",L"Nova",L"Language",0));
+    puts("PASS persisted Simplified Chinese / English language preference");
     active_space=3;assert(ensure_items(3));spaces[3].app_count=0;
     swprintf(path,MAX_PATH,L"%ls\\启动文件.cmd",dir);
     HANDLE f=CreateFileW(path,GENERIC_WRITE,0,NULL,CREATE_NEW,0,NULL);assert(f!=INVALID_HANDLE_VALUE);CloseHandle(f);

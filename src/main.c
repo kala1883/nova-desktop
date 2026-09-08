@@ -17,6 +17,7 @@
 #include "ui/hold_drag.h"
 #include "ui/file_manager.h"
 #include "platform/storage.h"
+#include "i18n.h"
 
 #define APP_NAME L"NOVA Desktop"
 #define APP_CLASS L"NovaDesktopWindowV3"
@@ -45,6 +46,8 @@
 #define ID_FILES 120
 #define ID_DESKTOP 121
 #define ID_LAUNCH_ALL 122
+#define ID_LANGUAGE_ZH 123
+#define ID_LANGUAGE_EN 124
 #define STATS_TIMER 1
 #define START_PIN_TIMER 2
 #define START_DESKTOP_TIMER 4
@@ -64,6 +67,7 @@ static HIMAGELIST images;
 static NOTIFYICONDATAW tray;
 static UINT taskbar_message;
 static BOOL pinned, prefer_pin, desktop_mode, prefer_desktop, editing_name, startup_enabled, test_mode, bulk_launch_running;
+BOOL nova_english=FALSE;
 static int test_launch_count;
 static unsigned paint_generation;
 static RECT floating_rect;
@@ -85,6 +89,7 @@ static void refresh_spaces(void);
 static void launch_workspace(void);
 static void error_message(const wchar_t *message);
 static void end_name_edit(BOOL commit);
+static void apply_language(BOOL english);
 static void show_workspace_page(void){
     if(active_space==0){if(IsWindow(files_view))SetFocus(files_view);return;}
     files_page=FALSE;file_manager_hide();
@@ -97,7 +102,7 @@ static void open_file_manager(void){
     wchar_t directory[MAX_PATH];lstrcpynW(directory,config_path,MAX_PATH);
     wchar_t *slash=wcsrchr(directory,L'\\');if(slash)*slash=0;
     files_view=file_manager_open(main_window,directory);
-    if(!files_view){error_message(L"无法打开文件管理页面。");return;}
+    if(!files_view){error_message(nova_text(L"无法打开文件管理页面。",L"Unable to open the file manager."));return;}
     files_page=TRUE;
     HWND controls[]={search_edit,add_button,folder_button,launch_button,app_list,name_edit};
     for(unsigned i=0;i<sizeof(controls)/sizeof(controls[0]);i++)ShowWindow(controls[i],SW_HIDE);
@@ -164,6 +169,7 @@ static BOOL save_config(void){
     if(storage_failed||!ensure_storage())return FALSE;
     BOOL ok=store_save_workspaces(spaces,space_count,active_space,prefer_pin);
     if(ok)ok=store_set_int(L"app",L"Nova",L"DesktopMode",prefer_desktop);
+    if(ok)ok=store_set_int(L"app",L"Nova",L"Language",nova_english?1:0);
     if(!ok)set_notice(store_error());
     return ok;
 }
@@ -172,7 +178,7 @@ static void load_legacy_config(void) {
     defaults();
     if(GetFileAttributesW(config_path)==INVALID_FILE_ATTRIBUTES)return;
     int n=(int)GetPrivateProfileIntW(L"Nova",L"WorkspaceCount",4,config_path);
-    if(n<1||n>MAX_WORKSPACES){storage_failed=TRUE;set_notice(L"旧配置的工作区数量无效，已停止迁移并保留原文件。");return;}
+    if(n<1||n>MAX_WORKSPACES){storage_failed=TRUE;set_notice(nova_text(L"旧配置的工作区数量无效，已停止迁移并保留原文件。",L"The legacy workspace count is invalid. Migration stopped and the original file was preserved."));return;}
     space_count=n;
     active_space=(int)GetPrivateProfileIntW(L"Nova",L"Active",0,config_path);
     if(active_space<0||active_space>=space_count)active_space=0;
@@ -181,7 +187,7 @@ static void load_legacy_config(void) {
         wchar_t section[32],key[32],fallback[40]; swprintf(section,32,L"Workspace%d",s);swprintf(fallback,40,L"工作区 %d",s+1);
         GetPrivateProfileStringW(section,L"Name",fallback,spaces[s].name,40,config_path);
         n=(int)GetPrivateProfileIntW(section,L"AppCount",0,config_path);
-        if(n<0||n>MAX_APPS){storage_failed=TRUE;set_notice(L"旧配置的项目数量超过容量，已停止迁移并保留原文件。");return;}
+        if(n<0||n>MAX_APPS){storage_failed=TRUE;set_notice(nova_text(L"旧配置的项目数量超过容量，已停止迁移并保留原文件。",L"The legacy item count exceeds capacity. Migration stopped and the original file was preserved."));return;}
         spaces[s].app_count=n;
         for(int a=0;a<spaces[s].app_count;a++){
             swprintf(key,32,L"App%dName",a);GetPrivateProfileStringW(section,key,L"启动项",spaces[s].apps[a].name,64,config_path);
@@ -190,11 +196,13 @@ static void load_legacy_config(void) {
     }
     /* Older releases wrote ANSI INIs. Repair only recognizable placeholder names. */
     BOOL repaired=repair_loaded_names();
-    if(repaired)set_notice(L"已在数据库迁移中修复旧版默认名称；原 INI 保留。");
+    if(repaired)set_notice(nova_text(L"已在数据库迁移中修复旧版默认名称；原 INI 保留。",L"Legacy default names were repaired during database migration; the original INI was preserved."));
 }
 
 static void load_config(void){
     storage_failed=FALSE;defaults();if(!ensure_storage())return;
+    nova_english=store_int(L"app",L"Nova",L"Language",0)!=0;
+    lstrcpynW(notice,nova_text(L"拖入应用、快捷方式或文件夹，添加到当前工作区。",L"Drop apps, shortcuts, files, or folders here to add them to this workspace."),256);
     int count=store_load_workspaces(spaces);
     if(count<0){storage_failed=TRUE;set_notice(store_error());return;}
     if(count==0){
@@ -202,7 +210,7 @@ static void load_config(void){
         if(storage_failed)return;
         for(int i=0;i<space_count;i++)spaces[i].items_loaded=1;
         if(!save_config()){storage_failed=TRUE;return;}
-        if(!store_backup())set_notice(L"数据库已保存，但备份失败；原 INI 仍然保留。");
+        if(!store_backup())set_notice(nova_text(L"数据库已保存，但备份失败；原 INI 仍然保留。",L"The database was saved, but backup failed; the original INI is still preserved."));
         count=store_load_workspaces(spaces);
     }
     if(count<1){storage_failed=TRUE;return;}
@@ -214,7 +222,7 @@ static void load_config(void){
     if(!ensure_items(active_space))return;
     if(repair_loaded_names()){
         save_config();
-        set_notice(L"已修复旧版留下的乱码默认名称。");
+        set_notice(nova_text(L"已修复旧版留下的乱码默认名称。",L"Corrupted legacy default names were repaired."));
     }
 }
 
@@ -239,9 +247,9 @@ static void toggle_startup(void) {
         result=startup_enabled?RegDeleteValueW(key,L"NOVA Desktop"):RegSetValueExW(key,L"NOVA Desktop",0,REG_SZ,(BYTE*)command,(DWORD)((wcslen(command)+1)*sizeof(wchar_t)));
         RegCloseKey(key);
     }
-    if(result!=ERROR_SUCCESS&&result!=ERROR_FILE_NOT_FOUND){error_message(L"无法更新开机启动设置。请检查当前用户的注册表访问权限。");return;}
+    if(result!=ERROR_SUCCESS&&result!=ERROR_FILE_NOT_FOUND){error_message(nova_text(L"无法更新开机启动设置。请检查当前用户的注册表访问权限。",L"Unable to update startup settings. Check access to the current user's registry."));return;}
     startup_enabled=read_startup();
-    set_notice(startup_enabled?L"已开启：下次登录 Windows 时启动 NOVA，并恢复固定状态。":L"已关闭开机启动。你仍可手动打开 NOVA。");
+    set_notice(startup_enabled?nova_text(L"已开启：下次登录 Windows 时启动 NOVA，并恢复固定状态。",L"Startup enabled: NOVA will open at the next Windows sign-in and restore its window mode."):nova_text(L"已关闭开机启动。你仍可手动打开 NOVA。",L"Startup disabled. You can still open NOVA manually."));
 }
 
 static void redraw_surface(void){
@@ -271,17 +279,17 @@ static BOOL set_desktop_mode(BOOL value){
             SetWindowPos(main_window,HWND_NOTOPMOST,floating_rect.left,floating_rect.top,floating_rect.right-floating_rect.left,floating_rect.bottom-floating_rect.top,SWP_FRAMECHANGED|SWP_SHOWWINDOW);
             if(floating_was_zoomed)ShowWindow(main_window,SW_MAXIMIZE);
             redraw_surface();
-            error_message(L"桌面围栏没有正常绘制，NOVA 已恢复为普通窗口。");return FALSE;
+            error_message(nova_text(L"桌面围栏没有正常绘制，NOVA 已恢复为普通窗口。",L"Desktop fence mode did not render correctly. NOVA has returned to a normal window."));return FALSE;
         }
-        SetWindowTextW(desktop_button,L"退出桌面围栏");InvalidateRect(desktop_button,NULL,TRUE);save_config();
-        set_notice(L"已放到桌面围栏，普通应用窗口会显示在 NOVA 上方。");return TRUE;
+        SetWindowTextW(desktop_button,nova_text(L"退出桌面围栏",L"Leave desktop fence"));InvalidateRect(desktop_button,NULL,TRUE);save_config();
+        set_notice(nova_text(L"已放到桌面围栏，普通应用窗口会显示在 NOVA 上方。",L"NOVA is now on the desktop; normal app windows will appear above it."));return TRUE;
     }
     desktop_mode=FALSE;prefer_desktop=FALSE;
     SetWindowLongPtrW(main_window,GWL_STYLE,floating_style);SetWindowLongPtrW(main_window,GWL_EXSTYLE,floating_exstyle&~WS_EX_TOPMOST);
     SetWindowPos(main_window,HWND_NOTOPMOST,floating_rect.left,floating_rect.top,floating_rect.right-floating_rect.left,floating_rect.bottom-floating_rect.top,SWP_FRAMECHANGED|SWP_SHOWWINDOW);
     if(floating_was_zoomed)ShowWindow(main_window,SW_MAXIMIZE);
-    redraw_surface();SetWindowTextW(desktop_button,L"放到桌面");InvalidateRect(desktop_button,NULL,TRUE);save_config();
-    set_notice(L"已恢复为普通窗口。");return TRUE;
+    redraw_surface();SetWindowTextW(desktop_button,nova_text(L"放到桌面",L"Place on desktop"));InvalidateRect(desktop_button,NULL,TRUE);save_config();
+    set_notice(nova_text(L"已恢复为普通窗口。",L"Restored as a normal window."));return TRUE;
 }
 
 /* A WeChat-style pin changes only the topmost band; geometry and ownership stay unchanged. */
@@ -292,11 +300,11 @@ static BOOL set_pinned(BOOL value) {
     SetWindowLongPtrW(main_window,GWL_EXSTYLE,value?(exstyle|WS_EX_TOPMOST):(exstyle&~WS_EX_TOPMOST));
     if(!SetWindowPos(main_window,value?HWND_TOPMOST:HWND_NOTOPMOST,0,0,0,0,SWP_NOMOVE|SWP_NOSIZE|SWP_NOACTIVATE|SWP_FRAMECHANGED)){
         SetWindowLongPtrW(main_window,GWL_EXSTYLE,exstyle);
-        error_message(L"无法改变窗口置顶状态，请重试。");return FALSE;
+        error_message(nova_text(L"无法改变窗口置顶状态，请重试。",L"Unable to change the always-on-top state. Try again."));return FALSE;
     }
-    pinned=value;prefer_pin=value;save_config();SetWindowTextW(pin_button,pinned?L"取消置顶 (F11)":L"窗口置顶 (F11)");
+    pinned=value;prefer_pin=value;save_config();SetWindowTextW(pin_button,pinned?nova_text(L"取消置顶 (F11)",L"Unpin (F11)"):nova_text(L"窗口置顶 (F11)",L"Always on top (F11)"));
     InvalidateRect(pin_button,NULL,TRUE);
-    set_notice(pinned?L"已置顶。窗口仍可拖动和缩放；再次点击图钉取消。":L"已取消置顶。");
+    set_notice(pinned?nova_text(L"已置顶。窗口仍可拖动和缩放；再次点击图钉取消。",L"Always on top is enabled. The window can still be moved and resized; click the pin again to disable it."):nova_text(L"已取消置顶。",L"Always on top is disabled."));
     return TRUE;
 }
 
@@ -311,13 +319,13 @@ static void paint(HDC dc,RECT client) {
     SetViewportOrgEx(dc,0,caption_height(),NULL);client.bottom-=caption_height();
     FillRect(dc,&client,background);RECT side=box(0,0,px(220),client.bottom);FillRect(dc,&side,panel_brush);
     text(dc,L"NOVA",box(px(28),px(27),px(164),px(38)),brand_font,TEXT,DT_LEFT);
-    text(dc,L"工作区",box(px(28),px(78),px(160),px(24)),small_font,MUTED,DT_LEFT);
+    text(dc,nova_text(L"工作区",L"WORKSPACES"),box(px(28),px(78),px(160),px(24)),small_font,MUTED,DT_LEFT);
     int left=px(254),width=client.right-left-px(32);
-    text(dc,spaces[active_space].name,box(left,px(27),width-px(148),px(47)),title_font,TEXT,DT_LEFT|DT_END_ELLIPSIS);
-    text(dc,L"启动项",box(left,px(157),width,px(25)),body_font,TEXT,DT_LEFT);
+    text(dc,active_space==0?nova_text(L"目录",L"Files"):spaces[active_space].name,box(left,px(27),width-px(148),px(47)),title_font,TEXT,DT_LEFT|DT_END_ELLIPSIS);
+    text(dc,nova_text(L"启动项",L"LAUNCH ITEMS"),box(left,px(157),width,px(25)),body_font,TEXT,DT_LEFT);
     RECT status=box(left,client.bottom-px(56),width,px(50));FillRect(dc,&status,background);
     text(dc,notice,box(left,client.bottom-px(49),width,px(23)),small_font,MUTED,DT_LEFT|DT_SINGLELINE|DT_END_ELLIPSIS);
-    wchar_t metrics[80];swprintf(metrics,80,L"系统 CPU %d%%    内存 %d%%",system_cpu,memory_load);
+    wchar_t metrics[80];swprintf(metrics,80,nova_text(L"系统 CPU %d%%    内存 %d%%",L"System CPU %d%%    Memory %d%%"),system_cpu,memory_load);
     text(dc,metrics,box(px(20),client.bottom-px(38),px(188),px(25)),small_font,MUTED,DT_LEFT);
     RestoreDC(dc,saved);
 }
@@ -335,6 +343,36 @@ static HWND button(const wchar_t *caption,int id){return control(L"BUTTON",capti
 static void add_tooltip(HWND h,const wchar_t *caption){
     TOOLINFOW t={0};t.cbSize=sizeof(t);t.uFlags=TTF_IDISHWND|TTF_SUBCLASS;t.hwnd=main_window;t.uId=(UINT_PTR)h;t.lpszText=(LPWSTR)caption;
     SendMessageW(tooltip,TTM_ADDTOOLW,0,(LPARAM)&t);
+}
+static void update_tooltip(HWND h,const wchar_t *caption){
+    TOOLINFOW t={0};t.cbSize=sizeof(t);t.uFlags=TTF_IDISHWND;t.hwnd=main_window;t.uId=(UINT_PTR)h;t.lpszText=(LPWSTR)caption;
+    SendMessageW(tooltip,TTM_UPDATETIPTEXTW,0,(LPARAM)&t);
+}
+static void apply_language(BOOL english){
+    if(nova_english==english&&main_window)return;
+    nova_english=english;
+    if(!main_window)return;
+    SetWindowTextW(new_button,nova_text(L"新建工作区",L"New workspace"));
+    SetWindowTextW(settings_button,nova_text(L"设置",L"Settings"));
+    SetWindowTextW(pin_button,pinned?nova_text(L"取消置顶 (F11)",L"Unpin (F11)"):nova_text(L"窗口置顶 (F11)",L"Always on top (F11)"));
+    SetWindowTextW(desktop_button,desktop_mode?nova_text(L"退出桌面围栏",L"Leave desktop fence"):nova_text(L"放到桌面",L"Place on desktop"));
+    SetWindowTextW(minimize_button,nova_text(L"最小化",L"Minimize"));
+    SetWindowTextW(maximize_button,IsZoomed(main_window)?nova_text(L"还原",L"Restore"):nova_text(L"最大化",L"Maximize"));
+    SetWindowTextW(close_button,nova_text(L"关闭",L"Close"));
+    SetWindowTextW(add_button,nova_text(L"添加文件",L"Add file"));SetWindowTextW(folder_button,nova_text(L"添加文件夹",L"Add folder"));SetWindowTextW(launch_button,nova_text(L"全部启动",L"Launch all"));
+    SetWindowTextW(app_list,nova_text(L"工作区启动项",L"Workspace launch items"));
+    SendMessageW(search_edit,EM_SETCUEBANNER,TRUE,(LPARAM)nova_text(L"搜索当前工作区  Ctrl+K",L"Search this workspace  Ctrl+K"));
+    update_tooltip(desktop_button,nova_text(L"桌面围栏 / 恢复普通窗口",L"Desktop fence / restore normal window"));
+    update_tooltip(pin_button,nova_text(L"置顶 / 取消置顶 (F11)",L"Always on top / unpin (F11)"));
+    update_tooltip(settings_button,nova_text(L"设置：语言、开机启动、工作区管理",L"Settings: language, startup, and workspace management"));
+    update_tooltip(new_button,nova_text(L"新建工作区（最多 8 个）",L"New workspace (up to 8)"));
+    update_tooltip(launch_button,nova_text(L"将当前工作区的每个项目各打开一次",L"Open every item in this workspace once"));
+    update_tooltip(minimize_button,nova_text(L"最小化",L"Minimize"));update_tooltip(maximize_button,nova_text(L"最大化 / 还原",L"Maximize / restore"));update_tooltip(close_button,nova_text(L"关闭",L"Close"));
+    refresh_spaces();
+    file_manager_close();files_view=NULL;
+    if(files_page)open_file_manager();
+    set_notice(nova_text(L"界面语言已切换为简体中文。",L"Interface language changed to English."));
+    save_config();layout_controls();InvalidateRect(main_window,NULL,TRUE);
 }
 static void draw_icon(DRAWITEMSTRUCT *d){
     BOOL active=(d->CtlID==ID_PIN&&pinned)||(d->CtlID==ID_DESKTOP&&desktop_mode);
@@ -378,7 +416,7 @@ static void layout_controls(void) {
     move(new_button,px(162),px(68),px(40),px(36));
     HWND caption_buttons[]={desktop_button,pin_button,settings_button,minimize_button,maximize_button,close_button};
     for(int i=0;i<6;i++)MoveWindow(caption_buttons[i],r.right-px(46)*(6-i),0,px(46),caption_height(),TRUE);
-    SetWindowTextW(maximize_button,IsZoomed(main_window)?L"还原":L"最大化");
+    SetWindowTextW(maximize_button,IsZoomed(main_window)?nova_text(L"还原",L"Restore"):nova_text(L"最大化",L"Maximize"));
     move(launch_button,r.right-px(148),px(27),px(116),px(40));
     move(search_edit,left,px(100),width-px(220),px(32));
     move(add_button,r.right-px(236),px(97),px(96),px(38));move(folder_button,r.right-px(132),px(97),px(100),px(38));
@@ -390,7 +428,7 @@ static void layout_controls(void) {
 }
 static void refresh_spaces(void) {
     SendMessageW(space_list,LB_RESETCONTENT,0,0);
-    for(int i=0;i<space_count;i++)SendMessageW(space_list,LB_ADDSTRING,0,(LPARAM)spaces[i].name);
+    for(int i=0;i<space_count;i++)SendMessageW(space_list,LB_ADDSTRING,0,(LPARAM)(i==0?nova_text(L"目录",L"Files"):spaces[i].name));
     SendMessageW(space_list,LB_SETCURSEL,active_space,0);
     EnableWindow(new_button,space_count<MAX_WORKSPACES);
 }
@@ -400,7 +438,7 @@ static BOOL contains(const wchar_t *value,const wchar_t *query) {
 }
 static void refresh_apps(void) {
     if(!app_list||!ensure_items(active_space))return;
-    if(repair_loaded_names()){save_config();set_notice(L"已修复旧版留下的乱码默认名称。");refresh_spaces();}
+    if(repair_loaded_names()){save_config();set_notice(nova_text(L"已修复旧版留下的乱码默认名称。",L"Corrupted legacy default names were repaired."));refresh_spaces();}
     wchar_t query[128];GetWindowTextW(search_edit,query,128);
     hold_drag.enabled=!*query;
     SendMessageW(app_list,WM_SETREDRAW,FALSE,0);ListView_DeleteAllItems(app_list);
@@ -434,7 +472,7 @@ static int insert_path(const wchar_t *path) {
     return 1;
 }
 static void finish_import(int added,int skipped) {
-    wchar_t message[180];swprintf(message,180,L"已添加 %d 项到「%ls」；跳过 %d 项（重复、无效路径或超过 20 项上限）。",added,spaces[active_space].name,skipped);
+    wchar_t message[220];swprintf(message,220,nova_text(L"已添加 %d 项到「%ls」；跳过 %d 项（重复、无效路径或超过 20 项上限）。",L"Added %d items to \"%ls\"; skipped %d (duplicate, invalid, or beyond the 20-item limit)."),added,spaces[active_space].name,skipped);
     set_notice(message);if(save_config()){SetWindowTextW(search_edit,L"");refresh_apps();}
 }
 static void handle_drop(HDROP drop) {
@@ -447,12 +485,12 @@ static void handle_drop(HDROP drop) {
 }
 static void pick_file(void) {
     wchar_t path[MAX_PATH]=L"";OPENFILENAMEW ofn={0};ofn.lStructSize=sizeof(ofn);ofn.hwndOwner=main_window;ofn.lpstrFile=path;ofn.nMaxFile=MAX_PATH;
-    ofn.lpstrTitle=L"添加应用、快捷方式或启动文件";ofn.lpstrFilter=L"所有文件\0*.*\0应用与快捷方式\0*.exe;*.lnk;*.bat;*.cmd\0";
+    ofn.lpstrTitle=nova_text(L"添加应用、快捷方式或启动文件",L"Add an app, shortcut, or launch file");ofn.lpstrFilter=nova_text(L"所有文件\0*.*\0应用与快捷方式\0*.exe;*.lnk;*.bat;*.cmd\0",L"All files\0*.*\0Apps and shortcuts\0*.exe;*.lnk;*.bat;*.cmd\0");
     ofn.Flags=OFN_FILEMUSTEXIST|OFN_PATHMUSTEXIST|OFN_NOCHANGEDIR|OFN_NODEREFERENCELINKS;
     if(GetOpenFileNameW(&ofn)){int added=insert_path(path)==1;finish_import(added,!added);}
 }
 static void pick_folder(void) {
-    BROWSEINFOW bi={0};bi.hwndOwner=main_window;bi.lpszTitle=L"选择要添加到当前工作区的文件夹";bi.ulFlags=BIF_RETURNONLYFSDIRS|BIF_NEWDIALOGSTYLE;
+    BROWSEINFOW bi={0};bi.hwndOwner=main_window;bi.lpszTitle=nova_text(L"选择要添加到当前工作区的文件夹",L"Choose a folder to add to the current workspace");bi.ulFlags=BIF_RETURNONLYFSDIRS|BIF_NEWDIALOGSTYLE;
     PIDLIST_ABSOLUTE id=SHBrowseForFolderW(&bi);if(!id)return;
     wchar_t path[MAX_PATH];if(SHGetPathFromIDListW(id,path)){int added=insert_path(path)==1;finish_import(added,!added);}CoTaskMemFree(id);
 }
@@ -462,11 +500,11 @@ static int selected_app(void) {
 }
 static void moved_item(int source,int destination,int at,void *context){
     (void)context;if(destination<0)destination=active_space;
-    if(destination==0){set_notice(L"「目录」是固定的文件管理工作区，不接收启动项。");return;}
+    if(destination==0){set_notice(nova_text(L"「目录」是固定的文件管理工作区，不接收启动项。",L"Files is a fixed file-management workspace and cannot receive launch items."));return;}
     if(!ensure_items(active_space)||!ensure_items(destination))return;
     int result=workspace_move(spaces,space_count,active_space,source,destination,at);
-    if(result<0){set_notice(L"无法移动：目标工作区已满或已有此项目。");return;}
-    if(result>0){if(save_config())set_notice(destination==active_space?L"已保存新的图标顺序。":L"已移动到目标工作区。原文件位置不变。");refresh_apps();}
+    if(result<0){set_notice(nova_text(L"无法移动：目标工作区已满或已有此项目。",L"Unable to move: the destination is full or already contains this item."));return;}
+    if(result>0){if(save_config())set_notice(destination==active_space?nova_text(L"已保存新的图标顺序。",L"The new icon order has been saved."):nova_text(L"已移动到目标工作区。原文件位置不变。",L"Moved to the destination workspace. The original file remains in place."));refresh_apps();}
 }
 static int open_item(const AppItem *item){
     if(!item||!*item->target)return 0;
@@ -476,23 +514,23 @@ static int open_item(const AppItem *item){
 }
 static void launch_workspace(void){
     if(!ensure_items(active_space))return;
-    if(bulk_launch_running){set_notice(L"当前工作区已在执行全部启动。");return;}
+    if(bulk_launch_running){set_notice(nova_text(L"当前工作区已在执行全部启动。",L"Launch all is already running for this workspace."));return;}
     Workspace snapshot=spaces[active_space];
-    if(snapshot.app_count<1){set_notice(L"当前工作区没有可启动的项目。");return;}
+    if(snapshot.app_count<1){set_notice(nova_text(L"当前工作区没有可启动的项目。",L"This workspace has no items to launch."));return;}
     bulk_launch_running=TRUE;
     EnableWindow(launch_button,FALSE);
     int failed=0;for(int i=0;i<snapshot.app_count;i++)if(!open_item(&snapshot.apps[i]))failed++;
     bulk_launch_running=FALSE;EnableWindow(launch_button,spaces[active_space].app_count>0);
-    wchar_t message[160];swprintf(message,160,L"全部启动完成：已对 %d 个项目各执行一次打开，失败 %d 个。",snapshot.app_count,failed);set_notice(message);
+    wchar_t message[180];swprintf(message,180,nova_text(L"全部启动完成：已对 %d 个项目各执行一次打开，失败 %d 个。",L"Launch all finished: opened %d items once each; %d failed."),snapshot.app_count,failed);set_notice(message);
 }
 static void open_app(void) {
     int i=selected_app();if(i<0)return;
-    if(!open_item(&spaces[active_space].apps[i]))error_message(L"启动失败。请检查文件是否被移动、删除，或是否存在对应的默认打开程序。");
+    if(!open_item(&spaces[active_space].apps[i]))error_message(nova_text(L"启动失败。请检查文件是否被移动、删除，或是否存在对应的默认打开程序。",L"Launch failed. Check whether the file was moved or deleted and whether a default app is available."));
 }
 static void remove_app(void) {
     int i=selected_app();if(i<0)return;
-    if(MessageBoxW(main_window,L"从此工作区移除选中的启动项？原文件会保留。",APP_NAME,MB_YESNO|MB_ICONQUESTION)!=IDYES)return;
-    Workspace *ws=&spaces[active_space];for(int j=i;j<ws->app_count-1;j++)ws->apps[j]=ws->apps[j+1];ws->app_count--;save_config();refresh_apps();set_notice(L"已移除启动项，原文件保持不变。");
+    if(MessageBoxW(main_window,nova_text(L"从此工作区移除选中的启动项？原文件会保留。",L"Remove the selected launch item from this workspace? The original file will remain."),APP_NAME,MB_YESNO|MB_ICONQUESTION)!=IDYES)return;
+    Workspace *ws=&spaces[active_space];for(int j=i;j<ws->app_count-1;j++)ws->apps[j]=ws->apps[j+1];ws->app_count--;save_config();refresh_apps();set_notice(nova_text(L"已移除启动项，原文件保持不变。",L"Launch item removed. The original file was not changed."));
 }
 static void end_name_edit(BOOL commit) {
     if(!editing_name)return;
@@ -502,10 +540,10 @@ static void end_name_edit(BOOL commit) {
     editing_name=FALSE;ShowWindow(name_edit,SW_HIDE);SetFocus(space_list);InvalidateRect(main_window,NULL,FALSE);
 }
 static void edit_name(void){if(active_space==0)return;editing_name=TRUE;SetWindowTextW(name_edit,spaces[active_space].name);ShowWindow(name_edit,SW_SHOW);SetFocus(name_edit);SendMessageW(name_edit,EM_SETSEL,0,-1);}
-static void new_space(void){if(space_count==MAX_WORKSPACES)return;end_name_edit(TRUE);active_space=space_count++;ZeroMemory(&spaces[active_space],sizeof(Workspace));spaces[active_space].items_loaded=1;swprintf(spaces[active_space].name,40,L"工作区 %d",space_count);save_config();refresh_spaces();SetWindowTextW(search_edit,L"");if(files_page)show_workspace_page();refresh_apps();edit_name();}
+static void new_space(void){if(space_count==MAX_WORKSPACES)return;end_name_edit(TRUE);active_space=space_count++;ZeroMemory(&spaces[active_space],sizeof(Workspace));spaces[active_space].items_loaded=1;swprintf(spaces[active_space].name,40,nova_text(L"工作区 %d",L"Workspace %d"),space_count);save_config();refresh_spaces();SetWindowTextW(search_edit,L"");if(files_page)show_workspace_page();refresh_apps();edit_name();}
 static void delete_space(void){
     if(active_space==0||space_count<=1)return;
-    if(MessageBoxW(main_window,L"删除当前工作区及其中的启动项？原始文件和应用不会删除。",APP_NAME,MB_YESNO|MB_ICONQUESTION)!=IDYES)return;
+    if(MessageBoxW(main_window,nova_text(L"删除当前工作区及其中的启动项？原始文件和应用不会删除。",L"Delete the current workspace and its launch items? Original files and apps will not be deleted."),APP_NAME,MB_YESNO|MB_ICONQUESTION)!=IDYES)return;
     for(int i=active_space;i<space_count-1;i++)spaces[i]=spaces[i+1];
     space_count--;if(active_space>=space_count)active_space=space_count-1;
     save_config();refresh_spaces();SetWindowTextW(search_edit,L"");refresh_apps();
@@ -540,19 +578,23 @@ static void add_tray(void){
 static void restore_window(void){ShowWindow(main_window,SW_RESTORE);SetForegroundWindow(main_window);if(files_page)file_manager_update_visibility();}
 static void settings_menu(void){
     startup_enabled=read_startup();HMENU menu=CreatePopupMenu();
-    AppendMenuW(menu,MF_STRING|(startup_enabled?MF_CHECKED:0),ID_STARTUP,L"开机启动");
+    HMENU language=CreatePopupMenu();
+    AppendMenuW(language,MF_STRING|(!nova_english?MF_CHECKED:0),ID_LANGUAGE_ZH,L"简体中文");
+    AppendMenuW(language,MF_STRING|(nova_english?MF_CHECKED:0),ID_LANGUAGE_EN,L"English");
+    AppendMenuW(menu,MF_POPUP,(UINT_PTR)language,nova_text(L"语言",L"Language"));
+    AppendMenuW(menu,MF_STRING|(startup_enabled?MF_CHECKED:0),ID_STARTUP,nova_text(L"开机启动",L"Start with Windows"));
     AppendMenuW(menu,MF_SEPARATOR,0,NULL);
-    AppendMenuW(menu,MF_STRING|(active_space==0?MF_GRAYED:0),ID_RENAME,L"重命名当前工作区");
-    AppendMenuW(menu,MF_STRING|(active_space==0||space_count<=1?MF_GRAYED:0),ID_DELETE,L"删除当前工作区…");
-    AppendMenuW(menu,MF_SEPARATOR,0,NULL);AppendMenuW(menu,MF_STRING,ID_QUIT,L"退出 NOVA");
+    AppendMenuW(menu,MF_STRING|(active_space==0?MF_GRAYED:0),ID_RENAME,nova_text(L"重命名当前工作区",L"Rename current workspace"));
+    AppendMenuW(menu,MF_STRING|(active_space==0||space_count<=1?MF_GRAYED:0),ID_DELETE,nova_text(L"删除当前工作区…",L"Delete current workspace…"));
+    AppendMenuW(menu,MF_SEPARATOR,0,NULL);AppendMenuW(menu,MF_STRING,ID_QUIT,nova_text(L"退出 NOVA",L"Exit NOVA"));
     RECT r;GetWindowRect(settings_button,&r);SetForegroundWindow(main_window);
     UINT id=TrackPopupMenu(menu,TPM_RETURNCMD|TPM_RIGHTALIGN|TPM_RIGHTBUTTON,r.right,r.bottom,0,main_window,NULL);
     DestroyMenu(menu);if(id)SendMessageW(main_window,WM_COMMAND,id,0);
 }
 static void tray_menu(void){
     HMENU m=CreatePopupMenu();POINT p;GetCursorPos(&p);
-    AppendMenuW(m,MF_STRING,ID_OPEN,L"打开 NOVA 窗口");AppendMenuW(m,MF_STRING|(pinned?MF_CHECKED:0),ID_PIN,L"窗口置顶");
-    AppendMenuW(m,MF_STRING|(startup_enabled?MF_CHECKED:0),ID_STARTUP,L"开机启动");AppendMenuW(m,MF_SEPARATOR,0,NULL);AppendMenuW(m,MF_STRING,ID_QUIT,L"退出 NOVA");
+    AppendMenuW(m,MF_STRING,ID_OPEN,nova_text(L"打开 NOVA 窗口",L"Open NOVA window"));AppendMenuW(m,MF_STRING|(pinned?MF_CHECKED:0),ID_PIN,nova_text(L"窗口置顶",L"Always on top"));
+    AppendMenuW(m,MF_STRING|(startup_enabled?MF_CHECKED:0),ID_STARTUP,nova_text(L"开机启动",L"Start with Windows"));AppendMenuW(m,MF_SEPARATOR,0,NULL);AppendMenuW(m,MF_STRING,ID_QUIT,nova_text(L"退出 NOVA",L"Exit NOVA"));
     SetForegroundWindow(main_window);UINT id=TrackPopupMenu(m,TPM_RETURNCMD|TPM_RIGHTBUTTON,p.x,p.y,0,main_window,NULL);DestroyMenu(m);if(id)SendMessageW(main_window,WM_COMMAND,id,0);PostMessageW(main_window,WM_NULL,0,0);
 }
 static ULONGLONG ft(FILETIME v){ULARGE_INTEGER n;n.LowPart=v.dwLowDateTime;n.HighPart=v.dwHighDateTime;return n.QuadPart;}
@@ -567,22 +609,22 @@ static LRESULT CALLBACK window_proc(HWND hwnd,UINT msg,WPARAM wp,LPARAM lp){
     switch(msg){
     case WM_CREATE:{
         main_window=hwnd;HDC dc=GetDC(hwnd);dpi=GetDeviceCaps(dc,LOGPIXELSX);ReleaseDC(hwnd,dc);create_fonts();
-        space_list=control(L"LISTBOX",L"工作区",LBS_NOTIFY|LBS_OWNERDRAWFIXED|LBS_HASSTRINGS|WS_VSCROLL,ID_SPACES);SendMessageW(space_list,LB_SETITEMHEIGHT,0,px(44));
-        new_button=button(L"新建工作区",ID_NEW);
-        startup_enabled=read_startup();settings_button=button(L"设置",ID_SETTINGS);pin_button=button(L"窗口置顶 (F11)",ID_PIN);desktop_button=button(L"放到桌面",ID_DESKTOP);
-        minimize_button=button(L"最小化",ID_MINIMIZE);maximize_button=button(L"最大化",ID_MAXIMIZE);close_button=button(L"关闭",ID_CLOSE);
-        search_edit=control(L"EDIT",L"",ES_AUTOHSCROLL,ID_SEARCH);SendMessageW(search_edit,EM_SETCUEBANNER,TRUE,(LPARAM)L"搜索当前工作区  Ctrl+K");SendMessageW(search_edit,EM_SETLIMITTEXT,127,0);
-        add_button=button(L"添加文件",ID_ADD);folder_button=button(L"添加文件夹",ID_FOLDER);launch_button=button(L"全部启动",ID_LAUNCH_ALL);
-        app_list=control(WC_LISTVIEWW,L"工作区启动项",LVS_ICON|LVS_AUTOARRANGE|LVS_SINGLESEL|LVS_SHOWSELALWAYS,ID_APPS);
+        space_list=control(L"LISTBOX",nova_text(L"工作区",L"Workspaces"),LBS_NOTIFY|LBS_OWNERDRAWFIXED|LBS_HASSTRINGS|WS_VSCROLL,ID_SPACES);SendMessageW(space_list,LB_SETITEMHEIGHT,0,px(44));
+        new_button=button(nova_text(L"新建工作区",L"New workspace"),ID_NEW);
+        startup_enabled=read_startup();settings_button=button(nova_text(L"设置",L"Settings"),ID_SETTINGS);pin_button=button(nova_text(L"窗口置顶 (F11)",L"Always on top (F11)"),ID_PIN);desktop_button=button(nova_text(L"放到桌面",L"Place on desktop"),ID_DESKTOP);
+        minimize_button=button(nova_text(L"最小化",L"Minimize"),ID_MINIMIZE);maximize_button=button(nova_text(L"最大化",L"Maximize"),ID_MAXIMIZE);close_button=button(nova_text(L"关闭",L"Close"),ID_CLOSE);
+        search_edit=control(L"EDIT",L"",ES_AUTOHSCROLL,ID_SEARCH);SendMessageW(search_edit,EM_SETCUEBANNER,TRUE,(LPARAM)nova_text(L"搜索当前工作区  Ctrl+K",L"Search this workspace  Ctrl+K"));SendMessageW(search_edit,EM_SETLIMITTEXT,127,0);
+        add_button=button(nova_text(L"添加文件",L"Add file"),ID_ADD);folder_button=button(nova_text(L"添加文件夹",L"Add folder"),ID_FOLDER);launch_button=button(nova_text(L"全部启动",L"Launch all"),ID_LAUNCH_ALL);
+        app_list=control(WC_LISTVIEWW,nova_text(L"工作区启动项",L"Workspace launch items"),LVS_ICON|LVS_AUTOARRANGE|LVS_SINGLESEL|LVS_SHOWSELALWAYS,ID_APPS);
         hold_drag_init(&hold_drag,app_list,space_list,moved_item,NULL);
         ListView_SetBkColor(app_list,BG);ListView_SetTextBkColor(app_list,BG);ListView_SetTextColor(app_list,TEXT);ListView_SetExtendedListViewStyle(app_list,LVS_EX_DOUBLEBUFFER|LVS_EX_INFOTIP);ListView_SetIconSpacing(app_list,px(136),px(112));SetWindowTheme(app_list,L"DarkMode_Explorer",NULL);
         name_edit=control(L"EDIT",L"",ES_AUTOHSCROLL,ID_NAME);SendMessageW(name_edit,EM_SETLIMITTEXT,39,0);ShowWindow(name_edit,SW_HIDE);
         HWND children[]={space_list,new_button,settings_button,pin_button,desktop_button,minimize_button,maximize_button,close_button,search_edit,add_button,folder_button,launch_button,app_list,name_edit};
         for(unsigned i=0;i<sizeof(children)/sizeof(children[0]);i++){SetWindowSubclass(children[i],child_proc,1,0);DragAcceptFiles(children[i],TRUE);}DragAcceptFiles(hwnd,TRUE);
         tooltip=CreateWindowExW(WS_EX_TOPMOST,TOOLTIPS_CLASSW,NULL,WS_POPUP|TTS_ALWAYSTIP|TTS_NOPREFIX,CW_USEDEFAULT,CW_USEDEFAULT,CW_USEDEFAULT,CW_USEDEFAULT,hwnd,NULL,GetModuleHandleW(NULL),NULL);
-        add_tooltip(desktop_button,L"桌面围栏 / 恢复普通窗口");add_tooltip(pin_button,L"置顶 / 取消置顶 (F11)");add_tooltip(settings_button,L"设置：开机启动、工作区管理");add_tooltip(new_button,L"新建工作区（最多 8 个）");
-        add_tooltip(launch_button,L"将当前工作区的每个项目各打开一次");
-        add_tooltip(minimize_button,L"最小化");add_tooltip(maximize_button,L"最大化 / 还原");add_tooltip(close_button,L"关闭");
+        add_tooltip(desktop_button,nova_text(L"桌面围栏 / 恢复普通窗口",L"Desktop fence / restore normal window"));add_tooltip(pin_button,nova_text(L"置顶 / 取消置顶 (F11)",L"Always on top / unpin (F11)"));add_tooltip(settings_button,nova_text(L"设置：语言、开机启动、工作区管理",L"Settings: language, startup, and workspace management"));add_tooltip(new_button,nova_text(L"新建工作区（最多 8 个）",L"New workspace (up to 8)"));
+        add_tooltip(launch_button,nova_text(L"将当前工作区的每个项目各打开一次",L"Open every item in this workspace once"));
+        add_tooltip(minimize_button,nova_text(L"最小化",L"Minimize"));add_tooltip(maximize_button,nova_text(L"最大化 / 还原",L"Maximize / restore"));add_tooltip(close_button,nova_text(L"关闭",L"Close"));
         refresh_spaces();refresh_apps();layout_controls();sample_stats();SetTimer(hwnd,STATS_TIMER,3000,NULL);if(prefer_desktop)SetTimer(hwnd,START_DESKTOP_TIMER,800,NULL);else if(prefer_pin)SetTimer(hwnd,START_PIN_TIMER,800,NULL);
         if(!test_mode){add_tray();RegisterHotKey(hwnd,ID_HOTKEY,MOD_CONTROL|MOD_ALT|MOD_NOREPEAT,'N');}
         BOOL dark=TRUE;DwmSetWindowAttribute(hwnd,20,&dark,sizeof(dark));return 0;
@@ -619,15 +661,15 @@ static LRESULT CALLBACK window_proc(HWND hwnd,UINT msg,WPARAM wp,LPARAM lp){
         if(id==ID_SPACES&&HIWORD(wp)==LBN_SELCHANGE){end_name_edit(TRUE);int i=(int)SendMessageW(space_list,LB_GETCURSEL,0,0);if(i>=0){active_space=i;save_config();SetWindowTextW(search_edit,L"");if(active_space==0)open_file_manager();else{if(files_page)show_workspace_page();refresh_apps();}}return 0;}
         if(id==ID_SEARCH&&HIWORD(wp)==EN_CHANGE){refresh_apps();return 0;}
         if(id==ID_NAME&&HIWORD(wp)==EN_KILLFOCUS){end_name_edit(TRUE);return 0;}
-        switch(id){case ID_ADD:pick_file();break;case ID_FOLDER:pick_folder();break;case ID_PIN:set_pinned(!pinned);break;case ID_STARTUP:toggle_startup();break;case ID_NEW:new_space();break;case ID_RENAME:edit_name();break;case ID_DELETE:delete_space();break;case ID_REMOVE:remove_app();break;case ID_OPEN:restore_window();break;case ID_QUIT:DestroyWindow(hwnd);break;}return 0;
+        switch(id){case ID_ADD:pick_file();break;case ID_FOLDER:pick_folder();break;case ID_PIN:set_pinned(!pinned);break;case ID_STARTUP:toggle_startup();break;case ID_LANGUAGE_ZH:apply_language(FALSE);break;case ID_LANGUAGE_EN:apply_language(TRUE);break;case ID_NEW:new_space();break;case ID_RENAME:edit_name();break;case ID_DELETE:delete_space();break;case ID_REMOVE:remove_app();break;case ID_OPEN:restore_window();break;case ID_QUIT:DestroyWindow(hwnd);break;}return 0;
     }
     case WM_NOTIFY:{NMHDR *n=(NMHDR*)lp;
         if(n->idFrom==ID_APPS&&n->code==NM_DBLCLK&&!hold_drag.dragging)open_app();
         if(n->idFrom==ID_APPS&&n->code==LVN_GETINFOTIPW){NMLVGETINFOTIPW *tip=(NMLVGETINFOTIPW*)lp;LVITEMW i={0};i.mask=LVIF_PARAM;i.iItem=tip->iItem;SendMessageW(app_list,LVM_GETITEMW,0,(LPARAM)&i);lstrcpynW(tip->pszText,spaces[active_space].apps[i.lParam].target,tip->cchTextMax);}
-        if(n->idFrom==ID_APPS&&n->code==LVN_GETEMPTYMARKUP){NMLVEMPTYMARKUP *m=(NMLVEMPTYMARKUP*)lp;m->dwFlags=EMF_CENTERED;lstrcpyW(m->szMarkup,spaces[active_space].app_count?L"没有匹配的启动项。清空搜索以查看全部。":L"把应用或文件拖到这里\n也可以点击上方「添加文件」。");return TRUE;}
+        if(n->idFrom==ID_APPS&&n->code==LVN_GETEMPTYMARKUP){NMLVEMPTYMARKUP *m=(NMLVEMPTYMARKUP*)lp;m->dwFlags=EMF_CENTERED;lstrcpyW(m->szMarkup,spaces[active_space].app_count?nova_text(L"没有匹配的启动项。清空搜索以查看全部。",L"No matching launch items. Clear the search to show all items."):nova_text(L"把应用或文件拖到这里\n也可以点击上方「添加文件」。",L"Drop an app or file here\nor click Add file above."));return TRUE;}
         return 0;
     }
-    case WM_CONTEXTMENU:if((HWND)wp==app_list&&selected_app()>=0){HMENU m=CreatePopupMenu();AppendMenuW(m,MF_STRING,ID_REMOVE,L"从工作区移除");POINT p;GetCursorPos(&p);UINT id=TrackPopupMenu(m,TPM_RETURNCMD,p.x,p.y,0,hwnd,NULL);DestroyMenu(m);if(id==ID_REMOVE)remove_app();}return 0;
+    case WM_CONTEXTMENU:if((HWND)wp==app_list&&selected_app()>=0){HMENU m=CreatePopupMenu();AppendMenuW(m,MF_STRING,ID_REMOVE,nova_text(L"从工作区移除",L"Remove from workspace"));POINT p;GetCursorPos(&p);UINT id=TrackPopupMenu(m,TPM_RETURNCMD,p.x,p.y,0,hwnd,NULL);DestroyMenu(m);if(id==ID_REMOVE)remove_app();}return 0;
     case WM_DROPFILES:handle_drop((HDROP)wp);return 0;
     case WM_KEYDOWN:if(wp==VK_F11)set_pinned(!pinned);if(wp==VK_ESCAPE&&pinned)set_pinned(FALSE);return 0;
     case WM_TIMER:
@@ -648,7 +690,7 @@ int WINAPI wWinMain(HINSTANCE instance,HINSTANCE previous,PWSTR command,int show
     wchar_t dir[MAX_PATH];if(FAILED(SHGetFolderPathW(NULL,CSIDL_APPDATA,NULL,SHGFP_TYPE_CURRENT,dir))||wcslen(dir)>MAX_PATH-40)return 1;
     wcscat(dir,L"\\NOVA Desktop");CreateDirectoryW(dir,NULL);swprintf(config_path,MAX_PATH,L"%ls\\config.ini",dir);load_config();
     if(storage_failed){MessageBoxW(NULL,notice,APP_NAME,MB_OK|MB_ICONERROR);store_close();CloseHandle(mutex);OleUninitialize();return 4;}
-    if(!store_backup())set_notice(L"无法更新数据库备份，请检查数据目录权限。");
+    if(!store_backup())set_notice(nova_text(L"无法更新数据库备份，请检查数据目录权限。",L"Unable to update the database backup. Check permissions for the data folder."));
     INITCOMMONCONTROLSEX ic={sizeof(ic),ICC_LISTVIEW_CLASSES|ICC_STANDARD_CLASSES};InitCommonControlsEx(&ic);
     background=CreateSolidBrush(BG);panel_brush=CreateSolidBrush(PANEL);taskbar_message=RegisterWindowMessageW(L"TaskbarCreated");
     WNDCLASSEXW wc={0};wc.cbSize=sizeof(wc);wc.hInstance=instance;wc.lpfnWndProc=window_proc;wc.lpszClassName=APP_CLASS;wc.hCursor=LoadCursorW(NULL,IDC_ARROW);

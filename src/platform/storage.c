@@ -1,4 +1,5 @@
 #include "storage.h"
+#include "../i18n.h"
 #include "../../third_party/sqlite/sqlite3.h"
 #include <stdio.h>
 #include <wchar.h>
@@ -11,7 +12,7 @@ static BOOL transaction_failed;
 static BOOL check(int rc){
     if(rc==SQLITE_OK||rc==SQLITE_DONE||rc==SQLITE_ROW)return TRUE;
     transaction_failed=TRUE;
-    swprintf(error_text,320,L"本地数据库操作失败（%d）：%ls",rc,db?(const wchar_t*)sqlite3_errmsg16(db):L"无法打开数据库");return FALSE;
+    swprintf(error_text,320,nova_text(L"本地数据库操作失败（%d）：%ls",L"Local database operation failed (%d): %ls"),rc,db?(const wchar_t*)sqlite3_errmsg16(db):nova_text(L"无法打开数据库",L"unable to open database"));return FALSE;
 }
 static BOOL execute(const char *sql){return check(sqlite3_exec(db,sql,NULL,NULL,NULL));}
 static sqlite3_stmt *prepare(const char *sql){sqlite3_stmt *s=NULL;if(!db||!check(sqlite3_prepare_v2(db,sql,-1,&s,NULL)))return NULL;return s;}
@@ -29,8 +30,8 @@ BOOL store_end(BOOL success){
 }
 void store_close(void){if(db){sqlite3_close_v2(db);db=NULL;}root[0]=0;}
 BOOL store_open(const wchar_t *directory){
-    if(db){if(!lstrcmpiW(directory,root))return TRUE;lstrcpyW(error_text,L"已有其他数据目录打开。");return FALSE;}
-    wchar_t path[MAX_PATH];if(wcslen(directory)>MAX_PATH-32){lstrcpyW(error_text,L"数据目录路径太长。");return FALSE;}
+    if(db){if(!lstrcmpiW(directory,root))return TRUE;lstrcpyW(error_text,nova_text(L"已有其他数据目录打开。",L"Another data folder is already open."));return FALSE;}
+    wchar_t path[MAX_PATH];if(wcslen(directory)>MAX_PATH-32){lstrcpyW(error_text,nova_text(L"数据目录路径太长。",L"The data folder path is too long."));return FALSE;}
     swprintf(path,MAX_PATH,L"%ls\\nova.sqlite",directory);
     if(!check(sqlite3_open16(path,&db))){store_close();return FALSE;}
     lstrcpynW(root,directory,MAX_PATH);sqlite3_busy_timeout(db,500);
@@ -39,14 +40,14 @@ BOOL store_open(const wchar_t *directory){
     sqlite3_stmt *s=prepare("PRAGMA user_version");
     if(!s){store_close();return FALSE;}
     int rc=sqlite3_step(s),version=rc==SQLITE_ROW?sqlite3_column_int(s,0):-1;sqlite3_finalize(s);
-    if(version<0||version>1){lstrcpyW(error_text,L"数据库损坏或由更新版本创建，原数据未修改。");store_close();return FALSE;}
+    if(version<0||version>1){lstrcpyW(error_text,nova_text(L"数据库损坏或由更新版本创建，原数据未修改。",L"The database is damaged or was created by a newer version. The original data was not changed."));store_close();return FALSE;}
     s=prepare("PRAGMA application_id");if(!s){store_close();return FALSE;}
     rc=sqlite3_step(s);int app=rc==SQLITE_ROW?sqlite3_column_int(s,0):-1;sqlite3_finalize(s);
-    if((version==1&&app!=0x4e4f5641)||(version==0&&app!=0&&app!=0x4e4f5641)){lstrcpyW(error_text,L"数据文件不是 NOVA 数据库，未修改原文件。");store_close();return FALSE;}
+    if((version==1&&app!=0x4e4f5641)||(version==0&&app!=0&&app!=0x4e4f5641)){lstrcpyW(error_text,nova_text(L"数据文件不是 NOVA 数据库，未修改原文件。",L"The data file is not a NOVA database. The original file was not changed."));store_close();return FALSE;}
     if(version==0){
         s=prepare("SELECT count(*) FROM sqlite_schema WHERE name NOT LIKE 'sqlite_%'");if(!s){store_close();return FALSE;}
         rc=sqlite3_step(s);BOOL empty=rc==SQLITE_ROW&&sqlite3_column_int(s,0)==0;sqlite3_finalize(s);
-        if(!empty){lstrcpyW(error_text,L"未识别的数据文件，已停止迁移并保留原文件。");store_close();return FALSE;}
+        if(!empty){lstrcpyW(error_text,nova_text(L"未识别的数据文件，已停止迁移并保留原文件。",L"The data file is not recognized. Migration stopped and the original file was preserved."));store_close();return FALSE;}
     }
     if(!execute("PRAGMA foreign_keys=ON; PRAGMA cache_size=-512; PRAGMA mmap_size=0; PRAGMA journal_mode=DELETE; PRAGMA synchronous=FULL; PRAGMA temp_store=FILE; PRAGMA trusted_schema=OFF;")){store_close();return FALSE;}
     if(version==0){
@@ -59,7 +60,7 @@ BOOL store_open(const wchar_t *directory){
     }
     s=prepare("PRAGMA quick_check");if(!s){store_close();return FALSE;}
     rc=sqlite3_step(s);BOOL healthy=rc==SQLITE_ROW&&!strcmp((const char*)sqlite3_column_text(s,0),"ok");sqlite3_finalize(s);
-    if(!healthy){lstrcpyW(error_text,L"数据库完整性检查失败，原文件保留，请从备份恢复。");store_close();return FALSE;}
+    if(!healthy){lstrcpyW(error_text,nova_text(L"数据库完整性检查失败，原文件保留，请从备份恢复。",L"The database integrity check failed. The original file was preserved; restore from the backup."));store_close();return FALSE;}
     return TRUE;
 }
 BOOL store_get(const wchar_t *scope,const wchar_t *section,const wchar_t *key,const wchar_t *fallback,wchar_t *value,int capacity){
@@ -81,7 +82,7 @@ long long store_new_id(void){sqlite3_int64 id;do{sqlite3_randomness(sizeof(id),&
 int store_load_workspaces(Workspace *spaces){
     sqlite3_stmt *s=prepare("SELECT w.id,w.name,(SELECT count(*) FROM items WHERE workspace_id=w.id) FROM workspaces w ORDER BY position,id");if(!s)return -1;
     int n=0,rc;while((rc=sqlite3_step(s))==SQLITE_ROW){
-        if(n==MAX_WORKSPACES||sqlite3_column_int(s,2)>MAX_APPS){lstrcpyW(error_text,L"数据库项目数量超过本版本容量，未截断或覆盖数据。");sqlite3_finalize(s);return -1;}
+        if(n==MAX_WORKSPACES||sqlite3_column_int(s,2)>MAX_APPS){lstrcpyW(error_text,nova_text(L"数据库项目数量超过本版本容量，未截断或覆盖数据。",L"The database contains more items than this version supports. No data was truncated or overwritten."));sqlite3_finalize(s);return -1;}
         Workspace *w=&spaces[n++];ZeroMemory(w,sizeof(*w));w->id=sqlite3_column_int64(s,0);read_text(s,1,w->name,40);w->app_count=sqlite3_column_int(s,2);
     }
     BOOL ok=check(rc);sqlite3_finalize(s);return ok?n:-1;

@@ -1,3 +1,4 @@
+int nova_english=0;
 #include "../src/ui/file_manager.c"
 #include <assert.h>
 

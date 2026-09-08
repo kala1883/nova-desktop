@@ -17,6 +17,7 @@
 #include <wchar.h>
 #include "file_manager.h"
 #include "../platform/storage.h"
+#include "../i18n.h"
 
 #define FM_CLASS L"NovaFileManager"
 #define PANE_CLASS L"NovaFilePane"
@@ -66,7 +67,9 @@ static struct {
     wchar_t last_command[LOCATION_SIZE],last_command_directory[LOCATION_SIZE];
     ULONGLONG notice_until;
 } fm;
-static const wchar_t *layout_names[]={L"四窗格",L"双栏",L"双行",L"单窗格",L"左一右二",L"左二右一",L"上一下二",L"上二下一",L"四列",L"四行",L"三列",L"三行"};
+static const wchar_t *layout_names_zh[]={L"四窗格",L"双栏",L"双行",L"单窗格",L"左一右二",L"左二右一",L"上一下二",L"上二下一",L"四列",L"四行",L"三列",L"三行"};
+static const wchar_t *layout_names_en[]={L"Four panes",L"Two columns",L"Two rows",L"Single pane",L"One left, two right",L"Two left, one right",L"One top, two bottom",L"Two top, one bottom",L"Four columns",L"Four rows",L"Three columns",L"Three rows"};
+static const wchar_t *layout_name(int index){return nova_english?layout_names_en[index]:layout_names_zh[index];}
 static int scale(int n){return MulDiv(n,fm.dpi?fm.dpi:96,96);}
 static Tab *current(Pane *p){return p->count?p->items[p->selected]:NULL;}
 static void arrange(void);
@@ -76,7 +79,7 @@ static BOOL ensure_browser(Tab *t);
 static void select_tab(Pane *p,int index);
 static void status_text(const wchar_t *s){SetWindowTextW(fm.status,s);fm.notice_until=GetTickCount64()+6000;}
 static void failure(const wchar_t *action,HRESULT hr){
-    wchar_t text[320];swprintf(text,320,L"%ls（0x%08lX）。请检查路径、设备连接或访问权限。",action,(unsigned long)hr);status_text(text);
+    wchar_t text[320];swprintf(text,320,nova_text(L"%ls（0x%08lX）。请检查路径、设备连接或访问权限。",L"%ls (0x%08lX). Check the path, device connection, and access permissions."),action,(unsigned long)hr);status_text(text);
 }
 static void activate(Pane *p){
     if(fm.active!=p->index){int old=fm.active;fm.active=p->index;InvalidateRect(fm.panes[old].window,NULL,FALSE);InvalidateRect(p->window,NULL,FALSE);}
@@ -92,7 +95,7 @@ static HRESULT navigate(Tab *t,const wchar_t *location){
     PIDLIST_ABSOLUTE id=NULL;
     HRESULT hr=SHParseDisplayName(location,NULL,&id,0,NULL);
     if(SUCCEEDED(hr)){hr=IExplorerBrowser_BrowseToIDList(t->browser,id,SBSP_ABSOLUTE);CoTaskMemFree(id);}
-    if(FAILED(hr))failure(L"无法打开目录",hr);
+    if(FAILED(hr))failure(nova_text(L"无法打开目录",L"Unable to open the folder"),hr);
     return hr;
 }
 static BOOL filesystem_directory(const wchar_t *location,wchar_t *directory){
@@ -127,12 +130,12 @@ static BOOL location_syntax(const wchar_t *value){
 }
 static BOOL run_command(Tab *t,const wchar_t *command){
     wchar_t directory[LOCATION_SIZE],parameters[LOCATION_SIZE+32];command_directory(t,directory);
-    if(wcslen(command)+16>=sizeof(parameters)/sizeof(parameters[0])){status_text(L"命令过长，请缩短后重试。");return FALSE;}
+    if(wcslen(command)+16>=sizeof(parameters)/sizeof(parameters[0])){status_text(nova_text(L"命令过长，请缩短后重试。",L"The command is too long. Shorten it and try again."));return FALSE;}
     if(fm.test_mode){fm.command_runs++;lstrcpynW(fm.last_command,command,LOCATION_SIZE);lstrcpynW(fm.last_command_directory,directory,LOCATION_SIZE);return TRUE;}
     swprintf(parameters,sizeof(parameters)/sizeof(parameters[0]),L"/D /S /K \"%ls\"",command);
     SHELLEXECUTEINFOW execute={0};execute.cbSize=sizeof(execute);execute.fMask=SEE_MASK_FLAG_NO_UI;execute.hwnd=fm.window;execute.lpVerb=L"open";execute.lpFile=L"cmd.exe";execute.lpParameters=parameters;execute.lpDirectory=directory;execute.nShow=SW_SHOWNORMAL;
-    if(!ShellExecuteExW(&execute)){wchar_t message[320];swprintf(message,320,L"无法在当前目录启动命令（Windows 错误 %lu）。",GetLastError());status_text(message);return FALSE;}
-    wchar_t message[320];swprintf(message,320,L"已在 %ls 中启动命令窗口。",directory);status_text(message);return TRUE;
+    if(!ShellExecuteExW(&execute)){wchar_t message[320];swprintf(message,320,nova_text(L"无法在当前目录启动命令（Windows 错误 %lu）。",L"Unable to start the command in this folder (Windows error %lu)."),GetLastError());status_text(message);return FALSE;}
+    wchar_t message[320];swprintf(message,320,nova_text(L"已在 %ls 中启动命令窗口。",L"Command window started in %ls."),directory);status_text(message);return TRUE;
 }
 static void open_address(Pane *p){
     Tab *t=current(p);if(!t)return;
@@ -143,7 +146,7 @@ static void open_address(Pane *p){
     DWORD n=ExpandEnvironmentStringsW(value,expanded,LOCATION_SIZE);if(!n||n>LOCATION_SIZE)lstrcpynW(expanded,value,LOCATION_SIZE);
     if(!forced&&relative_directory(t,value,resolved)){if(SUCCEEDED(navigate(t,resolved)))focus_view(t);return;}
     if(!forced&&location_syntax(expanded)){if(SUCCEEDED(navigate(t,expanded)))focus_view(t);return;}
-    if(!*value){status_text(L"请在 > 后输入命令。");SetWindowTextW(p->address,t->location);return;}
+    if(!*value){status_text(nova_text(L"请在 > 后输入命令。",L"Enter a command after >."));SetWindowTextW(p->address,t->location);return;}
     run_command(t,value);SetWindowTextW(p->address,t->location);
 }
 static HRESULT STDMETHODCALLTYPE event_query(IExplorerBrowserEvents *self,REFIID iid,void **out){
@@ -187,7 +190,7 @@ static HRESULT STDMETHODCALLTYPE event_complete(IExplorerBrowserEvents *self,PCI
 }
 static HRESULT STDMETHODCALLTYPE event_failed(IExplorerBrowserEvents *self,PCIDLIST_ABSOLUTE id){
     (void)id;Tab *t=(Tab*)self;t->pending=FALSE;t->travel_target=-1;
-    failure(L"目录加载失败；原目录保留，可在地址栏输入其他路径",E_FAIL);return S_OK;
+    failure(nova_text(L"目录加载失败；原目录保留，可在地址栏输入其他路径",L"Folder loading failed; the previous folder remains open. Enter another path in the address bar"),E_FAIL);return S_OK;
 }
 static IExplorerBrowserEventsVtbl event_vtable={event_query,event_add,event_release,event_pending,event_created,event_complete,event_failed};
 static void suspend_tab(Tab *t){
@@ -210,7 +213,7 @@ static void release_tab(Tab *t){
 static BOOL ensure_browser(Tab *t){
     if(!t)return FALSE;
     if(t->browser)return TRUE;
-    t->host=CreateWindowExW(WS_EX_CONTROLPARENT,L"STATIC",L"文件视图",WS_CHILD|WS_CLIPCHILDREN,0,0,10,10,t->pane->window,NULL,GetModuleHandleW(NULL),NULL);
+    t->host=CreateWindowExW(WS_EX_CONTROLPARENT,L"STATIC",nova_text(L"文件视图",L"File view"),WS_CHILD|WS_CLIPCHILDREN,0,0,10,10,t->pane->window,NULL,GetModuleHandleW(NULL),NULL);
     HRESULT hr=t->host?CoCreateInstance(&CLSID_ExplorerBrowser,NULL,CLSCTX_INPROC_SERVER,&IID_IExplorerBrowser,(void**)&t->browser):E_OUTOFMEMORY;
     if(SUCCEEDED(hr)){
         RECT r={0,0,100,100};FOLDERSETTINGS fs={t->view_mode,FWF_AUTOARRANGE};
@@ -218,12 +221,12 @@ static BOOL ensure_browser(Tab *t){
         hr=IExplorerBrowser_Initialize(t->browser,t->host,&r,&fs);
     }
     if(SUCCEEDED(hr)){hr=IExplorerBrowser_Advise(t->browser,&t->events,&t->cookie);t->advised=SUCCEEDED(hr);}
-    if(FAILED(hr)){failure(L"无法创建 Windows 文件视图",hr);suspend_tab(t);if(t->host){DestroyWindow(t->host);t->host=NULL;}return FALSE;}
+    if(FAILED(hr)){failure(nova_text(L"无法创建 Windows 文件视图",L"Unable to create the Windows file view"),hr);suspend_tab(t);if(t->host){DestroyWindow(t->host);t->host=NULL;}return FALSE;}
     /* Do not replace unavailable removable/network paths with a different persisted folder. */
     navigate(t,t->location);return TRUE;
 }
 static BOOL add_tab(Pane *p,const wchar_t *location){
-    if(p->count==TAB_LIMIT){status_text(L"每个窗格最多 12 个标签，请先关闭不需要的标签。");return FALSE;}
+    if(p->count==TAB_LIMIT){status_text(nova_text(L"每个窗格最多 12 个标签，请先关闭不需要的标签。",L"Each pane supports up to 12 tabs. Close an unused tab first."));return FALSE;}
     Tab *t=calloc(1,sizeof(*t));if(!t)return FALSE;
     t->events.lpVtbl=&event_vtable;t->references=1;t->pane=p;t->travel_target=-1;t->view_mode=FVM_DETAILS;t->icon_size=16;
     lstrcpynW(t->location,location,LOCATION_SIZE);
@@ -256,37 +259,38 @@ static void shell_verb(Tab *t,const char *verb,BOOL background){
         hr=IContextMenu_InvokeCommand(menu,&info);DestroyMenu(popup);IContextMenu_Release(menu);
     }
     IShellView_Release(view);
-    if(FAILED(hr))failure(L"操作未完成，请选择文件或使用文件视图的右键菜单",hr);
+    if(FAILED(hr))failure(nova_text(L"操作未完成，请选择文件或使用文件视图的右键菜单",L"The operation did not complete. Select a file or use the file view context menu"),hr);
 }
 static void refresh(Tab *t){
     IShellView *view=NULL;if(t&&t->browser&&SUCCEEDED(IExplorerBrowser_GetCurrentView(t->browser,&IID_IShellView,(void**)&view))){IShellView_Refresh(view);IShellView_Release(view);}
 }
 static void popup_favorites(void){
     HMENU m=CreatePopupMenu();
-    AppendMenuW(m,MF_STRING,1,L"收藏当前目录");AppendMenuW(m,MF_STRING,2,L"移除当前目录收藏");AppendMenuW(m,MF_SEPARATOR,0,NULL);
-    AppendMenuW(m,MF_STRING,3,L"此电脑");AppendMenuW(m,MF_STRING,4,L"桌面");AppendMenuW(m,MF_STRING,5,L"下载");AppendMenuW(m,MF_STRING,6,L"用户文件夹");
+    AppendMenuW(m,MF_STRING,1,nova_text(L"收藏当前目录",L"Add current folder to favorites"));AppendMenuW(m,MF_STRING,2,nova_text(L"移除当前目录收藏",L"Remove current folder from favorites"));AppendMenuW(m,MF_SEPARATOR,0,NULL);
+    AppendMenuW(m,MF_STRING,3,nova_text(L"此电脑",L"This PC"));AppendMenuW(m,MF_STRING,4,nova_text(L"桌面",L"Desktop"));AppendMenuW(m,MF_STRING,5,nova_text(L"下载",L"Downloads"));AppendMenuW(m,MF_STRING,6,nova_text(L"用户文件夹",L"User folder"));
     AppendMenuW(m,MF_SEPARATOR,0,NULL);
     for(int i=0;i<fm.favorite_count;i++)AppendMenuW(m,MF_STRING,100+i,fm.favorites[i]);
     RECT r;GetWindowRect(fm.toolbar[1],&r);UINT id=TrackPopupMenu(m,TPM_RETURNCMD|TPM_RIGHTBUTTON,r.left,r.bottom,0,fm.window,NULL);DestroyMenu(m);
     Tab *t=current(&fm.panes[fm.active]);if(!t)return;
     if(id==1){
-        for(int i=0;i<fm.favorite_count;i++)if(!lstrcmpiW(t->location,fm.favorites[i])){status_text(L"此目录已在收藏中。");return;}
-        if(fm.favorite_count==FAVORITE_LIMIT){status_text(L"收藏已满（32 项），请先移除不需要的收藏。");return;}
-        lstrcpynW(fm.favorites[fm.favorite_count++],t->location,LOCATION_SIZE);save_session();status_text(L"已收藏当前目录。");
+        for(int i=0;i<fm.favorite_count;i++)if(!lstrcmpiW(t->location,fm.favorites[i])){status_text(nova_text(L"此目录已在收藏中。",L"This folder is already a favorite."));return;}
+        if(fm.favorite_count==FAVORITE_LIMIT){status_text(nova_text(L"收藏已满（32 项），请先移除不需要的收藏。",L"Favorites are full (32 items). Remove an unused favorite first."));return;}
+        lstrcpynW(fm.favorites[fm.favorite_count++],t->location,LOCATION_SIZE);save_session();status_text(nova_text(L"已收藏当前目录。",L"Current folder added to favorites."));
     }else if(id==2){
         for(int i=0;i<fm.favorite_count;i++)if(!lstrcmpiW(t->location,fm.favorites[i])){
             for(int j=i;j<fm.favorite_count-1;j++)memcpy(fm.favorites[j],fm.favorites[j+1],sizeof(fm.favorites[j]));
-            --fm.favorite_count;save_session();status_text(L"已移除目录收藏。");break;
+            --fm.favorite_count;save_session();status_text(nova_text(L"已移除目录收藏。",L"Folder removed from favorites."));break;
         }
     }else if(id>=3&&id<=6){const wchar_t *places[]={HOME,L"shell:Desktop",L"shell:Downloads",L"shell:Profile"};navigate(t,places[id-3]);}
     else if(id>=100&&id<(UINT)(100+fm.favorite_count))navigate(t,fm.favorites[id-100]);
 }
 static void view_menu(void){
-    HMENU m=CreatePopupMenu();const wchar_t *labels[]={L"详细信息",L"列表",L"小图标",L"大图标 / 缩略图",L"内容",L"平铺"};
+    HMENU m=CreatePopupMenu();const wchar_t *labels_zh[]={L"详细信息",L"列表",L"小图标",L"大图标 / 缩略图",L"内容",L"平铺"};
+    const wchar_t *labels_en[]={L"Details",L"List",L"Small icons",L"Large icons / thumbnails",L"Content",L"Tiles"};const wchar_t **labels=nova_english?labels_en:labels_zh;
     FOLDERVIEWMODE modes[]={FVM_DETAILS,FVM_LIST,FVM_SMALLICON,FVM_ICON,FVM_CONTENT,FVM_TILE};
     for(int i=0;i<6;i++)AppendMenuW(m,MF_STRING,i+1,labels[i]);
     AppendMenuW(m,MF_SEPARATOR,0,NULL);
-    AppendMenuW(m,MF_STRING|(fm.navigation_tree?MF_CHECKED:0),20,L"显示导航栏 / 目录树");
+    AppendMenuW(m,MF_STRING|(fm.navigation_tree?MF_CHECKED:0),20,nova_text(L"显示导航栏 / 目录树",L"Show navigation pane / folder tree"));
     RECT r;GetWindowRect(fm.toolbar[2],&r);UINT id=TrackPopupMenu(m,TPM_RETURNCMD,r.left,r.bottom,0,fm.window,NULL);DestroyMenu(m);
     Tab *t=current(&fm.panes[fm.active]);IFolderView2 *v=NULL;
     if(id>=1&&id<=6&&t&&t->browser&&SUCCEEDED(IExplorerBrowser_GetCurrentView(t->browser,&IID_IFolderView2,(void**)&v))){IFolderView2_SetViewModeAndIconSize(v,modes[id-1],id==4?64:16);IFolderView2_Release(v);}
@@ -305,15 +309,15 @@ static void command(Pane *p,int id){
     case C_GO:open_address(p);break;
     case C_BACK:case C_FORWARD:{
         int target=t->history_pos+(id==C_BACK?-1:1);
-        if(target<0||target>=t->history_count){status_text(L"此方向没有可打开的目录。");break;}
+        if(target<0||target>=t->history_count){status_text(nova_text(L"此方向没有可打开的目录。",L"There is no folder to open in this direction."));break;}
         t->travel_target=target;if(FAILED(navigate(t,t->history[target])))t->travel_target=-1;break;}
-    case C_UP:if(FAILED(IExplorerBrowser_BrowseToIDList(t->browser,NULL,SBSP_PARENT)))status_text(L"此方向没有可打开的目录。");break;
+    case C_UP:if(FAILED(IExplorerBrowser_BrowseToIDList(t->browser,NULL,SBSP_PARENT)))status_text(nova_text(L"此方向没有可打开的目录。",L"There is no folder to open in this direction."));break;
     case C_REFRESH:refresh(t);break;
     case C_COPY:shell_verb(t,"copy",FALSE);break;
     case C_CUT:shell_verb(t,"cut",FALSE);break;
     case C_PASTE:shell_verb(t,"paste",TRUE);break;
     case C_RENAME:focus_view(t);shell_verb(t,"rename",FALSE);break;
-    case C_DELETE:if(MessageBoxW(fm.window,L"删除当前窗格中选中的文件？Windows 将处理回收站和后续确认。",L"删除文件",MB_YESNO|MB_ICONWARNING|MB_DEFBUTTON2)==IDYES)shell_verb(t,"delete",FALSE);break;
+    case C_DELETE:if(MessageBoxW(fm.window,nova_text(L"删除当前窗格中选中的文件？Windows 将处理回收站和后续确认。",L"Delete the selected files in this pane? Windows will handle the Recycle Bin and any further confirmation."),nova_text(L"删除文件",L"Delete files"),MB_YESNO|MB_ICONWARNING|MB_DEFBUTTON2)==IDYES)shell_verb(t,"delete",FALSE);break;
     case C_NEWFOLDER:shell_verb(t,"NewFolder",TRUE);break;
     }
 }
@@ -404,7 +408,7 @@ static void arrange(void){
         }
         if(i<count){RECT q=boxes[i];MoveWindow(p->window,q.left+gap,q.top+top+gap,q.right-q.left-2*gap,q.bottom-q.top-2*gap,TRUE);pane_layout(p);}
     }
-    SetWindowTextW(fm.toolbar[0],layout_names[fm.layout]);
+    SetWindowTextW(fm.toolbar[0],layout_name(fm.layout));
 }
 static int session_int(const wchar_t *section,const wchar_t *key,int fallback){return store_int(L"files",section,key,fallback);}
 static void session_get(const wchar_t *section,const wchar_t *key,const wchar_t *fallback,wchar_t *value,int size){store_get(L"files",section,key,fallback,value,size);}
@@ -476,13 +480,13 @@ static LRESULT CALLBACK pane_proc(HWND h,UINT msg,WPARAM wp,LPARAM lp){
 static void initialize_panes(void){
     for(int i=0;i<4;i++){
         Pane *p=&fm.panes[i];p->index=i;
-        p->window=CreateWindowExW(WS_EX_CONTROLPARENT,PANE_CLASS,L"目录窗格",WS_CHILD|WS_VISIBLE|WS_CLIPCHILDREN,0,0,300,300,fm.window,NULL,GetModuleHandleW(NULL),p);
-        p->tabs=child(p->window,WC_TABCONTROLW,L"目录标签",TCS_FOCUSNEVER,C_TABS);
-        p->add=button(p->window,L"新页",C_NEWTAB);p->close=button(p->window,L"关页",C_CLOSETAB);
-        p->back=button(p->window,L"后退",C_BACK);p->forward=button(p->window,L"前进",C_FORWARD);p->up=button(p->window,L"上级",C_UP);p->refresh=button(p->window,L"刷新",C_REFRESH);
-        p->address=child(p->window,L"EDIT",L"",ES_AUTOHSCROLL,C_ADDRESS);SendMessageW(p->address,EM_SETLIMITTEXT,LOCATION_SIZE-1,0);SendMessageW(p->address,EM_SETCUEBANNER,TRUE,(LPARAM)L"目录或命令（> 强制命令）  Ctrl+L");
-        p->go=button(p->window,L"转到",C_GO);
-        add_tip(p->add,L"新建标签 (Ctrl+T)");add_tip(p->close,L"关闭标签 (Ctrl+W)");add_tip(p->back,L"后退 (Alt+←)");add_tip(p->forward,L"前进 (Alt+→)");add_tip(p->up,L"上级目录 (Alt+↑)");add_tip(p->refresh,L"刷新 (F5)");add_tip(p->address,L"输入目录可切换；输入命令可在当前目录启动 cmd；> 强制按命令执行");add_tip(p->go,L"打开目录或在当前目录执行命令");
+        p->window=CreateWindowExW(WS_EX_CONTROLPARENT,PANE_CLASS,nova_text(L"目录窗格",L"Folder pane"),WS_CHILD|WS_VISIBLE|WS_CLIPCHILDREN,0,0,300,300,fm.window,NULL,GetModuleHandleW(NULL),p);
+        p->tabs=child(p->window,WC_TABCONTROLW,nova_text(L"目录标签",L"Folder tabs"),TCS_FOCUSNEVER,C_TABS);
+        p->add=button(p->window,nova_text(L"新页",L"New tab"),C_NEWTAB);p->close=button(p->window,nova_text(L"关页",L"Close tab"),C_CLOSETAB);
+        p->back=button(p->window,nova_text(L"后退",L"Back"),C_BACK);p->forward=button(p->window,nova_text(L"前进",L"Forward"),C_FORWARD);p->up=button(p->window,nova_text(L"上级",L"Up"),C_UP);p->refresh=button(p->window,nova_text(L"刷新",L"Refresh"),C_REFRESH);
+        p->address=child(p->window,L"EDIT",L"",ES_AUTOHSCROLL,C_ADDRESS);SendMessageW(p->address,EM_SETLIMITTEXT,LOCATION_SIZE-1,0);SendMessageW(p->address,EM_SETCUEBANNER,TRUE,(LPARAM)nova_text(L"目录或命令（> 强制命令）  Ctrl+L",L"Folder or command (> forces command)  Ctrl+L"));
+        p->go=button(p->window,nova_text(L"转到",L"Go"),C_GO);
+        add_tip(p->add,nova_text(L"新建标签 (Ctrl+T)",L"New tab (Ctrl+T)"));add_tip(p->close,nova_text(L"关闭标签 (Ctrl+W)",L"Close tab (Ctrl+W)"));add_tip(p->back,nova_text(L"后退 (Alt+←)",L"Back (Alt+Left)"));add_tip(p->forward,nova_text(L"前进 (Alt+→)",L"Forward (Alt+Right)"));add_tip(p->up,nova_text(L"上级目录 (Alt+↑)",L"Parent folder (Alt+Up)"));add_tip(p->refresh,nova_text(L"刷新 (F5)",L"Refresh (F5)"));add_tip(p->address,nova_text(L"输入目录可切换；输入命令可在当前目录启动 cmd；> 强制按命令执行",L"Enter a folder to navigate, or a command to start cmd here; > forces command mode"));add_tip(p->go,nova_text(L"打开目录或在当前目录执行命令",L"Open the folder or run the command in the current folder"));
         wchar_t section[32],key[32],location[LOCATION_SIZE];swprintf(section,32,L"Pane%d",i);
         int count=session_int(section,L"Count",1);if(count<1||count>TAB_LIMIT)count=1;
         for(int j=0;j<count;j++){swprintf(key,32,L"Tab%d",j);session_get(section,key,START_FOLDER,location,LOCATION_SIZE);if(!add_tab(p,location))break;}
@@ -493,7 +497,7 @@ static void update_status(void){
     Tab *t=current(&fm.panes[fm.active]);IFolderView2 *v=NULL;
     if(GetTickCount64()<fm.notice_until||!t||!t->browser||t->pending||FAILED(IExplorerBrowser_GetCurrentView(t->browser,&IID_IFolderView2,(void**)&v)))return;
     int all=0,selected=0;IFolderView2_ItemCount(v,SVGIO_ALLVIEW,&all);IFolderView2_ItemCount(v,SVGIO_SELECTION,&selected);IFolderView2_Release(v);
-    wchar_t message[200];swprintf(message,200,L"窗格 %d   ·   %d 项   ·   已选择 %d 项      Ctrl+L 目录/命令   Ctrl+T 新标签   F6 切换窗格",fm.active+1,all,selected);SetWindowTextW(fm.status,message);
+    wchar_t message[240];swprintf(message,240,nova_text(L"窗格 %d   ·   %d 项   ·   已选择 %d 项      Ctrl+L 目录/命令   Ctrl+T 新标签   F6 切换窗格",L"Pane %d   ·   %d items   ·   %d selected      Ctrl+L folder/command   Ctrl+T new tab   F6 next pane"),fm.active+1,all,selected);SetWindowTextW(fm.status,message);
 }
 static LRESULT CALLBACK manager_proc(HWND h,UINT msg,WPARAM wp,LPARAM lp){
     switch(msg){
@@ -503,10 +507,13 @@ static LRESULT CALLBACK manager_proc(HWND h,UINT msg,WPARAM wp,LPARAM lp){
         fm.font=CreateFontW(-scale(14),0,0,0,FW_NORMAL,FALSE,FALSE,FALSE,DEFAULT_CHARSET,OUT_DEFAULT_PRECIS,CLIP_DEFAULT_PRECIS,CLEARTYPE_QUALITY,DEFAULT_PITCH,L"Microsoft YaHei UI");
         fm.icon_font=CreateFontW(-scale(16),0,0,0,FW_NORMAL,FALSE,FALSE,FALSE,DEFAULT_CHARSET,OUT_DEFAULT_PRECIS,CLIP_DEFAULT_PRECIS,CLEARTYPE_QUALITY,DEFAULT_PITCH,L"Segoe MDL2 Assets");
         fm.tooltip=CreateWindowExW(WS_EX_TOPMOST,TOOLTIPS_CLASSW,NULL,WS_POPUP|TTS_ALWAYSTIP|TTS_NOPREFIX,CW_USEDEFAULT,CW_USEDEFAULT,CW_USEDEFAULT,CW_USEDEFAULT,h,NULL,GetModuleHandleW(NULL),NULL);
-        const wchar_t *names[]={L"四窗格",L"目录收藏",L"视图",L"复制",L"剪切",L"粘贴",L"重命名",L"删除",L"新建文件夹",L"帮助"};
-        const wchar_t *tips[]={L"切换窗格布局",L"目录收藏",L"切换文件视图",L"复制 (Ctrl+C)",L"剪切 (Ctrl+X)",L"粘贴 (Ctrl+V)",L"重命名 (F2)",L"删除 (Delete)",L"新建文件夹 (Ctrl+Shift+N)",L"帮助与快捷键"};
+        const wchar_t *names_zh[]={L"四窗格",L"目录收藏",L"视图",L"复制",L"剪切",L"粘贴",L"重命名",L"删除",L"新建文件夹",L"帮助"};
+        const wchar_t *names_en[]={L"Four panes",L"Favorites",L"View",L"Copy",L"Cut",L"Paste",L"Rename",L"Delete",L"New folder",L"Help"};
+        const wchar_t *tips_zh[]={L"切换窗格布局",L"目录收藏",L"切换文件视图",L"复制 (Ctrl+C)",L"剪切 (Ctrl+X)",L"粘贴 (Ctrl+V)",L"重命名 (F2)",L"删除 (Delete)",L"新建文件夹 (Ctrl+Shift+N)",L"帮助与快捷键"};
+        const wchar_t *tips_en[]={L"Change pane layout",L"Folder favorites",L"Change file view",L"Copy (Ctrl+C)",L"Cut (Ctrl+X)",L"Paste (Ctrl+V)",L"Rename (F2)",L"Delete (Delete)",L"New folder (Ctrl+Shift+N)",L"Help and keyboard shortcuts"};
+        const wchar_t **names=nova_english?names_en:names_zh,**tips=nova_english?tips_en:tips_zh;
         for(int i=0;i<10;i++){fm.toolbar[i]=button(h,names[i],C_LAYOUT+i);add_tip(fm.toolbar[i],tips[i]);}
-        fm.status=child(h,L"STATIC",L"正在加载目录…",SS_LEFTNOWORDWRAP,300);
+        fm.status=child(h,L"STATIC",nova_text(L"正在加载目录…",L"Loading folders…"),SS_LEFTNOWORDWRAP,300);
         fm.layout=session_int(L"Manager",L"Layout",0);if(fm.layout<0||fm.layout>11)fm.layout=0;
         fm.navigation_tree=session_int(L"Manager",L"NavigationTree",0)!=0;
         fm.favorite_count=session_int(L"Manager",L"FavoriteCount",0);if(fm.favorite_count<0||fm.favorite_count>FAVORITE_LIMIT)fm.favorite_count=0;
@@ -517,13 +524,13 @@ static LRESULT CALLBACK manager_proc(HWND h,UINT msg,WPARAM wp,LPARAM lp){
     case WM_GETMINMAXINFO:((MINMAXINFO*)lp)->ptMinTrackSize.x=scale(880);((MINMAXINFO*)lp)->ptMinTrackSize.y=scale(640);return 0;
     case WM_COMMAND:
         if(LOWORD(wp)==C_LAYOUT){
-            HMENU m=CreatePopupMenu();for(int i=0;i<12;i++)AppendMenuW(m,MF_STRING|(fm.layout==i?MF_CHECKED:0),i+1,layout_names[i]);
+            HMENU m=CreatePopupMenu();for(int i=0;i<12;i++)AppendMenuW(m,MF_STRING|(fm.layout==i?MF_CHECKED:0),i+1,layout_name(i));
             RECT r;GetWindowRect(fm.toolbar[0],&r);UINT id=TrackPopupMenu(m,TPM_RETURNCMD,r.left,r.bottom,0,h,NULL);DestroyMenu(m);
             if(id){fm.layout=id-1;arrange();save_session();}return 0;
         }
         if(LOWORD(wp)==C_FAVORITES){popup_favorites();return 0;}
         if(LOWORD(wp)==C_VIEW){view_menu();return 0;}
-        if(LOWORD(wp)==C_HELP){MessageBoxW(h,L"每个窗格独立浏览目录，可使用系统右键菜单、排序、拖放和缩略图。\n\nCtrl+L：目录/命令地址栏（支持环境变量）\n输入目录：在当前窗格切换\n输入命令：以当前目录为 cmd 工作目录执行\n> 命令：强制按命令执行\nAlt+左 / 右：后退 / 前进\nAlt+上：上级目录\nCtrl+T / Ctrl+W：新建 / 关闭标签\nCtrl+Tab：下一个标签\nF6：下一个窗格\nF5：刷新\nCtrl+C / X / V：复制 / 剪切 / 粘贴\nF2：重命名    Delete：删除\nCtrl+Shift+N：新建文件夹\n\n复制后点击目标窗格再粘贴；拖放行为和覆盖提示由 Windows 处理。\n目录标签、布局和收藏在关闭后恢复。",L"NOVA 文件管理",MB_OK);return 0;}
+        if(LOWORD(wp)==C_HELP){MessageBoxW(h,nova_text(L"每个窗格独立浏览目录，可使用系统右键菜单、排序、拖放和缩略图。\n\nCtrl+L：目录/命令地址栏（支持环境变量）\n输入目录：在当前窗格切换\n输入命令：以当前目录为 cmd 工作目录执行\n> 命令：强制按命令执行\nAlt+左 / 右：后退 / 前进\nAlt+上：上级目录\nCtrl+T / Ctrl+W：新建 / 关闭标签\nCtrl+Tab：下一个标签\nF6：下一个窗格\nF5：刷新\nCtrl+C / X / V：复制 / 剪切 / 粘贴\nF2：重命名    Delete：删除\nCtrl+Shift+N：新建文件夹\n\n复制后点击目标窗格再粘贴；拖放行为和覆盖提示由 Windows 处理。\n目录标签、布局和收藏在关闭后恢复。",L"Each pane browses independently and supports Windows context menus, sorting, drag and drop, and thumbnails.\n\nCtrl+L: folder/command address bar (environment variables supported)\nEnter a folder: navigate the current pane\nEnter a command: run it with the current folder as the cmd working directory\n> command: force command mode\nAlt+Left / Right: back / forward\nAlt+Up: parent folder\nCtrl+T / Ctrl+W: new / close tab\nCtrl+Tab: next tab\nF6: next pane\nF5: refresh\nCtrl+C / X / V: copy / cut / paste\nF2: rename    Delete: delete\nCtrl+Shift+N: new folder\n\nAfter copying, click the destination pane and paste. Windows handles drag-and-drop behavior and overwrite prompts.\nFolder tabs, layout, and favorites are restored after closing."),nova_text(L"NOVA 文件管理",L"NOVA File Manager"),MB_OK);return 0;}
         command(&fm.panes[fm.active],LOWORD(wp));return 0;
     case WM_DRAWITEM:return draw_button((DRAWITEMSTRUCT*)lp);
     case WM_CTLCOLORSTATIC:SetTextColor((HDC)wp,RGB(167,181,202));SetBkColor((HDC)wp,RGB(14,19,29));return (LRESULT)fm.background;
@@ -551,7 +558,7 @@ HWND file_manager_open(HWND owner,const wchar_t *settings_directory){
     WNDCLASSW wc={0};wc.hInstance=GetModuleHandleW(NULL);wc.hCursor=LoadCursorW(NULL,IDC_ARROW);wc.lpfnWndProc=manager_proc;wc.lpszClassName=FM_CLASS;RegisterClassW(&wc);
     wc.lpfnWndProc=pane_proc;wc.lpszClassName=PANE_CLASS;RegisterClassW(&wc);
     RECT area;GetClientRect(owner,&area);
-    HWND h=CreateWindowExW(WS_EX_CONTROLPARENT,FM_CLASS,L"NOVA 文件管理",WS_CHILD|WS_CLIPCHILDREN|WS_CLIPSIBLINGS,0,0,area.right,area.bottom,owner,NULL,wc.hInstance,NULL);
+    HWND h=CreateWindowExW(WS_EX_CONTROLPARENT,FM_CLASS,nova_text(L"NOVA 文件管理",L"NOVA File Manager"),WS_CHILD|WS_CLIPCHILDREN|WS_CLIPSIBLINGS,0,0,area.right,area.bottom,owner,NULL,wc.hInstance,NULL);
     if(h){ShowWindow(h,SW_SHOW);arrange();UpdateWindow(h);}return h;
 }
 BOOL file_manager_message(MSG *msg){

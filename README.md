@@ -1,90 +1,135 @@
 # NOVA Desktop
 
-纯 C / Win32 桌面启动器。固定的「目录」工作区提供多窗格文件管理，其他工作区保存独立的应用、快捷方式、文件与文件夹。
+[简体中文](README.zh-CN.md) · English
 
-## 使用
+NOVA Desktop is a lightweight Windows workspace launcher and multi-pane file
+manager written in C with the native Win32 API. It keeps apps, shortcuts,
+files, and folders in named workspaces while providing a fixed **Files**
+workspace for day-to-day file management.
 
-运行 `build\nova-desktop.exe`，默认打开主界面。
+No web runtime, installer, background service, or Q-Dir installation is
+required.
 
-## 多窗格文件管理（Q-Dir 风格）
+## Highlights
 
-点击左侧固定的「目录」工作区进入，也可运行 `build\nova-desktop.exe --files`。文件管理直接显示在主窗口右侧，不再打开独立窗口。顶部和窗格导航动作使用图标按钮，鼠标停留显示中文说明与快捷键。切换到其他工作区可返回启动项；再次进入时保留文件标签和目录。不需要安装或运行 Q-Dir。
+- **12 file-manager layouts** — four panes, two columns, two rows, a single
+  pane, four three-pane arrangements, and three/four-column or row layouts.
+- **Independent tabs and history** — up to 12 tabs per pane, with separate
+  paths and back/forward history.
+- **Native Windows file operations** — selection, sorting, filtering, context
+  menus, thumbnails, clipboard operations, drag and drop, rename, delete, and
+  new-folder actions use Windows Shell behavior.
+- **Workspace launcher** — organize up to 8 workspaces with 20 items each;
+  reorder or move items with press-and-hold drag, search the current workspace,
+  or launch every item once.
+- **Local session restore** — workspaces, tabs, layout, navigation-tree state,
+  and favorites are stored in an embedded SQLite database.
+- **Window modes** — normal, always on top, and desktop-fence mode, plus tray
+  behavior and optional startup with Windows.
+- **Simplified Chinese and English UI** — switch instantly from
+  **Settings → Language**. The preference is restored on the next launch.
 
-- **12 种布局**：四宫格、双栏、双行、单窗格、四种三窗格组合，以及三列、三行、四列、四行。左上角布局菜单切换；暂时隐藏的窗格保留标签。
-- **独立标签**：每个窗格最多 12 个标签，点击 `+` 以当前目录新建标签，点击标签切换目录。每个标签保留自己的目录和前进后退历史；文件视图按需创建。地址栏支持中文路径、相对目录、UNC 网络目录和 `%USERPROFILE%` 等环境变量。初始位置为用户目录。
-- **地址栏命令**：地址栏输入普通命令（如 `git status`）并按 Enter，NOVA 会启动 `cmd.exe` 并将当前窗格的文件系统目录设为工作目录。输入 `> 命令` 可强制按命令执行；绝对路径、`shell:` 地址及含路径分隔符的输入仍按目录解析，避免把输错的路径当成命令。
-- **真实文件操作**：系统文件视图提供双击打开、多选、排序、列筛选、剪贴板和跨窗格拖放。工具栏包含复制、剪切、粘贴、重命名、删除、新建文件夹；操作作用于高亮边框对应的当前窗格。复制后点击目标窗格再粘贴。覆盖、权限、回收站及传输进度由 Windows Shell 处理。
-- **视图**：详细信息、列表、小图标、大图标 / 缩略图、内容、平铺；可切换系统导航栏 / 目录树。文件视图保留 Windows 原生外观和右键菜单，外层工具栏沿用 NOVA 深色界面。
-- **目录收藏**：最多 32 个，支持添加、移除、去重；收藏菜单也包含此电脑、桌面、下载及用户文件夹。
-- **恢复会话**：标签路径、当前标签、布局、导航栏开关和收藏保存在 `%APPDATA%\NOVA Desktop\nova.sqlite`。目录历史在本次运行期间最多保留每标签 24 项；视图释放后恢复目录和历史，不恢复文件选择与滚动位置。
+## Requirements
 
-快捷键：`Ctrl+L` 地址栏，`Alt+←/→` 前进后退，`Alt+↑` 上级，`Ctrl+T/W` 新建 / 关闭标签，`Ctrl+Tab` 下一标签，`F6` 下一窗格，`F5` 刷新。文件视图内使用系统的 `Ctrl+C/X/V`、`F2`、`Delete`、`Ctrl+Shift+N`。
+- Windows 7 or later
+- MinGW-w64 GCC and `windres` to build from source
+- PowerShell for the build and test scripts
 
-这是 Q-Dir 核心文件管理工作流的实现，并非 Q-Dir 所有选项的一比一复刻。当前没有导入 `.qdr` 会话、文件类型自定义配色、打印 / 导出目录清单、自定义分隔比例、独立名称筛选框及放大镜。网络设备、第三方 Shell 扩展或缩略图提供程序响应慢时，文件视图可能等待；大量标签的内存使用也会高于启动器。文件管理地址最多 2047 个字符，实际可访问路径仍受 Windows Shell 限制。
+SQLite 3.53.4 is vendored in `third_party/sqlite` and linked statically. After
+the first build, no network access is needed.
 
-执行 `tests\files.bat`，在新建的临时目录验证 Windows 文件视图、中文路径、导航历史、标签隔离、跨窗格复制 / 剪切、新建文件夹、12 种布局及会话恢复。该测试不操作真实工作文件；通过时会恢复测试前的系统剪贴板。
-
-## 工作区操作
-
-- **添加**：从资源管理器把一个或多个文件、文件夹、快捷方式拖入窗口；也可使用「添加文件」「添加文件夹」。只记录路径，不移动、不复制、不执行拖入的内容。
-- **打开**：双击图标或选中后按 Enter。脚本和文档通过 Windows 的默认关联打开。右键菜单或 Delete 可移除启动项，原文件保留。
-- **工作区**：第一个「目录」是系统工作区，始终显示文件管理，不能重命名、删除或接收启动项。其他工作区可自由编辑；点击侧栏「工作区」标题旁的 `+` 新建，重命名与删除位于右上角设置齿轮菜单。名称可直接编辑，Enter 保存，Esc 取消。最多 8 个工作区，每个普通工作区 20 项。
-- **搜索**：Ctrl+K 聚焦搜索框，按名称和路径过滤当前工作区。清空搜索恢复全部项目。
-- **长按拖动**：在未筛选的图标列表中按住约 350 毫秒后拖动。拖到另一个图标上调整顺序，空白处放到末尾，拖到左侧工作区则移动到该区。松开保存；Esc 或拖到窗外取消。存在搜索文字时请先清空再排序。
-- **启动整个工作区**：点击页面右上的「全部启动」，或双击左侧工作区名称。程序先快照当前工作区，再对其中每个项目各执行一次与单项双击相同的打开动作。没有后台定时队列、延时或重复启动；搜索过滤不影响快照内容。执行期间按钮会禁用，底栏显示打开和失败数量。
-- **快捷方式图标**：仅 NOVA 内隐藏快捷方式箭头叠加，仍保存并打开原 `.lnk`，不会改系统图标或丢失快捷方式参数。
-- **开机启动**：在右上角齿轮菜单勾选「开机启动」，再次点击关闭。使用当前用户的 Run 注册表项 `NOVA Desktop`，无需管理员权限，在登录 Windows 后启动。Windows 任务管理器仍可禁用该启动项。移动 EXE 后，请在新位置重新开启。
-- **窗口置顶**：点击右上角图钉或 F11，窗口保持在普通窗口之上，可继续拖动、缩放。图钉高亮表示已置顶，再次点击、F11 或 Esc 取消。置顶状态单独保存为 `AlwaysOnTop`；旧版桌面嵌入偏好不沿用。Ctrl+Alt+N 唤回窗口，不改变置顶状态。
-- **托盘**：最小化隐藏到托盘；单击托盘图标打开窗口，右键可切换固定、开机启动或退出。
-
-图钉采用普通 Windows 置顶窗口行为。标题栏最左侧的围栏按钮可切换「桌面围栏」形态：NOVA 保持为自身进程的顶层窗口，但固定在普通应用 Z 序的最底部，因此可放在桌面上且不会变成黑色合成表面。再次点击恢复之前的普通窗口位置。桌面围栏与置顶互斥。工作区是启动项集合，不会隔离或移动已运行应用的窗口。
-
-NOVA 品牌图标由 ImageGen 生成，并转换为包含 16–256 px 多级尺寸的 Windows ICO；EXE、窗口标题栏、任务栏和托盘共用同一图标。
-
-文件路径目前最多 259 个字符；更长路径会跳过。请使用普通权限运行，以便接收资源管理器的拖放。
-
-## 配置与兼容
-
-统一存储在 `%APPDATA%\NOVA Desktop\nova.sqlite`。首次启动迁移 `config.ini`；首次进入文件管理迁移 `file-manager.ini`。迁移采用事务，原 INI 原样保留，成功后不再读取旧值。旧版默认名称中的问号会尽可能在迁移时修复，损坏的自定义名称仍可能需要重命名。
-
-数据库由程序内嵌的 SQLite 3.53.4 直接读写，无需服务或额外 DLL。`workspaces` / `items` 保存带稳定 ID 的工作区与启动项；`settings` 按作用域保存应用设置与文件管理会话。版本使用 `user_version`；过新版本、无法识别的数据库和完整性检查失败会停止加载，避免覆盖数据。容量仍为 8 个工作区、每区 20 项；存储层不会静默截断超限的工作区项目。
-
-启动时只读取工作区概览和当前工作区的启动项，其他工作区在使用时查询。工作区修改使用事务即时提交，未加载的工作区项目不被覆盖；标签导航等高频会话变化合并 400 ms 后保存，返回工作区和退出前立即提交。突然结束进程可能丢失这 400 ms 内尚未提交的会话变化。
-
-采用一个数据库连接、512 KiB 页缓存建议值、关闭 mmap、DELETE 日志和 FULL 同步；512 KiB 不是 SQLite 总内存或进程内存硬上限。数据库有效时，启动阶段通过 SQLite 备份 API 更新 `nova.backup.sqlite`。恢复时先退出应用，保留损坏的数据库副本，再将备份复制为 `nova.sqlite`；备份代表上次备份时的状态。原 INI 仅代表迁移前状态。用户实际文件保持原位置。
-
-开机启动开关反映注册项是否指向当前 EXE；默认关闭。置顶和桌面围栏状态都会持久化，下次启动恢复；两者不同时生效。
-
-## UI 与性能
-
-依据 impeccable 的操作型界面原则保留深色基调：统一文字层级、提高次要文字对比度、明确添加入口、使用真实文件图标、可滚动图标列表、原生键盘焦点及空状态提示。
-
-主窗口不再创建整屏位图；图标区由 Windows 列表控件绘制，仅工作区或搜索改变时重建图标集合。系统状态每 3 秒局部刷新；隐藏时停止采样。移除了主动清空进程工作集的调用，因此旧版清理后的 1.45 MB 不能作为新版常驻内存指标。工作集、私有内存以及 DWM/GPU 内存应分别观察。
-
-文件管理恢复会话时只创建当前布局中可见窗格的当前标签视图：即使保存了 48 个标签，单窗格初始只有 1 个 Windows 文件视图，四窗格初始只有 4 个。隐藏标签或返回工作区后，保留视图 30 秒供快速切回；超过期限释放浏览器 COM 对象和宿主控件。所有视图均隐藏超时后，NOVA 不再持有文件浏览器对象，恢复时按需重建。Windows Shell、缩略图和第三方扩展的内部缓存不受此策略硬性限制，因此不保证进程工作集同步降到某个固定值。
-
-## 构建与验证
-
-架构评估、目标分层、资源预算和迁移路线见 [ARCHITECTURE.md](ARCHITECTURE.md)。本轮已拆出 `core/workspace`、`core/launch_queue`、`platform/shell_icons`、`ui/hold_drag`；其余旧模块仍待渐进迁移。
-
-需要 MinGW-w64 GCC、windres 和 PowerShell。SQLite 官方源码已固定版本并放入 `third_party/sqlite`；首次编译较慢，后续复用 SQLite 对象文件，不需要联网：
+## Build and run
 
 ```powershell
 .\build.bat
+.\build\nova-desktop.exe
+```
+
+Open directly in file-manager mode:
+
+```powershell
+.\build\nova-desktop.exe --files
+```
+
+The application stores its data in:
+
+```text
+%APPDATA%\NOVA Desktop\nova.sqlite
+```
+
+Existing `config.ini` and `file-manager.ini` data is migrated once and left in
+place. A valid database is backed up as `nova.backup.sqlite` during startup.
+
+## Using workspaces
+
+- Drop files, folders, executables, or shortcuts into a normal workspace, or
+  use **Add file** / **Add folder**. NOVA records paths only; it does not move
+  or copy the original items.
+- Double-click an item or press Enter to open it with Windows. Removing an item
+  from NOVA does not delete the original file.
+- Use the `+` button to create a workspace. Rename and delete actions are in
+  **Settings**. The fixed **Files** workspace cannot be renamed or deleted.
+- Press `Ctrl+K` to search the active workspace. Clear the search before
+  reordering items.
+- Use **Launch all** or double-click a workspace name to open a snapshot of all
+  its items once. There is no recurring or background launch queue.
+
+## File-manager shortcuts
+
+| Shortcut | Action |
+| --- | --- |
+| `Ctrl+L` | Focus the folder/command address bar |
+| `Alt+Left` / `Alt+Right` | Back / forward |
+| `Alt+Up` | Parent folder |
+| `Ctrl+T` / `Ctrl+W` | New / close tab |
+| `Ctrl+Tab` | Next tab |
+| `F6` | Next pane |
+| `F5` | Refresh |
+| `Ctrl+C/X/V` | Copy / cut / paste in the native file view |
+| `F2` / `Delete` | Rename / delete |
+| `Ctrl+Shift+N` | New folder |
+
+The address bar accepts normal paths, relative paths, UNC paths, `shell:`
+locations, and environment variables such as `%USERPROFILE%`. Entering a
+normal command such as `git status` starts `cmd.exe` with the current pane's
+filesystem folder as its working directory. Prefix a command with `>` to force
+command mode.
+
+## Validation
+
+```powershell
 .\tests\run.bat
 .\tests\run.bat --interactions
 .\tests\storage.bat
 .\tests\files.bat
 ```
 
-测试在临时目录及隔离注册表中验证中文配置、非法索引、拖入文件/文件夹、重复项、容量限制、工作区隔离、搜索和开机启动开关，不改变真实开机启动设置。
+The tests use temporary directories and an isolated registry location. They do
+not change the real Windows startup entry or operate on personal work files.
 
-`--interactions` 额外创建测试窗口，验证「目录」的固定与防删改行为、普通工作区切换、拖动目标保护、搜索禁用排序以及一次性全部启动；测试不会打开真实应用。`--desktop` 另外验证桌面围栏的绘制和窗口恢复。
+## Current limitations
 
-以下窗口集成测试验证置顶开关、位置尺寸不变、可缩放样式以及紧凑控件布局（保留原测试参数名）：
+- Paths added to launcher workspaces are limited to 259 characters. The file
+  manager address field supports up to 2047 characters, while actual access is
+  still subject to Windows Shell behavior.
+- This is an independent implementation of a Q-Dir-style core workflow, not a
+  one-for-one clone. It does not import `.qdr` sessions or reproduce every
+  Q-Dir option.
+- Windows Shell extensions, network devices, or thumbnail providers may delay
+  a file view. Hidden views are released after an idle period, but Windows and
+  third-party caches are outside NOVA's memory policy.
 
-```powershell
-.\tests\run.bat --desktop
-```
+## Project documents
 
-持久化测试验证中文 INI 无损迁移、惰性工作区读取、稳定 ID、跨区移动、事务回滚、SQLite 备份以及新版本拒绝覆盖。文件管理测试还验证 48 标签的 1/4 视图创建、闲置释放、恢复历史和退出前提交；测试使用隔离临时目录。
+- [Architecture](ARCHITECTURE.md)
+- [Design notes](DESIGN.md)
+- [Contributing](CONTRIBUTING.md)
+- [Security policy](SECURITY.md)
+- [Notices and rights](NOTICE.md)
+
+## License
+
+NOVA Desktop is available under the [MIT License](LICENSE). SQLite is public
+domain software; see [`third_party/sqlite/README.md`](third_party/sqlite/README.md)
+for provenance. Product names mentioned for compatibility or comparison belong
+to their respective owners.
