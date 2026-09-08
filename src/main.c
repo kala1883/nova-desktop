@@ -15,9 +15,12 @@
 #include "core/launch_queue.h"
 #include "platform/shell_icons.h"
 #include "ui/hold_drag.h"
+#include "ui/file_manager.h"
+#include "platform/storage.h"
 
 #define APP_NAME L"NOVA Desktop"
 #define APP_CLASS L"NovaDesktopWindowV3"
+#define IDI_NOVA 101
 #define WM_TRAY (WM_APP+1)
 #define WM_RESTORE_NOVA (WM_APP+2)
 #define ID_SPACES 101
@@ -39,23 +42,33 @@
 #define ID_MINIMIZE 117
 #define ID_MAXIMIZE 118
 #define ID_CLOSE 119
+#define ID_FILES 120
+#define ID_DESKTOP 121
+#define ID_LAUNCH_ALL 122
 #define STATS_TIMER 1
 #define START_PIN_TIMER 2
-#define LAUNCH_TIMER 3
+#define START_DESKTOP_TIMER 4
 
-static LaunchQueue launch_queue;
 static HoldDrag hold_drag;
 static Workspace spaces[MAX_WORKSPACES];
 static int space_count=4, active_space, dpi=96;
 static HWND main_window, space_list, app_list, search_edit, name_edit;
-static HWND add_button, folder_button, pin_button, settings_button, new_button, tooltip, hover_button;
+static HWND add_button, folder_button, launch_button, pin_button, desktop_button, settings_button, new_button, tooltip, hover_button;
 static HWND minimize_button, maximize_button, close_button;
+static HWND files_view;
+static BOOL files_page;
+static BOOL storage_failed;
 static HFONT body_font, small_font, title_font, brand_font;
 static HBRUSH background, panel_brush;
 static HIMAGELIST images;
 static NOTIFYICONDATAW tray;
 static UINT taskbar_message;
-static BOOL pinned, prefer_pin, editing_name, startup_enabled, test_mode;
+static BOOL pinned, prefer_pin, desktop_mode, prefer_desktop, editing_name, startup_enabled, test_mode, bulk_launch_running;
+static int test_launch_count;
+static unsigned paint_generation;
+static RECT floating_rect;
+static BOOL floating_was_zoomed;
+static LONG_PTR floating_style, floating_exstyle;
 static wchar_t config_path[MAX_PATH], notice[256]=L"拖入应用、快捷方式或文件夹，添加到当前工作区。";
 static ULONGLONG prev_idle, prev_kernel, prev_user;
 static int system_cpu, memory_load;
@@ -67,8 +80,29 @@ static void refresh_apps(void);
 static void layout_controls(void);
 static BOOL save_config(void);
 static BOOL set_pinned(BOOL value);
+static BOOL set_desktop_mode(BOOL value);
 static void refresh_spaces(void);
 static void launch_workspace(void);
+static void error_message(const wchar_t *message);
+static void end_name_edit(BOOL commit);
+static void show_workspace_page(void){
+    if(active_space==0){if(IsWindow(files_view))SetFocus(files_view);return;}
+    files_page=FALSE;file_manager_hide();
+    HWND controls[]={search_edit,add_button,folder_button,launch_button,app_list};
+    for(unsigned i=0;i<sizeof(controls)/sizeof(controls[0]);i++)ShowWindow(controls[i],SW_SHOW);
+    layout_controls();SetFocus(app_list);
+}
+static void open_file_manager(void){
+    end_name_edit(TRUE);
+    wchar_t directory[MAX_PATH];lstrcpynW(directory,config_path,MAX_PATH);
+    wchar_t *slash=wcsrchr(directory,L'\\');if(slash)*slash=0;
+    files_view=file_manager_open(main_window,directory);
+    if(!files_view){error_message(L"无法打开文件管理页面。");return;}
+    files_page=TRUE;
+    HWND controls[]={search_edit,add_button,folder_button,launch_button,app_list,name_edit};
+    for(unsigned i=0;i<sizeof(controls)/sizeof(controls[0]);i++)ShowWindow(controls[i],SW_HIDE);
+    layout_controls();SetFocus(files_view);
+}
 
 static void set_notice(const wchar_t *text) {
     lstrcpynW(notice,text,256);
@@ -78,46 +112,67 @@ static void error_message(const wchar_t *message) { if(test_mode){fwprintf(stder
 
 static void defaults(void) {
     ZeroMemory(spaces,sizeof(spaces)); space_count=4; active_space=0;
-    const wchar_t *names[]={L"日常",L"开发",L"创作",L"专注"};
-    for(int i=0;i<4;i++) lstrcpyW(spaces[i].name,names[i]);
-    const wchar_t *app_names[]={L"文件管理",L"浏览器",L"系统设置",L"记事本"};
-    const wchar_t *targets[]={L"explorer.exe",L"https://www.bing.com",L"ms-settings:",L"notepad.exe"};
-    spaces[0].app_count=4;
-    for(int i=0;i<4;i++){lstrcpyW(spaces[0].apps[i].name,app_names[i]);lstrcpyW(spaces[0].apps[i].target,targets[i]);}
+    const wchar_t *names[]={L"目录",L"开发",L"创作",L"专注"};
+    for(int i=0;i<4;i++){lstrcpyW(spaces[i].name,names[i]);spaces[i].items_loaded=1;}
     spaces[1].app_count=1; lstrcpyW(spaces[1].apps[0].name,L"PowerShell"); lstrcpyW(spaces[1].apps[0].target,L"powershell.exe");
 }
 
-/* UTF-16 INI plus atomic replacement: keep the old file if a write fails. */
-static BOOL save_config(void) {
-    wchar_t temp[MAX_PATH+8],value[32],section[32],key[32];
-    swprintf(temp,MAX_PATH+8,L"%ls.tmp",config_path);
-    HANDLE file=CreateFileW(temp,GENERIC_WRITE,0,NULL,CREATE_ALWAYS,FILE_ATTRIBUTE_NORMAL,NULL);
-    if(file==INVALID_HANDLE_VALUE){set_notice(L"配置保存失败：请检查配置目录权限。当前改动仍在内存中。");return FALSE;}
-    WORD bom=0xfeff; DWORD bytes=0; BOOL ok=WriteFile(file,&bom,2,&bytes,NULL)&&bytes==2; CloseHandle(file);
-#define SAVE(section_,key_,value_) do { if(!WritePrivateProfileStringW(section_,key_,value_,temp)) ok=FALSE; } while(0)
-    swprintf(value,32,L"%d",space_count); SAVE(L"Nova",L"WorkspaceCount",value);
-    swprintf(value,32,L"%d",active_space); SAVE(L"Nova",L"Active",value);
-    SAVE(L"Nova",L"AlwaysOnTop",prefer_pin?L"1":L"0");
-    for(int s=0;s<space_count;s++){
-        swprintf(section,32,L"Workspace%d",s); SAVE(section,L"Name",spaces[s].name);
-        swprintf(value,32,L"%d",spaces[s].app_count); SAVE(section,L"AppCount",value);
-        for(int a=0;a<spaces[s].app_count;a++){
-            swprintf(key,32,L"App%dName",a); SAVE(section,key,spaces[s].apps[a].name);
-            swprintf(key,32,L"App%dTarget",a); SAVE(section,key,spaces[s].apps[a].target);
-        }
+static BOOL legacy_placeholder(const wchar_t *value,int number) {
+    const wchar_t *p=value;int marks=0;
+    while(*p==L'?'){marks++;p++;}
+    while(*p==L' ')p++;
+    if(!marks)return FALSE;
+    if(!*p)return TRUE;
+    wchar_t *end=NULL;long parsed=wcstol(p,&end,10);
+    while(end&&*end==L' ')end++;
+    return parsed==number&&end&&!*end;
+}
+static BOOL repair_workspace_name(int index){
+    if(index==0){if(!lstrcmpW(spaces[0].name,L"目录"))return FALSE;lstrcpyW(spaces[0].name,L"目录");return TRUE;}
+    if(index<0||index>=space_count||!legacy_placeholder(spaces[index].name,index+1))return FALSE;
+    const wchar_t *names[]={L"目录",L"开发",L"创作",L"专注"};
+    if(index<4)lstrcpyW(spaces[index].name,names[index]);else swprintf(spaces[index].name,40,L"工作区 %d",index+1);
+    return TRUE;
+}
+static BOOL repair_item_name(AppItem *item){
+    if(!item||!legacy_placeholder(item->name,0))return FALSE;
+    const wchar_t *targets[]={L"explorer.exe",L"https://www.bing.com",L"ms-settings:",L"notepad.exe",L"wt.exe",L"powershell.exe",L".",L"mspaint.exe",L"ms-photos:",L"ms-clock:"};
+    const wchar_t *names[]={L"文件管理",L"浏览器",L"系统设置",L"记事本",L"终端",L"PowerShell",L"项目目录",L"画图",L"照片",L"时钟"};
+    for(unsigned i=0;i<sizeof(targets)/sizeof(targets[0]);i++)if(lstrcmpiW(item->target,targets[i])==0){lstrcpyW(item->name,names[i]);return TRUE;}
+    const wchar_t *base=wcsrchr(item->target,L'\\');lstrcpynW(item->name,base?base+1:item->target,64);return TRUE;
+}
+static BOOL repair_loaded_names(void){
+    BOOL repaired=FALSE;
+    for(int i=0;i<space_count;i++){
+        repaired=repair_workspace_name(i)||repaired;
+        if(spaces[i].items_loaded)for(int j=0;j<spaces[i].app_count;j++)repaired=repair_item_name(&spaces[i].apps[j])||repaired;
     }
-    WritePrivateProfileStringW(NULL,NULL,NULL,temp);
-    if(ok)ok=MoveFileExW(temp,config_path,MOVEFILE_REPLACE_EXISTING|MOVEFILE_WRITE_THROUGH);
-    if(!ok)set_notice(L"配置未保存成功：原配置已保留，请检查磁盘空间与权限。");
-    return ok;
-#undef SAVE
+    return repaired;
 }
 
-static void load_config(void) {
+static BOOL ensure_storage(void){
+    wchar_t directory[MAX_PATH];lstrcpynW(directory,config_path,MAX_PATH);
+    wchar_t *slash=wcsrchr(directory,L'\\');if(!slash)return FALSE;*slash=0;
+    if(!store_open(directory)){storage_failed=TRUE;set_notice(store_error());return FALSE;}return TRUE;
+}
+static BOOL ensure_items(int index){
+    if(index<0||index>=space_count)return FALSE;
+    if(spaces[index].items_loaded)return TRUE;
+    if(!store_load_items(&spaces[index])){storage_failed=TRUE;set_notice(store_error());return FALSE;}return TRUE;
+}
+static BOOL save_config(void){
+    if(storage_failed||!ensure_storage())return FALSE;
+    BOOL ok=store_save_workspaces(spaces,space_count,active_space,prefer_pin);
+    if(ok)ok=store_set_int(L"app",L"Nova",L"DesktopMode",prefer_desktop);
+    if(!ok)set_notice(store_error());
+    return ok;
+}
+
+static void load_legacy_config(void) {
     defaults();
     if(GetFileAttributesW(config_path)==INVALID_FILE_ATTRIBUTES)return;
     int n=(int)GetPrivateProfileIntW(L"Nova",L"WorkspaceCount",4,config_path);
-    if(n<1||n>MAX_WORKSPACES)return;
+    if(n<1||n>MAX_WORKSPACES){storage_failed=TRUE;set_notice(L"旧配置的工作区数量无效，已停止迁移并保留原文件。");return;}
     space_count=n;
     active_space=(int)GetPrivateProfileIntW(L"Nova",L"Active",0,config_path);
     if(active_space<0||active_space>=space_count)active_space=0;
@@ -125,33 +180,42 @@ static void load_config(void) {
     for(int s=0;s<space_count;s++){
         wchar_t section[32],key[32],fallback[40]; swprintf(section,32,L"Workspace%d",s);swprintf(fallback,40,L"工作区 %d",s+1);
         GetPrivateProfileStringW(section,L"Name",fallback,spaces[s].name,40,config_path);
-        n=(int)GetPrivateProfileIntW(section,L"AppCount",0,config_path);spaces[s].app_count=n<0?0:n>MAX_APPS?MAX_APPS:n;
+        n=(int)GetPrivateProfileIntW(section,L"AppCount",0,config_path);
+        if(n<0||n>MAX_APPS){storage_failed=TRUE;set_notice(L"旧配置的项目数量超过容量，已停止迁移并保留原文件。");return;}
+        spaces[s].app_count=n;
         for(int a=0;a<spaces[s].app_count;a++){
             swprintf(key,32,L"App%dName",a);GetPrivateProfileStringW(section,key,L"启动项",spaces[s].apps[a].name,64,config_path);
             swprintf(key,32,L"App%dTarget",a);GetPrivateProfileStringW(section,key,L"",spaces[s].apps[a].target,MAX_PATH,config_path);
         }
     }
-    /* Older releases wrote ANSI INIs. Repair only strings consisting of '?'. */
-    BOOL repaired=FALSE;
-    for(int s=0;s<space_count;s++){
-        if(*spaces[s].name&&wcsspn(spaces[s].name,L"?")==wcslen(spaces[s].name)){
-            const wchar_t *names[]={L"日常",L"开发",L"创作",L"专注"};
-            if(s<4)lstrcpyW(spaces[s].name,names[s]);else swprintf(spaces[s].name,40,L"工作区 %d",s+1);
-            repaired=TRUE;
-        }
-        for(int a=0;a<spaces[s].app_count;a++){
-            AppItem *item=&spaces[s].apps[a];
-            if(*item->name&&wcsspn(item->name,L"?")==wcslen(item->name)){
-                const wchar_t *targets[]={L"explorer.exe",L"https://www.bing.com",L"ms-settings:",L"notepad.exe",L"wt.exe",L"powershell.exe",L".",L"mspaint.exe",L"ms-photos:",L"ms-clock:"};
-                const wchar_t *names[]={L"文件管理",L"浏览器",L"系统设置",L"记事本",L"终端",L"PowerShell",L"项目目录",L"画图",L"照片",L"时钟"};
-                BOOL known=FALSE;for(unsigned i=0;i<sizeof(targets)/sizeof(targets[0]);i++)if(lstrcmpiW(item->target,targets[i])==0){lstrcpyW(item->name,names[i]);known=TRUE;break;}
-                if(!known){const wchar_t *base=wcsrchr(item->target,L'\\');lstrcpynW(item->name,base?base+1:item->target,64);}
-                repaired=TRUE;
-            }
-        }
+    /* Older releases wrote ANSI INIs. Repair only recognizable placeholder names. */
+    BOOL repaired=repair_loaded_names();
+    if(repaired)set_notice(L"已在数据库迁移中修复旧版默认名称；原 INI 保留。");
+}
+
+static void load_config(void){
+    storage_failed=FALSE;defaults();if(!ensure_storage())return;
+    int count=store_load_workspaces(spaces);
+    if(count<0){storage_failed=TRUE;set_notice(store_error());return;}
+    if(count==0){
+        load_legacy_config();
+        if(storage_failed)return;
+        for(int i=0;i<space_count;i++)spaces[i].items_loaded=1;
+        if(!save_config()){storage_failed=TRUE;return;}
+        if(!store_backup())set_notice(L"数据库已保存，但备份失败；原 INI 仍然保留。");
+        count=store_load_workspaces(spaces);
     }
-    if(repaired){wchar_t backup[MAX_PATH+32];swprintf(backup,MAX_PATH+32,L"%ls.pre-unicode.bak",config_path);
-        if(CopyFileW(config_path,backup,TRUE)||GetLastError()==ERROR_FILE_EXISTS){save_config();set_notice(L"已修复旧版默认名称，原配置保存在 config.ini.pre-unicode.bak。");}}
+    if(count<1){storage_failed=TRUE;return;}
+    space_count=count;active_space=store_int(L"app",L"Nova",L"Active",0);
+    if(active_space<0||active_space>=space_count)active_space=0;
+    prefer_pin=store_int(L"app",L"Nova",L"AlwaysOnTop",0)!=0;
+    prefer_desktop=store_int(L"app",L"Nova",L"DesktopMode",0)!=0;
+    if(prefer_desktop)prefer_pin=FALSE;
+    if(!ensure_items(active_space))return;
+    if(repair_loaded_names()){
+        save_config();
+        set_notice(L"已修复旧版留下的乱码默认名称。");
+    }
 }
 
 static BOOL startup_command(wchar_t *command,size_t count) {
@@ -180,8 +244,49 @@ static void toggle_startup(void) {
     set_notice(startup_enabled?L"已开启：下次登录 Windows 时启动 NOVA，并恢复固定状态。":L"已关闭开机启动。你仍可手动打开 NOVA。");
 }
 
+static void redraw_surface(void){
+    layout_controls();
+    RedrawWindow(main_window,NULL,NULL,RDW_INVALIDATE|RDW_ERASE|RDW_FRAME|RDW_ALLCHILDREN|RDW_UPDATENOW);
+}
+static BOOL set_desktop_mode(BOOL value){
+    if(value==desktop_mode)return TRUE;
+    if(value){
+        if(pinned&&!set_pinned(FALSE))return FALSE;
+        GetWindowRect(main_window,&floating_rect);floating_was_zoomed=IsZoomed(main_window);
+        if(IsZoomed(main_window))ShowWindow(main_window,SW_RESTORE);
+        floating_style=GetWindowLongPtrW(main_window,GWL_STYLE);floating_exstyle=GetWindowLongPtrW(main_window,GWL_EXSTYLE);
+        LONG_PTR style=floating_style&~(WS_MAXIMIZE|WS_MINIMIZE);
+        LONG_PTR exstyle=(floating_exstyle&~(WS_EX_TOPMOST|WS_EX_APPWINDOW))|WS_EX_TOOLWINDOW;
+        SetWindowLongPtrW(main_window,GWL_STYLE,style);SetWindowLongPtrW(main_window,GWL_EXSTYLE,exstyle);
+        RECT area;if(!SystemParametersInfoW(SPI_GETWORKAREA,0,&area,0))SetRect(&area,0,0,GetSystemMetrics(SM_CXSCREEN),GetSystemMetrics(SM_CYSCREEN));
+        int margin=px(32),width=px(900),height=px(640);
+        if(width>area.right-area.left-margin*2)width=area.right-area.left-margin*2;
+        if(height>area.bottom-area.top-px(80))height=area.bottom-area.top-px(80);
+        int x=area.right-width-margin,y=area.top+px(44);if(x<area.left)x=area.left;if(y+height>area.bottom)y=area.top+(area.bottom-area.top-height)/2;
+        desktop_mode=TRUE;prefer_desktop=TRUE;unsigned before_paint=paint_generation;
+        BOOL placed=SetWindowPos(main_window,HWND_BOTTOM,x,y,width,height,SWP_FRAMECHANGED|SWP_SHOWWINDOW|SWP_NOACTIVATE);
+        redraw_surface();
+        if(!placed||!IsWindowVisible(main_window)||paint_generation==before_paint){
+            desktop_mode=FALSE;prefer_desktop=FALSE;SetWindowLongPtrW(main_window,GWL_STYLE,floating_style);SetWindowLongPtrW(main_window,GWL_EXSTYLE,floating_exstyle);
+            SetWindowPos(main_window,HWND_NOTOPMOST,floating_rect.left,floating_rect.top,floating_rect.right-floating_rect.left,floating_rect.bottom-floating_rect.top,SWP_FRAMECHANGED|SWP_SHOWWINDOW);
+            if(floating_was_zoomed)ShowWindow(main_window,SW_MAXIMIZE);
+            redraw_surface();
+            error_message(L"桌面围栏没有正常绘制，NOVA 已恢复为普通窗口。");return FALSE;
+        }
+        SetWindowTextW(desktop_button,L"退出桌面围栏");InvalidateRect(desktop_button,NULL,TRUE);save_config();
+        set_notice(L"已放到桌面围栏，普通应用窗口会显示在 NOVA 上方。");return TRUE;
+    }
+    desktop_mode=FALSE;prefer_desktop=FALSE;
+    SetWindowLongPtrW(main_window,GWL_STYLE,floating_style);SetWindowLongPtrW(main_window,GWL_EXSTYLE,floating_exstyle&~WS_EX_TOPMOST);
+    SetWindowPos(main_window,HWND_NOTOPMOST,floating_rect.left,floating_rect.top,floating_rect.right-floating_rect.left,floating_rect.bottom-floating_rect.top,SWP_FRAMECHANGED|SWP_SHOWWINDOW);
+    if(floating_was_zoomed)ShowWindow(main_window,SW_MAXIMIZE);
+    redraw_surface();SetWindowTextW(desktop_button,L"放到桌面");InvalidateRect(desktop_button,NULL,TRUE);save_config();
+    set_notice(L"已恢复为普通窗口。");return TRUE;
+}
+
 /* A WeChat-style pin changes only the topmost band; geometry and ownership stay unchanged. */
 static BOOL set_pinned(BOOL value) {
+    if(value&&desktop_mode&&!set_desktop_mode(FALSE))return FALSE;
     if(value==pinned)return TRUE;
     LONG_PTR exstyle=GetWindowLongPtrW(main_window,GWL_EXSTYLE);
     SetWindowLongPtrW(main_window,GWL_EXSTYLE,value?(exstyle|WS_EX_TOPMOST):(exstyle&~WS_EX_TOPMOST));
@@ -201,18 +306,15 @@ static void text(HDC dc,const wchar_t *str,RECT rect,HFONT font,COLORREF color,U
 static RECT box(int x,int y,int w,int h){RECT r={x,y,x+w,y+h};return r;}
 static void paint(HDC dc,RECT client) {
     RECT title=box(0,0,client.right,caption_height());HBRUSH titlebrush=CreateSolidBrush(RGB(32,33,33));FillRect(dc,&title,titlebrush);DeleteObject(titlebrush);
-    text(dc,APP_NAME,box(px(12),0,client.right-px(250),caption_height()),small_font,TEXT,DT_SINGLELINE|DT_VCENTER|DT_END_ELLIPSIS);
+    text(dc,APP_NAME,box(px(12),0,client.right-px(296),caption_height()),small_font,TEXT,DT_SINGLELINE|DT_VCENTER|DT_END_ELLIPSIS);
     int saved=SaveDC(dc);IntersectClipRect(dc,0,caption_height(),client.right,client.bottom);
     SetViewportOrgEx(dc,0,caption_height(),NULL);client.bottom-=caption_height();
     FillRect(dc,&client,background);RECT side=box(0,0,px(220),client.bottom);FillRect(dc,&side,panel_brush);
     text(dc,L"NOVA",box(px(28),px(27),px(164),px(38)),brand_font,TEXT,DT_LEFT);
-    text(dc,L"桌面工作区",box(px(29),px(71),px(165),px(26)),body_font,MUTED,DT_LEFT);
-    text(dc,L"工作区",box(px(28),px(125),px(160),px(24)),small_font,MUTED,DT_LEFT);
+    text(dc,L"工作区",box(px(28),px(78),px(160),px(24)),small_font,MUTED,DT_LEFT);
     int left=px(254),width=client.right-left-px(32);
-    text(dc,spaces[active_space].name,box(left,px(27),width-px(104),px(47)),title_font,TEXT,DT_LEFT|DT_END_ELLIPSIS);
-    wchar_t subtitle[100];swprintf(subtitle,100,L"%d 个启动项  /  拖入文件、文件夹或快捷方式",spaces[active_space].app_count);
-    text(dc,subtitle,box(left,px(84),width,px(28)),body_font,MUTED,DT_LEFT|DT_END_ELLIPSIS);
-    text(dc,L"启动项",box(left,px(190),width,px(25)),body_font,TEXT,DT_LEFT);
+    text(dc,spaces[active_space].name,box(left,px(27),width-px(148),px(47)),title_font,TEXT,DT_LEFT|DT_END_ELLIPSIS);
+    text(dc,L"启动项",box(left,px(157),width,px(25)),body_font,TEXT,DT_LEFT);
     RECT status=box(left,client.bottom-px(56),width,px(50));FillRect(dc,&status,background);
     text(dc,notice,box(left,client.bottom-px(49),width,px(23)),small_font,MUTED,DT_LEFT|DT_SINGLELINE|DT_END_ELLIPSIS);
     wchar_t metrics[80];swprintf(metrics,80,L"系统 CPU %d%%    内存 %d%%",system_cpu,memory_load);
@@ -235,7 +337,7 @@ static void add_tooltip(HWND h,const wchar_t *caption){
     SendMessageW(tooltip,TTM_ADDTOOLW,0,(LPARAM)&t);
 }
 static void draw_icon(DRAWITEMSTRUCT *d){
-    BOOL active=d->CtlID==ID_PIN&&pinned;
+    BOOL active=(d->CtlID==ID_PIN&&pinned)||(d->CtlID==ID_DESKTOP&&desktop_mode);
     BOOL caption=d->CtlID!=ID_NEW;
     COLORREF fill=active?RGB(53,77,122):(hover_button==d->hwndItem||(d->itemState&ODS_SELECTED))?RGB(39,51,71):d->CtlID==ID_NEW?PANEL:BG;
     if(caption)fill=active?RGB(59,70,82):(hover_button==d->hwndItem||(d->itemState&ODS_SELECTED))?(d->CtlID==ID_CLOSE?RGB(196,43,28):RGB(57,58,58)):RGB(32,33,33);
@@ -254,6 +356,12 @@ static void draw_icon(DRAWITEMSTRUCT *d){
         POINT p[]={{-4,-9},{5,-9},{4,-3},{8,2},{-7,2},{-3,-3},{-4,-9}};
         for(unsigned i=0;i<sizeof(p)/sizeof(p[0]);i++){p[i].x=x+MulDiv(px(p[i].x),2,3);p[i].y=y+MulDiv(px(p[i].y),2,3);}Polyline(d->hDC,p,7);
         MoveToEx(d->hDC,x,y+px(1),NULL);LineTo(d->hDC,x,y+px(7));
+    }else if(d->CtlID==ID_DESKTOP){
+        Rectangle(d->hDC,x-px(8),y-px(7),x+px(8),y+px(7));
+        MoveToEx(d->hDC,x-px(4),y-px(3),NULL);LineTo(d->hDC,x-px(1),y-px(3));
+        MoveToEx(d->hDC,x+px(2),y-px(3),NULL);LineTo(d->hDC,x+px(5),y-px(3));
+        MoveToEx(d->hDC,x-px(4),y+px(2),NULL);LineTo(d->hDC,x-px(1),y+px(2));
+        MoveToEx(d->hDC,x+px(2),y+px(2),NULL);LineTo(d->hDC,x+px(5),y+px(2));
     }else{
         POINT p[]={{-3,-10},{3,-10},{3,-7},{5,-5},{8,-6},{11,-1},{8,1},{7,4},{9,6},{5,10},{3,7},{-1,8},{-2,11},{-7,8},{-6,5},{-8,2},{-11,2},{-11,-3},{-8,-3},{-6,-6},{-7,-9},{-3,-10}};
         for(unsigned i=0;i<sizeof(p)/sizeof(p[0]);i++){p[i].x=x+MulDiv(px(p[i].x),2,3);p[i].y=y+MulDiv(px(p[i].y),2,3);}Polyline(d->hDC,p,22);
@@ -266,15 +374,18 @@ static void move(HWND h,int x,int y,int w,int height){MoveWindow(h,x,y+caption_h
 static void layout_controls(void) {
     if(!app_list)return;
     RECT r;GetClientRect(main_window,&r);r.bottom-=caption_height();int left=px(254),width=r.right-left-px(32);
-    move(space_list,px(16),px(160),px(188),r.bottom-px(218));
-    move(new_button,px(162),px(115),px(40),px(36));
-    HWND caption_buttons[]={pin_button,settings_button,minimize_button,maximize_button,close_button};
-    for(int i=0;i<5;i++)MoveWindow(caption_buttons[i],r.right-px(46)*(5-i),0,px(46),caption_height(),TRUE);
+    move(space_list,px(16),px(112),px(188),r.bottom-px(170));
+    move(new_button,px(162),px(68),px(40),px(36));
+    HWND caption_buttons[]={desktop_button,pin_button,settings_button,minimize_button,maximize_button,close_button};
+    for(int i=0;i<6;i++)MoveWindow(caption_buttons[i],r.right-px(46)*(6-i),0,px(46),caption_height(),TRUE);
     SetWindowTextW(maximize_button,IsZoomed(main_window)?L"还原":L"最大化");
-    move(search_edit,left,px(133),width-px(220),px(32));
-    move(add_button,r.right-px(236),px(130),px(96),px(38));move(folder_button,r.right-px(132),px(130),px(100),px(38));
-    move(app_list,left,px(225),width,r.bottom-px(290));
+    move(launch_button,r.right-px(148),px(27),px(116),px(40));
+    move(search_edit,left,px(100),width-px(220),px(32));
+    move(add_button,r.right-px(236),px(97),px(96),px(38));move(folder_button,r.right-px(132),px(97),px(100),px(38));
+    move(app_list,left,px(190),width,r.bottom-px(255));
     move(name_edit,left,px(32),width-px(104),px(39));
+    if(IsWindow(files_view))move(files_view,px(228),0,r.right-px(236),r.bottom-px(8));
+    if(files_page)file_manager_update_visibility();
     InvalidateRect(main_window,NULL,FALSE);
 }
 static void refresh_spaces(void) {
@@ -288,7 +399,8 @@ static BOOL contains(const wchar_t *value,const wchar_t *query) {
     return FindNLSStringEx(LOCALE_NAME_USER_DEFAULT,FIND_FROMSTART|NORM_IGNORECASE,value,-1,query,-1,NULL,NULL,NULL,0)>=0;
 }
 static void refresh_apps(void) {
-    if(!app_list)return;
+    if(!app_list||!ensure_items(active_space))return;
+    if(repair_loaded_names()){save_config();set_notice(L"已修复旧版留下的乱码默认名称。");refresh_spaces();}
     wchar_t query[128];GetWindowTextW(search_edit,query,128);
     hold_drag.enabled=!*query;
     SendMessageW(app_list,WM_SETREDRAW,FALSE,0);ListView_DeleteAllItems(app_list);
@@ -305,15 +417,18 @@ static void refresh_apps(void) {
     }
     ListView_SetImageList(app_list,next,LVSIL_NORMAL);if(images)ImageList_Destroy(images);images=next;
     EnableWindow(add_button,ws->app_count<MAX_APPS);EnableWindow(folder_button,ws->app_count<MAX_APPS);
+    EnableWindow(launch_button,ws->app_count>0&&!bulk_launch_running);
     SendMessageW(app_list,WM_SETREDRAW,TRUE,0);InvalidateRect(app_list,NULL,TRUE);InvalidateRect(main_window,NULL,FALSE);
 }
 /* Returns 1 on insertion, 0 for duplicate, -1 invalid, -2 full. Never launches dropped files. */
 static int insert_path(const wchar_t *path) {
+    if(active_space==0)return -3;
+    if(!ensure_items(active_space))return -1;
     Workspace *ws=&spaces[active_space];if(!path||!*path||wcslen(path)>=MAX_PATH)return -1;
     for(int i=0;i<ws->app_count;i++)if(lstrcmpiW(ws->apps[i].target,path)==0)return 0;
     if(GetFileAttributesW(path)==INVALID_FILE_ATTRIBUTES)return -1;
     if(ws->app_count==MAX_APPS)return -2;
-    AppItem *a=&ws->apps[ws->app_count++];lstrcpynW(a->target,path,MAX_PATH);
+    AppItem *a=&ws->apps[ws->app_count++];ZeroMemory(a,sizeof(*a));lstrcpynW(a->target,path,MAX_PATH);
     const wchar_t *base=wcsrchr(path,L'\\');lstrcpynW(a->name,base&&base[1]?base+1:path,64);
     if(!(GetFileAttributesW(path)&FILE_ATTRIBUTE_DIRECTORY)) {wchar_t *dot=wcsrchr(a->name,L'.');if(dot&&dot!=a->name)*dot=0;}
     return 1;
@@ -347,25 +462,32 @@ static int selected_app(void) {
 }
 static void moved_item(int source,int destination,int at,void *context){
     (void)context;if(destination<0)destination=active_space;
+    if(destination==0){set_notice(L"「目录」是固定的文件管理工作区，不接收启动项。");return;}
+    if(!ensure_items(active_space)||!ensure_items(destination))return;
     int result=workspace_move(spaces,space_count,active_space,source,destination,at);
     if(result<0){set_notice(L"无法移动：目标工作区已满或已有此项目。");return;}
     if(result>0){if(save_config())set_notice(destination==active_space?L"已保存新的图标顺序。":L"已移动到目标工作区。原文件位置不变。");refresh_apps();}
 }
-static int dispatch_launch(const AppItem *item,void *context){
-    (void)context;
+static int open_item(const AppItem *item){
+    if(!item||!*item->target)return 0;
+    if(test_mode){test_launch_count++;return 1;}
+    if(!lstrcmpiW(item->target,L"explorer.exe")){open_file_manager();return files_page&&IsWindow(files_view);}
     return (INT_PTR)ShellExecuteW(main_window,L"open",item->target,NULL,NULL,SW_SHOWNORMAL)>32;
 }
 static void launch_workspace(void){
-    if(launch_queue.running){set_notice(L"正在启动工作区，请等待完成；Esc 可取消剩余启动。");return;}
-    if(!launch_queue_begin(&launch_queue,&spaces[active_space])){set_notice(L"当前工作区没有可启动的项目。");return;}
-    if(!SetTimer(main_window,LAUNCH_TIMER,300,NULL)){launch_queue_cancel(&launch_queue);set_notice(L"无法启动任务，请重试。");return;}
-    set_notice(L"正在依次启动整个工作区；Esc 可取消尚未发出的启动。");
+    if(!ensure_items(active_space))return;
+    if(bulk_launch_running){set_notice(L"当前工作区已在执行全部启动。");return;}
+    Workspace snapshot=spaces[active_space];
+    if(snapshot.app_count<1){set_notice(L"当前工作区没有可启动的项目。");return;}
+    bulk_launch_running=TRUE;
+    EnableWindow(launch_button,FALSE);
+    int failed=0;for(int i=0;i<snapshot.app_count;i++)if(!open_item(&snapshot.apps[i]))failed++;
+    bulk_launch_running=FALSE;EnableWindow(launch_button,spaces[active_space].app_count>0);
+    wchar_t message[160];swprintf(message,160,L"全部启动完成：已对 %d 个项目各执行一次打开，失败 %d 个。",snapshot.app_count,failed);set_notice(message);
 }
 static void open_app(void) {
     int i=selected_app();if(i<0)return;
-    const wchar_t *target=spaces[active_space].apps[i].target;
-    HINSTANCE result=ShellExecuteW(main_window,L"open",target,NULL,NULL,SW_SHOWNORMAL);
-    if((INT_PTR)result<=32)error_message(L"启动失败。请检查文件是否被移动、删除，或是否存在对应的默认打开程序。");
+    if(!open_item(&spaces[active_space].apps[i]))error_message(L"启动失败。请检查文件是否被移动、删除，或是否存在对应的默认打开程序。");
 }
 static void remove_app(void) {
     int i=selected_app();if(i<0)return;
@@ -379,10 +501,10 @@ static void end_name_edit(BOOL commit) {
         if(n){lstrcpyW(spaces[active_space].name,value);save_config();refresh_spaces();}}
     editing_name=FALSE;ShowWindow(name_edit,SW_HIDE);SetFocus(space_list);InvalidateRect(main_window,NULL,FALSE);
 }
-static void edit_name(void){editing_name=TRUE;SetWindowTextW(name_edit,spaces[active_space].name);ShowWindow(name_edit,SW_SHOW);SetFocus(name_edit);SendMessageW(name_edit,EM_SETSEL,0,-1);}
-static void new_space(void){if(space_count==MAX_WORKSPACES)return;end_name_edit(TRUE);active_space=space_count++;ZeroMemory(&spaces[active_space],sizeof(Workspace));swprintf(spaces[active_space].name,40,L"工作区 %d",space_count);save_config();refresh_spaces();SetWindowTextW(search_edit,L"");refresh_apps();edit_name();}
+static void edit_name(void){if(active_space==0)return;editing_name=TRUE;SetWindowTextW(name_edit,spaces[active_space].name);ShowWindow(name_edit,SW_SHOW);SetFocus(name_edit);SendMessageW(name_edit,EM_SETSEL,0,-1);}
+static void new_space(void){if(space_count==MAX_WORKSPACES)return;end_name_edit(TRUE);active_space=space_count++;ZeroMemory(&spaces[active_space],sizeof(Workspace));spaces[active_space].items_loaded=1;swprintf(spaces[active_space].name,40,L"工作区 %d",space_count);save_config();refresh_spaces();SetWindowTextW(search_edit,L"");if(files_page)show_workspace_page();refresh_apps();edit_name();}
 static void delete_space(void){
-    if(space_count<=1)return;
+    if(active_space==0||space_count<=1)return;
     if(MessageBoxW(main_window,L"删除当前工作区及其中的启动项？原始文件和应用不会删除。",APP_NAME,MB_YESNO|MB_ICONQUESTION)!=IDYES)return;
     for(int i=active_space;i<space_count-1;i++)spaces[i]=spaces[i+1];
     space_count--;if(active_space>=space_count)active_space=space_count-1;
@@ -392,7 +514,7 @@ static void delete_space(void){
 static LRESULT CALLBACK child_proc(HWND hwnd,UINT msg,WPARAM wp,LPARAM lp,UINT_PTR id,DWORD_PTR data){
     (void)id;(void)data;
     if(hwnd==app_list&&hold_drag_message(&hold_drag,msg,wp,lp))return 0;
-    if(hwnd==pin_button||hwnd==settings_button||hwnd==new_button||hwnd==minimize_button||hwnd==maximize_button||hwnd==close_button){
+    if(hwnd==pin_button||hwnd==desktop_button||hwnd==settings_button||hwnd==new_button||hwnd==minimize_button||hwnd==maximize_button||hwnd==close_button){
         if(msg==WM_MOUSEMOVE&&hover_button!=hwnd){hover_button=hwnd;TRACKMOUSEEVENT t={sizeof(t),TME_LEAVE,hwnd,0};TrackMouseEvent(&t);InvalidateRect(hwnd,NULL,TRUE);}
         if(msg==WM_MOUSELEAVE){if(hover_button==hwnd)hover_button=NULL;InvalidateRect(hwnd,NULL,TRUE);}
     }
@@ -410,15 +532,18 @@ static LRESULT CALLBACK child_proc(HWND hwnd,UINT msg,WPARAM wp,LPARAM lp,UINT_P
     return DefSubclassProc(hwnd,msg,wp,lp);
 }
 static void add_tray(void){
-    ZeroMemory(&tray,sizeof(tray));tray.cbSize=sizeof(tray);tray.hWnd=main_window;tray.uID=1;tray.uFlags=NIF_MESSAGE|NIF_ICON|NIF_TIP;tray.uCallbackMessage=WM_TRAY;tray.hIcon=LoadIconW(NULL,IDI_APPLICATION);lstrcpyW(tray.szTip,APP_NAME);Shell_NotifyIconW(NIM_ADD,&tray);
+    ZeroMemory(&tray,sizeof(tray));tray.cbSize=sizeof(tray);tray.hWnd=main_window;tray.uID=1;tray.uFlags=NIF_MESSAGE|NIF_ICON|NIF_TIP;tray.uCallbackMessage=WM_TRAY;
+    tray.hIcon=(HICON)LoadImageW(GetModuleHandleW(NULL),MAKEINTRESOURCEW(IDI_NOVA),IMAGE_ICON,GetSystemMetrics(SM_CXSMICON),GetSystemMetrics(SM_CYSMICON),LR_SHARED);
+    if(!tray.hIcon)tray.hIcon=LoadIconW(NULL,IDI_APPLICATION);
+    lstrcpyW(tray.szTip,APP_NAME);Shell_NotifyIconW(NIM_ADD,&tray);
 }
-static void restore_window(void){ShowWindow(main_window,SW_RESTORE);SetForegroundWindow(main_window);}
+static void restore_window(void){ShowWindow(main_window,SW_RESTORE);SetForegroundWindow(main_window);if(files_page)file_manager_update_visibility();}
 static void settings_menu(void){
     startup_enabled=read_startup();HMENU menu=CreatePopupMenu();
     AppendMenuW(menu,MF_STRING|(startup_enabled?MF_CHECKED:0),ID_STARTUP,L"开机启动");
     AppendMenuW(menu,MF_SEPARATOR,0,NULL);
-    AppendMenuW(menu,MF_STRING,ID_RENAME,L"重命名当前工作区");
-    AppendMenuW(menu,MF_STRING|(space_count<=1?MF_GRAYED:0),ID_DELETE,L"删除当前工作区…");
+    AppendMenuW(menu,MF_STRING|(active_space==0?MF_GRAYED:0),ID_RENAME,L"重命名当前工作区");
+    AppendMenuW(menu,MF_STRING|(active_space==0||space_count<=1?MF_GRAYED:0),ID_DELETE,L"删除当前工作区…");
     AppendMenuW(menu,MF_SEPARATOR,0,NULL);AppendMenuW(menu,MF_STRING,ID_QUIT,L"退出 NOVA");
     RECT r;GetWindowRect(settings_button,&r);SetForegroundWindow(main_window);
     UINT id=TrackPopupMenu(menu,TPM_RETURNCMD|TPM_RIGHTALIGN|TPM_RIGHTBUTTON,r.right,r.bottom,0,main_window,NULL);
@@ -444,35 +569,37 @@ static LRESULT CALLBACK window_proc(HWND hwnd,UINT msg,WPARAM wp,LPARAM lp){
         main_window=hwnd;HDC dc=GetDC(hwnd);dpi=GetDeviceCaps(dc,LOGPIXELSX);ReleaseDC(hwnd,dc);create_fonts();
         space_list=control(L"LISTBOX",L"工作区",LBS_NOTIFY|LBS_OWNERDRAWFIXED|LBS_HASSTRINGS|WS_VSCROLL,ID_SPACES);SendMessageW(space_list,LB_SETITEMHEIGHT,0,px(44));
         new_button=button(L"新建工作区",ID_NEW);
-        startup_enabled=read_startup();settings_button=button(L"设置",ID_SETTINGS);pin_button=button(L"窗口置顶 (F11)",ID_PIN);
+        startup_enabled=read_startup();settings_button=button(L"设置",ID_SETTINGS);pin_button=button(L"窗口置顶 (F11)",ID_PIN);desktop_button=button(L"放到桌面",ID_DESKTOP);
         minimize_button=button(L"最小化",ID_MINIMIZE);maximize_button=button(L"最大化",ID_MAXIMIZE);close_button=button(L"关闭",ID_CLOSE);
         search_edit=control(L"EDIT",L"",ES_AUTOHSCROLL,ID_SEARCH);SendMessageW(search_edit,EM_SETCUEBANNER,TRUE,(LPARAM)L"搜索当前工作区  Ctrl+K");SendMessageW(search_edit,EM_SETLIMITTEXT,127,0);
-        add_button=button(L"添加文件",ID_ADD);folder_button=button(L"添加文件夹",ID_FOLDER);
+        add_button=button(L"添加文件",ID_ADD);folder_button=button(L"添加文件夹",ID_FOLDER);launch_button=button(L"全部启动",ID_LAUNCH_ALL);
         app_list=control(WC_LISTVIEWW,L"工作区启动项",LVS_ICON|LVS_AUTOARRANGE|LVS_SINGLESEL|LVS_SHOWSELALWAYS,ID_APPS);
         hold_drag_init(&hold_drag,app_list,space_list,moved_item,NULL);
         ListView_SetBkColor(app_list,BG);ListView_SetTextBkColor(app_list,BG);ListView_SetTextColor(app_list,TEXT);ListView_SetExtendedListViewStyle(app_list,LVS_EX_DOUBLEBUFFER|LVS_EX_INFOTIP);ListView_SetIconSpacing(app_list,px(136),px(112));SetWindowTheme(app_list,L"DarkMode_Explorer",NULL);
         name_edit=control(L"EDIT",L"",ES_AUTOHSCROLL,ID_NAME);SendMessageW(name_edit,EM_SETLIMITTEXT,39,0);ShowWindow(name_edit,SW_HIDE);
-        HWND children[]={space_list,new_button,settings_button,pin_button,minimize_button,maximize_button,close_button,search_edit,add_button,folder_button,app_list,name_edit};
+        HWND children[]={space_list,new_button,settings_button,pin_button,desktop_button,minimize_button,maximize_button,close_button,search_edit,add_button,folder_button,launch_button,app_list,name_edit};
         for(unsigned i=0;i<sizeof(children)/sizeof(children[0]);i++){SetWindowSubclass(children[i],child_proc,1,0);DragAcceptFiles(children[i],TRUE);}DragAcceptFiles(hwnd,TRUE);
         tooltip=CreateWindowExW(WS_EX_TOPMOST,TOOLTIPS_CLASSW,NULL,WS_POPUP|TTS_ALWAYSTIP|TTS_NOPREFIX,CW_USEDEFAULT,CW_USEDEFAULT,CW_USEDEFAULT,CW_USEDEFAULT,hwnd,NULL,GetModuleHandleW(NULL),NULL);
-        add_tooltip(pin_button,L"置顶 / 取消置顶 (F11)");add_tooltip(settings_button,L"设置：开机启动、工作区管理");add_tooltip(new_button,L"新建工作区（最多 8 个）");
+        add_tooltip(desktop_button,L"桌面围栏 / 恢复普通窗口");add_tooltip(pin_button,L"置顶 / 取消置顶 (F11)");add_tooltip(settings_button,L"设置：开机启动、工作区管理");add_tooltip(new_button,L"新建工作区（最多 8 个）");
+        add_tooltip(launch_button,L"将当前工作区的每个项目各打开一次");
         add_tooltip(minimize_button,L"最小化");add_tooltip(maximize_button,L"最大化 / 还原");add_tooltip(close_button,L"关闭");
-        refresh_spaces();refresh_apps();layout_controls();sample_stats();SetTimer(hwnd,STATS_TIMER,3000,NULL);if(prefer_pin)SetTimer(hwnd,START_PIN_TIMER,800,NULL);
+        refresh_spaces();refresh_apps();layout_controls();sample_stats();SetTimer(hwnd,STATS_TIMER,3000,NULL);if(prefer_desktop)SetTimer(hwnd,START_DESKTOP_TIMER,800,NULL);else if(prefer_pin)SetTimer(hwnd,START_PIN_TIMER,800,NULL);
         if(!test_mode){add_tray();RegisterHotKey(hwnd,ID_HOTKEY,MOD_CONTROL|MOD_ALT|MOD_NOREPEAT,'N');}
         BOOL dark=TRUE;DwmSetWindowAttribute(hwnd,20,&dark,sizeof(dark));return 0;
     }
+    case WM_WINDOWPOSCHANGING:if(desktop_mode){WINDOWPOS *position=(WINDOWPOS*)lp;if(!(position->flags&SWP_NOZORDER))position->hwndInsertAfter=HWND_BOTTOM;}break;
     case WM_NCCALCSIZE:if(wp){RECT original=((NCCALCSIZE_PARAMS*)lp)->rgrc[0];DefWindowProcW(hwnd,msg,wp,lp);((NCCALCSIZE_PARAMS*)lp)->rgrc[0].top=original.top+(IsZoomed(hwnd)?GetSystemMetrics(SM_CYSIZEFRAME)+GetSystemMetrics(SM_CXPADDEDBORDER):1);return 0;}break;
-    case WM_NCHITTEST:{LRESULT result=DefWindowProcW(hwnd,msg,wp,lp);if(result!=HTCLIENT)return result;POINT p={GET_X_LPARAM(lp),GET_Y_LPARAM(lp)};ScreenToClient(hwnd,&p);RECT r;GetClientRect(hwnd,&r);if(!IsZoomed(hwnd)&&p.y<px(4))return HTTOP;if(p.y<caption_height()&&p.x<r.right-px(230))return HTCAPTION;return HTCLIENT;}
+    case WM_NCHITTEST:{LRESULT result=DefWindowProcW(hwnd,msg,wp,lp);if(result!=HTCLIENT)return result;POINT p={GET_X_LPARAM(lp),GET_Y_LPARAM(lp)};ScreenToClient(hwnd,&p);RECT r;GetClientRect(hwnd,&r);if(!IsZoomed(hwnd)&&p.y<px(4))return HTTOP;if(p.y<caption_height()&&p.x<r.right-px(276))return HTCAPTION;return HTCLIENT;}
     case WM_GETMINMAXINFO:{MINMAXINFO *m=(MINMAXINFO*)lp;m->ptMinTrackSize.x=px(780);m->ptMinTrackSize.y=px(600);return 0;}
     case WM_SIZE:layout_controls();if(wp==SIZE_MINIMIZED&&!pinned)ShowWindow(hwnd,SW_HIDE);return 0;
     case WM_ERASEBKGND:return 1;
-    case WM_PAINT:{PAINTSTRUCT ps;HDC dc=BeginPaint(hwnd,&ps);RECT r;GetClientRect(hwnd,&r);paint(dc,r);EndPaint(hwnd,&ps);return 0;}
+    case WM_PAINT:{PAINTSTRUCT ps;HDC dc=BeginPaint(hwnd,&ps);RECT r;GetClientRect(hwnd,&r);paint(dc,r);paint_generation++;EndPaint(hwnd,&ps);return 0;}
     case WM_CTLCOLOREDIT:case WM_CTLCOLORLISTBOX:case WM_CTLCOLORSTATIC:SetTextColor((HDC)wp,TEXT);SetBkColor((HDC)wp,PANEL);return (LRESULT)panel_brush;
     case WM_DRAWITEM:{
         DRAWITEMSTRUCT *d=(DRAWITEMSTRUCT*)lp;wchar_t caption[80];BOOL selected=(d->itemState&ODS_SELECTED)!=0;
-        if(d->CtlID==ID_PIN||d->CtlID==ID_SETTINGS||d->CtlID==ID_NEW||d->CtlID==ID_MINIMIZE||d->CtlID==ID_MAXIMIZE||d->CtlID==ID_CLOSE){draw_icon(d);return TRUE;}
+        if(d->CtlID==ID_PIN||d->CtlID==ID_DESKTOP||d->CtlID==ID_SETTINGS||d->CtlID==ID_NEW||d->CtlID==ID_MINIMIZE||d->CtlID==ID_MAXIMIZE||d->CtlID==ID_CLOSE){draw_icon(d);return TRUE;}
         COLORREF fill=selected?RGB(48,65,95):PANEL;
-        if(d->CtlID==ID_ADD)fill=selected?RGB(76,103,159):RGB(53,77,122);
+        if(d->CtlID==ID_ADD||d->CtlID==ID_LAUNCH_ALL)fill=selected?RGB(76,103,159):RGB(53,77,122);
         if(d->CtlID==ID_SPACES){if(d->itemID==(UINT)-1)return TRUE;SendMessageW(space_list,LB_GETTEXT,d->itemID,(LPARAM)caption);if((int)d->itemID==active_space)fill=RGB(42,56,79);}
         else GetWindowTextW(d->hwndItem,caption,80);
         HBRUSH b=CreateSolidBrush(fill);FillRect(d->hDC,&d->rcItem,b);DeleteObject(b);
@@ -481,12 +608,15 @@ static LRESULT CALLBACK window_proc(HWND hwnd,UINT msg,WPARAM wp,LPARAM lp){
         if(d->itemState&ODS_FOCUS){RECT f=d->rcItem;InflateRect(&f,-3,-3);DrawFocusRect(d->hDC,&f);}return TRUE;
     }
     case WM_COMMAND:{int id=LOWORD(wp);
-        if(id==ID_SPACES&&HIWORD(wp)==LBN_DBLCLK){launch_workspace();return 0;}
+        if(id==ID_SPACES&&HIWORD(wp)==LBN_DBLCLK){if(active_space==0)open_file_manager();else launch_workspace();return 0;}
         if(id==ID_MINIMIZE){ShowWindow(hwnd,SW_MINIMIZE);return 0;}
         if(id==ID_MAXIMIZE){ShowWindow(hwnd,IsZoomed(hwnd)?SW_RESTORE:SW_MAXIMIZE);return 0;}
         if(id==ID_CLOSE){PostMessageW(hwnd,WM_CLOSE,0,0);return 0;}
         if(id==ID_SETTINGS){settings_menu();return 0;}
-        if(id==ID_SPACES&&HIWORD(wp)==LBN_SELCHANGE){end_name_edit(TRUE);int i=(int)SendMessageW(space_list,LB_GETCURSEL,0,0);if(i>=0){active_space=i;save_config();SetWindowTextW(search_edit,L"");refresh_apps();}return 0;}
+        if(id==ID_DESKTOP){set_desktop_mode(!desktop_mode);return 0;}
+        if(id==ID_LAUNCH_ALL){launch_workspace();return 0;}
+        if(id==ID_FILES){if(active_space!=0){active_space=0;save_config();refresh_spaces();}open_file_manager();return 0;}
+        if(id==ID_SPACES&&HIWORD(wp)==LBN_SELCHANGE){end_name_edit(TRUE);int i=(int)SendMessageW(space_list,LB_GETCURSEL,0,0);if(i>=0){active_space=i;save_config();SetWindowTextW(search_edit,L"");if(active_space==0)open_file_manager();else{if(files_page)show_workspace_page();refresh_apps();}}return 0;}
         if(id==ID_SEARCH&&HIWORD(wp)==EN_CHANGE){refresh_apps();return 0;}
         if(id==ID_NAME&&HIWORD(wp)==EN_KILLFOCUS){end_name_edit(TRUE);return 0;}
         switch(id){case ID_ADD:pick_file();break;case ID_FOLDER:pick_folder();break;case ID_PIN:set_pinned(!pinned);break;case ID_STARTUP:toggle_startup();break;case ID_NEW:new_space();break;case ID_RENAME:edit_name();break;case ID_DELETE:delete_space();break;case ID_REMOVE:remove_app();break;case ID_OPEN:restore_window();break;case ID_QUIT:DestroyWindow(hwnd);break;}return 0;
@@ -501,35 +631,47 @@ static LRESULT CALLBACK window_proc(HWND hwnd,UINT msg,WPARAM wp,LPARAM lp){
     case WM_DROPFILES:handle_drop((HDROP)wp);return 0;
     case WM_KEYDOWN:if(wp==VK_F11)set_pinned(!pinned);if(wp==VK_ESCAPE&&pinned)set_pinned(FALSE);return 0;
     case WM_TIMER:
-        if(wp==LAUNCH_TIMER){if(!launch_queue_step(&launch_queue,dispatch_launch,NULL)){KillTimer(hwnd,LAUNCH_TIMER);wchar_t message[160];swprintf(message,160,L"工作区启动请求已完成：已发送 %d 项，失败 %d 项。",launch_queue.count-launch_queue.failed,launch_queue.failed);set_notice(message);}return 0;}
+        if(wp==START_DESKTOP_TIMER){KillTimer(hwnd,START_DESKTOP_TIMER);set_desktop_mode(TRUE);return 0;}
         if(wp==START_PIN_TIMER){KillTimer(hwnd,START_PIN_TIMER);set_pinned(TRUE);return 0;}if(IsWindowVisible(hwnd)&&!IsIconic(hwnd)){sample_stats();RECT r;GetClientRect(hwnd,&r);r.top=r.bottom-px(60);InvalidateRect(hwnd,&r,FALSE);}return 0;
     case WM_RESTORE_NOVA:case WM_HOTKEY:restore_window();return 0;
     case WM_TRAY:if(lp==WM_LBUTTONUP)restore_window();if(lp==WM_RBUTTONUP)tray_menu();return 0;
-    case WM_CLOSE:DestroyWindow(hwnd);return 0;
-    case WM_DESTROY:launch_queue_cancel(&launch_queue);KillTimer(hwnd,LAUNCH_TIMER);save_config();KillTimer(hwnd,STATS_TIMER);KillTimer(hwnd,START_PIN_TIMER);UnregisterHotKey(hwnd,ID_HOTKEY);if(!test_mode)Shell_NotifyIconW(NIM_DELETE,&tray);PostQuitMessage(0);return 0;
+    case WM_CLOSE:file_manager_close();DestroyWindow(hwnd);return 0;
+    case WM_DESTROY:file_manager_close();save_config();KillTimer(hwnd,STATS_TIMER);KillTimer(hwnd,START_PIN_TIMER);KillTimer(hwnd,START_DESKTOP_TIMER);UnregisterHotKey(hwnd,ID_HOTKEY);if(!test_mode)Shell_NotifyIconW(NIM_DELETE,&tray);PostQuitMessage(0);return 0;
     }return DefWindowProcW(hwnd,msg,wp,lp);
 }
 
 int WINAPI wWinMain(HINSTANCE instance,HINSTANCE previous,PWSTR command,int show){
-    (void)previous;(void)command;SetProcessDPIAware();CoInitializeEx(NULL,COINIT_APARTMENTTHREADED);
+    (void)previous;SetProcessDPIAware();OleInitialize(NULL);
     HDC screen=GetDC(NULL);dpi=GetDeviceCaps(screen,LOGPIXELSX);ReleaseDC(NULL,screen);
     HANDLE mutex=CreateMutexW(NULL,FALSE,L"NOVA_DESKTOP_SINGLE_INSTANCE");
-    if(GetLastError()==ERROR_ALREADY_EXISTS){HWND existing=FindWindowW(APP_CLASS,NULL);if(existing)PostMessageW(existing,WM_RESTORE_NOVA,0,0);CloseHandle(mutex);CoUninitialize();return 0;}
+    if(GetLastError()==ERROR_ALREADY_EXISTS){HWND existing=FindWindowW(APP_CLASS,NULL);if(existing){PostMessageW(existing,WM_RESTORE_NOVA,0,0);if(command&&wcsstr(command,L"--files"))PostMessageW(existing,WM_COMMAND,ID_FILES,0);}CloseHandle(mutex);OleUninitialize();return 0;}
     wchar_t dir[MAX_PATH];if(FAILED(SHGetFolderPathW(NULL,CSIDL_APPDATA,NULL,SHGFP_TYPE_CURRENT,dir))||wcslen(dir)>MAX_PATH-40)return 1;
     wcscat(dir,L"\\NOVA Desktop");CreateDirectoryW(dir,NULL);swprintf(config_path,MAX_PATH,L"%ls\\config.ini",dir);load_config();
+    if(storage_failed){MessageBoxW(NULL,notice,APP_NAME,MB_OK|MB_ICONERROR);store_close();CloseHandle(mutex);OleUninitialize();return 4;}
+    if(!store_backup())set_notice(L"无法更新数据库备份，请检查数据目录权限。");
     INITCOMMONCONTROLSEX ic={sizeof(ic),ICC_LISTVIEW_CLASSES|ICC_STANDARD_CLASSES};InitCommonControlsEx(&ic);
     background=CreateSolidBrush(BG);panel_brush=CreateSolidBrush(PANEL);taskbar_message=RegisterWindowMessageW(L"TaskbarCreated");
-    WNDCLASSEXW wc={0};wc.cbSize=sizeof(wc);wc.hInstance=instance;wc.lpfnWndProc=window_proc;wc.lpszClassName=APP_CLASS;wc.hCursor=LoadCursorW(NULL,IDC_ARROW);wc.hIcon=LoadIconW(NULL,IDI_APPLICATION);wc.hbrBackground=background;
+    WNDCLASSEXW wc={0};wc.cbSize=sizeof(wc);wc.hInstance=instance;wc.lpfnWndProc=window_proc;wc.lpszClassName=APP_CLASS;wc.hCursor=LoadCursorW(NULL,IDC_ARROW);
+    wc.hIcon=(HICON)LoadImageW(instance,MAKEINTRESOURCEW(IDI_NOVA),IMAGE_ICON,GetSystemMetrics(SM_CXICON),GetSystemMetrics(SM_CYICON),LR_SHARED);
+    wc.hIconSm=(HICON)LoadImageW(instance,MAKEINTRESOURCEW(IDI_NOVA),IMAGE_ICON,GetSystemMetrics(SM_CXSMICON),GetSystemMetrics(SM_CYSMICON),LR_SHARED);
+    if(!wc.hIcon)wc.hIcon=LoadIconW(NULL,IDI_APPLICATION);
+    if(!wc.hIconSm)wc.hIconSm=wc.hIcon;
+    wc.hbrBackground=background;
     if(!RegisterClassExW(&wc))return 2;
     HWND hwnd=CreateWindowExW(WS_EX_CONTROLPARENT,APP_CLASS,APP_NAME,WS_OVERLAPPEDWINDOW|WS_CLIPCHILDREN,CW_USEDEFAULT,CW_USEDEFAULT,px(1100),px(760),NULL,NULL,instance,NULL);
     if(!hwnd)return 3;
+    if(command&&wcsstr(command,L"--files")&&active_space!=0){active_space=0;save_config();refresh_spaces();}
     ShowWindow(hwnd,show==SW_HIDE?SW_HIDE:SW_MAXIMIZE);UpdateWindow(hwnd);
+    if(active_space==0)open_file_manager();
     MSG msg={0};while(GetMessageW(&msg,NULL,0,0)>0){
-        if(msg.message==WM_KEYDOWN&&msg.wParam==VK_ESCAPE){if(hold_drag.dragging||hold_drag.armed){hold_drag_cancel(&hold_drag);continue;}if(launch_queue.running){launch_queue_cancel(&launch_queue);KillTimer(hwnd,LAUNCH_TIMER);set_notice(L"已取消剩余启动，已打开的应用保持运行。");continue;}}
+        if(msg.message==WM_KEYDOWN&&msg.wParam==VK_F11){set_pinned(!pinned);continue;}
+        if(msg.message==WM_KEYDOWN&&msg.wParam=='K'&&(GetKeyState(VK_CONTROL)&0x8000)&&files_page)show_workspace_page();
+        if(file_manager_message(&msg))continue;
+        if(msg.message==WM_KEYDOWN&&msg.wParam==VK_ESCAPE&&(hold_drag.dragging||hold_drag.armed)){hold_drag_cancel(&hold_drag);continue;}
         if(msg.message==WM_KEYDOWN&&(msg.wParam==VK_F11||(msg.wParam=='K'&&(GetKeyState(VK_CONTROL)&0x8000)))){if(msg.wParam==VK_F11)set_pinned(!pinned);else SetFocus(search_edit);continue;}
         if(msg.message==WM_KEYDOWN&&((msg.hwnd==name_edit&&(msg.wParam==VK_RETURN||msg.wParam==VK_ESCAPE))||(msg.hwnd==app_list&&(msg.wParam==VK_RETURN||msg.wParam==VK_DELETE))||(pinned&&msg.wParam==VK_ESCAPE))){DispatchMessageW(&msg);continue;}
         if(!IsDialogMessageW(hwnd,&msg)){TranslateMessage(&msg);DispatchMessageW(&msg);}
     }
     if(images)ImageList_Destroy(images);
-    DeleteObject(body_font);DeleteObject(small_font);DeleteObject(title_font);DeleteObject(brand_font);DeleteObject(background);DeleteObject(panel_brush);CloseHandle(mutex);CoUninitialize();return (int)msg.wParam;
+    DeleteObject(body_font);DeleteObject(small_font);DeleteObject(title_font);DeleteObject(brand_font);DeleteObject(background);DeleteObject(panel_brush);store_close();CloseHandle(mutex);OleUninitialize();return (int)msg.wParam;
 }
