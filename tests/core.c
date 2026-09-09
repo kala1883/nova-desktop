@@ -8,7 +8,8 @@
 static HANDLE batch_gate,batch_cancel;
 static volatile LONG batch_calls;
 static int batch_parallel,batch_cancel_after_first;
-static BOOL batch_fake_execute(const wchar_t *command,const wchar_t *directory,DWORD *code,DWORD *error){
+static BOOL batch_fake_execute(const wchar_t *command,const wchar_t *directory,HANDLE cancel,DWORD *code,DWORD *error,wchar_t *output,DWORD output_capacity){
+    (void)cancel;if(output&&output_capacity)output[0]=0;
     assert(!wcscmp(command,L"fake command"));
     LONG call=InterlockedIncrement(&batch_calls);
     if(batch_parallel){if(call==3)SetEvent(batch_gate);assert(WaitForSingleObject(batch_gate,5000)==WAIT_OBJECT_0);}
@@ -87,10 +88,15 @@ int wmain(int argc,wchar_t **argv) {
     DWORD find_error=0;assert(!batch_runner_find_git(found_git,MAX_PATH,&find_error)&&find_error==ERROR_FILE_NOT_FOUND);assert(SetEnvironmentVariableW(L"PATH",dir));assert(batch_runner_find_git(found_git,MAX_PATH,&find_error)&&!lstrcmpiW(found_git,fake_git));
     assert(SetCurrentDirectoryW(old_directory));assert(SetEnvironmentVariableW(L"PATH",saved_path));free(saved_path);assert(DeleteFileW(fake_git));
     puts("PASS Git executable resolution ignores relative PATH entries and never executes the test file");
-    DWORD command_exit=0,command_error=0;
-    assert(batch_runner_command(L"exit /b 17",dir,&command_exit,&command_error)&&command_exit==17&&command_error==0);
-    assert(batch_runner_command(L"ver >nul && exit /b 0",dir,&command_exit,&command_error)&&command_exit==0);
-    puts("PASS configurable cmd commands, compound syntax and exit codes in isolated folder");
+    DWORD command_exit=0,command_error=0;wchar_t command_output[BATCH_OUTPUT_CAP];
+    assert(batch_runner_command(L"echo actionable failure 1>&2 & exit /b 17",dir,NULL,&command_exit,&command_error,command_output,BATCH_OUTPUT_CAP)&&command_exit==17&&command_error==0&&wcsstr(command_output,L"actionable failure"));
+    assert(batch_runner_command(L"for /L %i in (1,1,2000) do @echo output-%i",dir,NULL,&command_exit,&command_error,command_output,BATCH_OUTPUT_CAP)&&command_exit==0&&wcsstr(command_output,L"output-2000"));
+    assert(batch_runner_command(L"ver >nul && exit /b 0",dir,NULL,&command_exit,&command_error,command_output,BATCH_OUTPUT_CAP)&&command_exit==0);
+    HANDLE command_cancel=CreateEventW(NULL,TRUE,TRUE,NULL);assert(command_cancel);
+    ULONGLONG cancel_started=GetTickCount64();
+    assert(!batch_runner_command(L"ping -n 30 127.0.0.1 >nul",dir,command_cancel,&command_exit,&command_error,command_output,BATCH_OUTPUT_CAP)&&command_error==ERROR_CANCELLED&&GetTickCount64()-cancel_started<5000);
+    CloseHandle(command_cancel);
+    puts("PASS configurable cmd commands, captured failure output, exit codes and active cancellation in isolated folder");
     test_batch_modes();
     /* Real WM_DROPFILES payload through production handler, using isolated config. */
     size_t bytes=sizeof(DROPFILES)+(wcslen(path)+2)*sizeof(wchar_t);

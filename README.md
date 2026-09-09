@@ -111,14 +111,17 @@ Each task keeps its own execution mode:
 - **Parallel** starts all folders without waiting for earlier ones to finish.
 
 NOVA runs one saved task at a time, with up to 24 commands active in parallel.
-Cancel skips folders that have not started; it lets active commands finish.
-A nonzero exit code is reported per folder and does not stop other folders.
+Cancel terminates active commands and their child processes, then skips folders
+that have not started. A failure shows its exit code and captured output tail;
+double-click the failed row for the full captured detail. Standard input is
+closed so an interactive prompt fails instead of waiting invisibly forever.
+A failed folder does not stop other folders.
 Use **Add to workspace…** in the task manager to place a shortcut in a normal
 launcher workspace. Double-click the shortcut, press Enter, or use the
 workspace's **Launch all** button. If several task shortcuts are launched,
 their configurations are snapshotted and queued in order; each task retains
 its own sequential/parallel folder mode. Repeated launches of an active or
-queued task are ignored. Cancel pending also clears queued tasks.
+queued task are ignored. Cancel task also clears queued tasks.
 
 Task shortcuts follow the saved task by a stable ID, including after rename
 or reorder. Removing a shortcut does not delete the task. Deleting a task

@@ -35,8 +35,8 @@ static int selected_task;
 #define task (collection.tasks[selected_task])
 static HWND command_edit,save_button,command_label;
 
-enum { BATCH_WAITING, BATCH_RUNNING, BATCH_SUCCEEDED, BATCH_FAILED, BATCH_SKIPPED };
-enum { EVENT_STARTED=1, EVENT_RESULT, EVENT_SKIPPED, EVENT_FINISHED };
+enum { BATCH_WAITING, BATCH_RUNNING, BATCH_SUCCEEDED, BATCH_FAILED, BATCH_SKIPPED, BATCH_CANCELLED };
+enum { EVENT_STARTED=1, EVENT_RESULT, EVENT_SKIPPED, EVENT_CANCELLED, EVENT_FINISHED };
 
 typedef struct {
     HWND owner;
@@ -47,8 +47,9 @@ typedef struct {
 } BatchRunContext;
 
 typedef struct {
-    int type,index,success,failed,skipped,total;
+    int type,index,success,failed,skipped,cancelled,total;
     DWORD exit_code,error;
+    wchar_t output[BATCH_OUTPUT_CAP];
 } BatchRunEvent;
 
 static HWND window,list,add_button,remove_button,run_button,close_button,hover_button;
@@ -57,6 +58,7 @@ static HBRUSH background,panel;
 
 static int loaded,running,cancel_requested,statuses[BATCH_DIRECTORY_LIMIT];
 static DWORD exit_codes[BATCH_DIRECTORY_LIMIT],errors[BATCH_DIRECTORY_LIMIT];
+static wchar_t outputs[BATCH_DIRECTORY_LIMIT][BATCH_OUTPUT_CAP];
 static HANDLE worker,cancel_event;
 static int dpi=96;
 static wchar_t summary_text[256];
@@ -69,16 +71,55 @@ static const wchar_t *status_text(int status){
     case BATCH_SUCCEEDED:return nova_text(L"成功",L"Succeeded");
     case BATCH_FAILED:return nova_text(L"失败",L"Failed");
     case BATCH_SKIPPED:return nova_text(L"已跳过",L"Skipped");
+    case BATCH_CANCELLED:return nova_text(L"已取消",L"Cancelled");
     default:return nova_text(L"等待",L"Waiting");
     }
 }
 static void set_summary(const wchar_t *value){lstrcpynW(summary_text,value,256);if(window)InvalidateRect(window,NULL,FALSE);}
+static void system_error_text(DWORD error,wchar_t *value,DWORD capacity){
+    if(!value||!capacity)return;
+    value[0]=0;
+    if(!error)return;
+    DWORD length=FormatMessageW(FORMAT_MESSAGE_FROM_SYSTEM|FORMAT_MESSAGE_IGNORE_INSERTS,NULL,error,0,value,capacity,NULL);
+    while(length&&(value[length-1]==L'\r'||value[length-1]==L'\n'||value[length-1]==L' '||value[length-1]==L'.'))value[--length]=0;
+}
+static void result_detail(int index,wchar_t *value,DWORD capacity){
+    if(!value||!capacity)return;
+    value[0]=0;
+    if(index<0||index>=task.directory_count)return;
+    if(outputs[index][0])lstrcpynW(value,outputs[index],capacity);
+    else if(errors[index]&&errors[index]!=ERROR_CANCELLED)system_error_text(errors[index],value,capacity);
+}
+static void show_result_summary(int index){
+    if(index<0||index>=task.directory_count)return;
+    wchar_t detail[BATCH_OUTPUT_CAP];result_detail(index,detail,BATCH_OUTPUT_CAP);
+    if(statuses[index]==BATCH_FAILED){
+        wchar_t value[256];
+        if(detail[0])swprintf(value,256,nova_text(L"失败详情：%.230ls",L"Failure details: %.230ls"),detail);
+        else if(errors[index])swprintf(value,256,nova_text(L"执行失败（Windows 错误 %lu）。",L"Execution failed (Windows error %lu)."),errors[index]);
+        else swprintf(value,256,nova_text(L"命令失败（退出码 %lu），未产生输出。",L"Command failed (exit %lu) and produced no output."),exit_codes[index]);
+        set_summary(value);
+    }else if(statuses[index]==BATCH_CANCELLED)set_summary(nova_text(L"当前命令已终止。",L"The active command was terminated."));
+}
+static void show_result_dialog(int index){
+    if(index<0||index>=task.directory_count||(statuses[index]!=BATCH_FAILED&&statuses[index]!=BATCH_CANCELLED))return;
+    wchar_t detail[BATCH_OUTPUT_CAP];result_detail(index,detail,BATCH_OUTPUT_CAP);
+    if(!detail[0])lstrcpynW(detail,nova_text(L"命令未产生输出。",L"The command produced no output."),BATCH_OUTPUT_CAP);
+    wchar_t message[BATCH_OUTPUT_CAP+BATCH_DIRECTORY_CAP+160];
+    if(statuses[index]==BATCH_CANCELLED)swprintf(message,sizeof(message)/sizeof(message[0]),nova_text(L"目录：%ls\n\n当前命令已终止。\n\n最后输出：\n%ls",L"Folder: %ls\n\nThe active command was terminated.\n\nLast output:\n%ls"),task.directories[index],detail);
+    else if(errors[index])swprintf(message,sizeof(message)/sizeof(message[0]),nova_text(L"目录：%ls\nWindows 错误：%lu\n\n%ls",L"Folder: %ls\nWindows error: %lu\n\n%ls"),task.directories[index],errors[index],detail);
+    else swprintf(message,sizeof(message)/sizeof(message[0]),nova_text(L"目录：%ls\n退出码：%lu\n\n%ls",L"Folder: %ls\nExit code: %lu\n\n%ls"),task.directories[index],exit_codes[index],detail);
+    MessageBoxW(window,message,statuses[index]==BATCH_CANCELLED?nova_text(L"任务已取消",L"Task cancelled"):nova_text(L"任务失败",L"Task failed"),MB_OK|(statuses[index]==BATCH_CANCELLED?MB_ICONINFORMATION:MB_ICONWARNING));
+}
 static void refresh_row(int index){
     if(!list||index<0||index>=task.directory_count)return;
-    wchar_t value[96];lstrcpynW(value,status_text(statuses[index]),96);
+    wchar_t value[BATCH_OUTPUT_CAP+96];lstrcpynW(value,status_text(statuses[index]),sizeof(value)/sizeof(value[0]));
     if(statuses[index]==BATCH_FAILED){
-        if(errors[index])swprintf(value,96,nova_text(L"失败（Windows %lu）",L"Failed (Windows %lu)"),errors[index]);
-        else swprintf(value,96,nova_text(L"失败（退出码 %lu）",L"Failed (exit %lu)"),exit_codes[index]);
+        wchar_t detail[BATCH_OUTPUT_CAP];result_detail(index,detail,BATCH_OUTPUT_CAP);
+        if(errors[index]&&detail[0])swprintf(value,sizeof(value)/sizeof(value[0]),nova_text(L"失败（Windows %lu）：%ls",L"Failed (Windows %lu): %ls"),errors[index],detail);
+        else if(errors[index])swprintf(value,sizeof(value)/sizeof(value[0]),nova_text(L"失败（Windows %lu）",L"Failed (Windows %lu)"),errors[index]);
+        else if(detail[0])swprintf(value,sizeof(value)/sizeof(value[0]),nova_text(L"失败（退出码 %lu）：%ls",L"Failed (exit %lu): %ls"),exit_codes[index],detail);
+        else swprintf(value,sizeof(value)/sizeof(value[0]),nova_text(L"失败（退出码 %lu；无输出）",L"Failed (exit %lu; no output)"),exit_codes[index]);
     }
     ListView_SetItemText(list,index,1,value);
 }
@@ -105,7 +146,7 @@ static void localize(void){
     SetWindowTextW(task_list,nova_text(L"已保存的任务",L"Saved tasks"));SetWindowTextW(list,nova_text(L"批量任务目录",L"Batch task folders"));
     if(!running)set_summary(nova_text(L"选择任务后可单独一键执行。",L"Select a task to run it individually."));
     SetWindowTextW(add_button,nova_text(L"添加目录",L"Add folder"));SetWindowTextW(remove_button,nova_text(L"移除",L"Remove"));
-    SetWindowTextW(run_button,cancel_requested?nova_text(L"正在取消…",L"Cancelling…"):running?nova_text(L"取消待执行",L"Cancel pending"):nova_text(L"一键执行",L"Run task"));SetWindowTextW(close_button,nova_text(L"关闭",L"Close"));
+    SetWindowTextW(run_button,cancel_requested?nova_text(L"正在取消…",L"Cancelling…"):running?nova_text(L"取消任务",L"Cancel task"):nova_text(L"一键执行",L"Run task"));SetWindowTextW(close_button,nova_text(L"关闭",L"Close"));
     LVCOLUMNW column={0};column.mask=LVCF_TEXT;column.pszText=(LPWSTR)nova_text(L"目录",L"Folder");ListView_SetColumn(list,0,&column);column.pszText=(LPWSTR)nova_text(L"状态",L"Status");ListView_SetColumn(list,1,&column);
     for(int i=0;i<task.directory_count;i++)refresh_row(i);
     InvalidateRect(window,NULL,TRUE);
@@ -129,7 +170,7 @@ static void layout(void){
     int y=client.bottom-bpx(54),small=bpx(90),run_width=bpx(112);
     MoveWindow(add_button,left,y,small,button_height,TRUE);MoveWindow(remove_button,left+small+gap,y,small,button_height,TRUE);
     MoveWindow(close_button,client.right-margin-small,y,small,button_height,TRUE);MoveWindow(run_button,client.right-margin-small-gap-run_width,y,run_width,button_height,TRUE);
-    ListView_SetColumnWidth(list,1,bpx(152));ListView_SetColumnWidth(list,0,width-bpx(156));
+    int status_width=bpx(260);ListView_SetColumnWidth(list,1,status_width);ListView_SetColumnWidth(list,0,width-status_width-bpx(4));
 }
 static void draw_text(HDC dc,const wchar_t *value,RECT area,HFONT font,COLORREF color,UINT format){
     HFONT old=SelectObject(dc,font);SetBkMode(dc,TRANSPARENT);SetTextColor(dc,color);DrawTextW(dc,value,-1,&area,format|DT_NOPREFIX);SelectObject(dc,old);
@@ -137,7 +178,7 @@ static void draw_text(HDC dc,const wchar_t *value,RECT area,HFONT font,COLORREF 
 static void paint_window(HDC dc){
     RECT client;GetClientRect(window,&client);FillRect(dc,&client,background);
     RECT title={bpx(24),bpx(17),client.right-bpx(24),bpx(49)};draw_text(dc,nova_text(L"批量任务",L"Batch tasks"),title,title_font,TEXT,DT_SINGLELINE|DT_VCENTER);
-    RECT help={bpx(236),bpx(188),client.right-bpx(24),bpx(213)};draw_text(dc,nova_text(L"使用 cmd 命令语法；取消只跳过尚未开始的目录。",L"Use cmd syntax. Cancel skips folders that have not started."),help,body_font,MUTED,DT_SINGLELINE|DT_END_ELLIPSIS);
+    RECT help={bpx(236),bpx(188),client.right-bpx(24),bpx(213)};draw_text(dc,nova_text(L"双击失败项查看输出；取消会终止当前命令并跳过待执行目录。",L"Double-click failures for output. Cancel stops active commands and skips pending folders."),help,body_font,MUTED,DT_SINGLELINE|DT_END_ELLIPSIS);
     RECT summary={bpx(236),client.bottom-bpx(92),client.right-bpx(24),client.bottom-bpx(64)};draw_text(dc,summary_text,summary,body_font,MUTED,DT_SINGLELINE|DT_VCENTER|DT_END_ELLIPSIS);
 }
 static LRESULT CALLBACK button_proc(HWND hwnd,UINT message,WPARAM wp,LPARAM lp,UINT_PTR subclass_id,DWORD_PTR data){
@@ -167,16 +208,16 @@ static HWND make_button(const wchar_t *label,int id){
     SendMessageW(value,WM_SETFONT,(WPARAM)body_font,TRUE);SetWindowSubclass(value,button_proc,1,0);return value;
 }
 static void post_event(HWND owner,BatchRunEvent *event){if(!PostMessageW(owner,WM_NOVA_BATCH_EVENT,0,(LPARAM)event))free(event);}
-static void run_progress(void *parameter,int type,int index,DWORD code,DWORD error){
+static void run_progress(void *parameter,int type,int index,DWORD code,DWORD error,const wchar_t *output){
     BatchRunContext *context=parameter;
     BatchRunEvent *event=calloc(1,sizeof(*event));if(!event)return;
-    event->type=type;event->index=index;event->exit_code=code;event->error=error;post_event(context->owner,event);
+    event->type=type;event->index=index;event->exit_code=code;event->error=error;if(output)lstrcpynW(event->output,output,BATCH_OUTPUT_CAP);post_event(context->owner,event);
 }
 static DWORD WINAPI run_worker(void *parameter){
     BatchRunContext *context=parameter;
     BatchResult result=batch_runner_task(&context->snapshot,context->cancel,run_progress,context,NULL);
     BatchRunEvent *done=context->completion;
-    if(done){done->type=EVENT_FINISHED;done->success=result.success;done->failed=result.failed;done->skipped=result.skipped;done->total=context->snapshot.directory_count;post_event(context->owner,done);}
+    if(done){done->type=EVENT_FINISHED;done->success=result.success;done->failed=result.failed;done->skipped=result.skipped;done->cancelled=result.cancelled;done->total=context->snapshot.directory_count;post_event(context->owner,done);}
     free(context);return 0;
 }
 static BOOL save_current(const BatchTask *value){
@@ -201,7 +242,7 @@ static void show_task(void){
     SetWindowTextW(name_edit,collection.count?task.name:L"");
     SetWindowTextW(command_edit,collection.count?task.command:L"");
     SendMessageW(mode_combo,CB_SETCURSEL,task.mode,0);
-    ZeroMemory(statuses,sizeof(statuses));ZeroMemory(exit_codes,sizeof(exit_codes));ZeroMemory(errors,sizeof(errors));
+    ZeroMemory(statuses,sizeof(statuses));ZeroMemory(exit_codes,sizeof(exit_codes));ZeroMemory(errors,sizeof(errors));ZeroMemory(outputs,sizeof(outputs));
     refresh_list();enable_editor();set_summary(nova_text(L"选择任务后可单独一键执行。",L"Select a task to run it individually."));
 }
 static BOOL save_command(void){
@@ -225,9 +266,9 @@ static BOOL begin_task(const BatchTask *snapshot){
     context->cancel=cancel_event;
     for(int i=0;i<collection.count;i++)if(collection.tasks[i].id==snapshot->id){selected_task=i;break;}
     if(window){refresh_tasks();show_task();}
-    for(int i=0;i<task.directory_count;i++){statuses[i]=BATCH_WAITING;exit_codes[i]=errors[i]=0;}
+    for(int i=0;i<task.directory_count;i++){statuses[i]=BATCH_WAITING;exit_codes[i]=errors[i]=0;outputs[i][0]=0;}
     running=TRUE;cancel_requested=FALSE;set_summary(nova_text(L"任务已开始…",L"Task started…"));refresh_list();
-    SetWindowTextW(run_button,nova_text(L"取消待执行",L"Cancel pending"));EnableWindow(add_button,FALSE);EnableWindow(remove_button,FALSE);
+    SetWindowTextW(run_button,nova_text(L"取消任务",L"Cancel task"));EnableWindow(add_button,FALSE);EnableWindow(remove_button,FALSE);
     worker=CreateThread(NULL,0,run_worker,context,0,NULL);enable_editor();
     if(!worker){running=FALSE;CloseHandle(cancel_event);cancel_event=NULL;free(context->completion);free(context);localize();refresh_list();enable_editor();MessageBoxW(window,nova_text(L"无法创建批量任务工作线程。",L"Unable to create the batch task worker thread."),L"NOVA Desktop",MB_OK|MB_ICONWARNING);return FALSE;}
     return TRUE;
@@ -272,7 +313,7 @@ static void remove_directory(void){
     BatchTask previous=task;
     if(batch_task_remove_directory(&task,selected)){
         if(!save_current(&task)){task=previous;MessageBoxW(window,store_error(),L"NOVA Desktop",MB_OK|MB_ICONWARNING);}
-        else{for(int i=selected;i<task.directory_count;i++){statuses[i]=statuses[i+1];exit_codes[i]=exit_codes[i+1];errors[i]=errors[i+1];}statuses[task.directory_count]=BATCH_WAITING;exit_codes[task.directory_count]=errors[task.directory_count]=0;set_summary(nova_text(L"目录已移除；磁盘内容未更改。",L"Folder removed; files on disk were not changed."));}
+        else{for(int i=selected;i<task.directory_count;i++){statuses[i]=statuses[i+1];exit_codes[i]=exit_codes[i+1];errors[i]=errors[i+1];lstrcpynW(outputs[i],outputs[i+1],BATCH_OUTPUT_CAP);}statuses[task.directory_count]=BATCH_WAITING;exit_codes[task.directory_count]=errors[task.directory_count]=0;outputs[task.directory_count][0]=0;set_summary(nova_text(L"目录已移除；磁盘内容未更改。",L"Folder removed; files on disk were not changed."));}
         refresh_list();
     }
 }
@@ -358,7 +399,8 @@ static LRESULT CALLBACK window_proc(HWND hwnd,UINT message,WPARAM wp,LPARAM lp){
                 draw_text(draw->hdc,draw->dwItemSpec?nova_text(L"状态",L"Status"):nova_text(L"目录",L"Folder"),area,body_font,TEXT,DT_SINGLELINE|DT_VCENTER);return CDRF_SKIPDEFAULT;
             }
         }
-        if(notice->idFrom==ID_BATCH_LIST&&notice->code==LVN_ITEMCHANGED)EnableWindow(remove_button,!running&&ListView_GetNextItem(list,-1,LVNI_SELECTED)>=0);
+        if(notice->idFrom==ID_BATCH_LIST&&notice->code==LVN_ITEMCHANGED){int selected=ListView_GetNextItem(list,-1,LVNI_SELECTED);EnableWindow(remove_button,!running&&selected>=0);show_result_summary(selected);}
+        if(notice->idFrom==ID_BATCH_LIST&&notice->code==NM_DBLCLK){show_result_dialog(ListView_GetNextItem(list,-1,LVNI_SELECTED));return 0;}
         if(notice->idFrom==ID_BATCH_LIST&&notice->code==LVN_GETEMPTYMARKUP){NMLVEMPTYMARKUP *empty=(NMLVEMPTYMARKUP*)lp;empty->dwFlags=EMF_CENTERED;lstrcpynW(empty->szMarkup,nova_text(L"添加目录后即可批量执行命令。",L"Add folders to run your command in each one."),sizeof(empty->szMarkup)/sizeof(empty->szMarkup[0]));return TRUE;}
         return 0;}
     case WM_CLOSE:if(save_command())DestroyWindow(hwnd);return 0;
@@ -407,13 +449,14 @@ BOOL batch_tasks_handle_event(LPARAM parameter){
     if(event->index>=0&&event->index<task.directory_count){
         if(event->type==EVENT_STARTED){statuses[event->index]=BATCH_RUNNING;wchar_t value[320];swprintf(value,320,nova_text(L"正在执行 %d/%d：%ls",L"Running %d/%d: %ls"),event->index+1,task.directory_count,task.directories[event->index]);set_summary(value);}
         else if(event->type==EVENT_SKIPPED)statuses[event->index]=BATCH_SKIPPED;
-        else if(event->type==EVENT_RESULT){statuses[event->index]=event->error||event->exit_code?BATCH_FAILED:BATCH_SUCCEEDED;exit_codes[event->index]=event->exit_code;errors[event->index]=event->error;}
+        else if(event->type==EVENT_CANCELLED){statuses[event->index]=BATCH_CANCELLED;exit_codes[event->index]=event->exit_code;errors[event->index]=event->error;lstrcpynW(outputs[event->index],event->output,BATCH_OUTPUT_CAP);}
+        else if(event->type==EVENT_RESULT){statuses[event->index]=event->error||event->exit_code?BATCH_FAILED:BATCH_SUCCEEDED;exit_codes[event->index]=event->exit_code;errors[event->index]=event->error;lstrcpynW(outputs[event->index],event->output,BATCH_OUTPUT_CAP);}
         refresh_row(event->index);
     }
     if(event->type==EVENT_FINISHED){
         running=FALSE;task_queue.active_id=0;cancel_requested=FALSE;if(worker){CloseHandle(worker);worker=NULL;}if(cancel_event){CloseHandle(cancel_event);cancel_event=NULL;}
         if(window){localize();enable_editor();EnableWindow(command_edit,TRUE);EnableWindow(save_button,TRUE);EnableWindow(add_button,TRUE);EnableWindow(remove_button,ListView_GetNextItem(list,-1,LVNI_SELECTED)>=0);EnableWindow(run_button,task.directory_count>0);
-            wchar_t summary[240];swprintf(summary,240,nova_text(L"完成：成功 %d，失败 %d，跳过 %d",L"Finished: %d succeeded, %d failed, %d skipped"),event->success,event->failed,event->skipped);set_summary(summary);}
+            wchar_t summary[256];swprintf(summary,256,nova_text(L"完成：成功 %d，失败 %d，取消 %d，跳过 %d。双击失败项可查看输出。",L"Finished: %d succeeded, %d failed, %d cancelled, %d skipped. Double-click a failure for output."),event->success,event->failed,event->cancelled,event->skipped);set_summary(summary);}
     }
     BOOL finished=event->type==EVENT_FINISHED;
     free(event);if(finished&&task_queue.count)start_next_task();return TRUE;

@@ -5,7 +5,9 @@
 - 批量任务可添加为普通工作区快捷入口，由双击、Enter 或“全部启动”触发。
 - 多条任务按快照依次排队，并保留各自的目录执行模式；运行中或已排队任务自动去重。
 - 新增稳定任务 ID 与迁移，避免任务改名、重排或删除后快捷入口误启动。
+- 批量命令失败时显示有界的末尾输出；取消可终止当前命令进程树，避免交互提示或长时间命令卡住任务管理。
 - Added workspace task shortcuts, bounded deduplicated task queue and stable task identities with migration.
+- Batch failures now show a bounded output tail, and cancellation terminates active command process trees so prompts or long-running commands cannot wedge task management.
 
 ## v0.6.0 — 多任务批量执行 / Saved batch tasks
 
