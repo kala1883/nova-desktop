@@ -22,6 +22,6 @@ BOOL store_save_workspaces(Workspace *spaces,int count,int active,BOOL pinned);
 BOOL store_load_batch_task(BatchTask *task);
 BOOL store_save_batch_task(const BatchTask *task);
 BOOL store_load_batch_tasks(BatchTaskList *tasks);
-BOOL store_save_batch_tasks(const BatchTaskList *tasks);
+BOOL store_save_batch_tasks(BatchTaskList *tasks);
 BOOL store_backup(void);
 #endif

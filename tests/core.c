@@ -127,10 +127,31 @@ int wmain(int argc,wchar_t **argv) {
         assert(!GetDlgItem(window,ID_STARTUP)&&!GetDlgItem(window,ID_RENAME)&&!GetDlgItem(window,ID_DELETE));
         assert(!GetDlgItem(window,ID_FILES));
         assert(GetDlgItem(window,ID_SETTINGS)&&GetDlgItem(window,ID_NEW)&&GetDlgItem(window,ID_DESKTOP)&&GetDlgItem(window,ID_LAUNCH_ALL));
+        BatchTaskList *shortcut_tasks=calloc(1,sizeof(*shortcut_tasks));assert(shortcut_tasks);shortcut_tasks->count=2;
+        for(int task_index=0;task_index<2;task_index++){
+            BatchTask *value=&shortcut_tasks->tasks[task_index];swprintf(value->name,BATCH_NAME_CAP,L"Task %d",task_index+1);lstrcpyW(value->command,task_index?L"exit /b 0":L"exit /b 17");value->mode=task_index;
+            assert(batch_task_add_directory(value,dir)==1);
+        }
+        assert(store_save_batch_tasks(shortcut_tasks));long long first_task_id=shortcut_tasks->tasks[0].id,second_task_id=shortcut_tasks->tasks[1].id;free(shortcut_tasks);
+        assert(ensure_items(2));Workspace original_workspace=spaces[2];int original_active=active_space;
+        assert(insert_batch_shortcut(first_task_id,0)==-3);assert(insert_batch_shortcut(first_task_id,2)==1);assert(insert_batch_shortcut(first_task_id,2)==0);assert(insert_batch_shortcut(second_task_id,2)==1);
+        int shortcut_count=spaces[2].app_count;spaces[2].app_count=MAX_APPS;assert(insert_batch_shortcut(first_task_id,2)==0);spaces[2].app_count=shortcut_count;
+        assert(batch_task_target_id(spaces[2].apps[0].target)==first_task_id);
+        Workspace reloaded=spaces[2];reloaded.items_loaded=0;assert(store_load_items(&reloaded));assert(!wcscmp(reloaded.apps[0].target,spaces[2].apps[0].target));
+        AppItem invalid_shortcut={0};lstrcpyW(invalid_shortcut.target,L"nova-batch:0");test_launch_count=0;assert(!open_item(&invalid_shortcut)&&!test_launch_count);
+        active_space=2;test_launch_count=0;launch_workspace();assert(test_launch_count==2);
+        test_mode=FALSE;launch_workspace();assert(batch_tasks_busy());launch_workspace();
+        ULONGLONG batch_deadline=GetTickCount64()+10000;
+        while(batch_tasks_busy()&&GetTickCount64()<batch_deadline){MSG event;while(PeekMessageW(&event,NULL,0,0,PM_REMOVE)){TranslateMessage(&event);DispatchMessageW(&event);}Sleep(1);}
+        assert(!batch_tasks_busy());test_mode=TRUE;
+        wchar_t completed_command[BATCH_COMMAND_CAP];GetWindowTextW(GetDlgItem(batch_tasks_window(),2106),completed_command,BATCH_COMMAND_CAP);assert(!wcscmp(completed_command,L"exit /b 0"));
+        SendMessageW(batch_tasks_window(),WM_CLOSE,0,0);
+        spaces[2]=original_workspace;active_space=original_active;assert(save_config());refresh_apps();
+        puts("PASS persistent task shortcuts, protected Files workspace, duplicate guard and Launch all queues two harmless tasks once");
         SendMessageW(window,WM_COMMAND,ID_BATCH_TASKS,0);assert(batch_tasks_window()&&GetWindow(batch_tasks_window(),GW_OWNER)==window);
-        HWND batch_window=batch_tasks_window();SetWindowTextW(GetDlgItem(batch_window,2111),L"更新代码");SetWindowTextW(GetDlgItem(batch_window,2106),L"git pull origin main");SendMessageW(batch_window,WM_COMMAND,2107,0);
+        HWND batch_window=batch_tasks_window();SendMessageW(GetDlgItem(batch_window,2110),LB_SETCURSEL,0,0);SendMessageW(batch_window,WM_COMMAND,MAKEWPARAM(2110,LBN_SELCHANGE),0);SetWindowTextW(GetDlgItem(batch_window,2111),L"更新代码");SetWindowTextW(GetDlgItem(batch_window,2106),L"git pull origin main");SendMessageW(batch_window,WM_COMMAND,2107,0);
         SendMessageW(batch_window,WM_COMMAND,2108,0);SetWindowTextW(GetDlgItem(batch_window,2111),L"构建项目");SetWindowTextW(GetDlgItem(batch_window,2106),L"npm run build");SendMessageW(GetDlgItem(batch_window,2112),CB_SETCURSEL,BATCH_PARALLEL,0);SendMessageW(batch_window,WM_COMMAND,2107,0);
-        BatchTaskList *saved_tasks=calloc(1,sizeof(*saved_tasks));assert(saved_tasks&&store_load_batch_tasks(saved_tasks));assert(saved_tasks->count==2&&saved_tasks->tasks[1].mode==BATCH_PARALLEL&&!wcscmp(saved_tasks->tasks[1].command,L"npm run build"));free(saved_tasks);
+        BatchTaskList *saved_tasks=calloc(1,sizeof(*saved_tasks));assert(saved_tasks&&store_load_batch_tasks(saved_tasks));assert(saved_tasks->count==3&&saved_tasks->tasks[2].mode==BATCH_PARALLEL&&!wcscmp(saved_tasks->tasks[2].command,L"npm run build"));assert(saved_tasks->tasks[0].id==first_task_id);free(saved_tasks);
         SendMessageW(GetDlgItem(batch_window,2110),LB_SETCURSEL,0,0);SendMessageW(batch_window,WM_COMMAND,MAKEWPARAM(2110,LBN_SELCHANGE),0);
         wchar_t selected_command[BATCH_COMMAND_CAP];GetWindowTextW(GetDlgItem(batch_window,2106),selected_command,BATCH_COMMAND_CAP);assert(!wcscmp(selected_command,L"git pull origin main"));assert(SendMessageW(GetDlgItem(batch_window,2112),CB_GETCURSEL,0,0)==BATCH_SEQUENTIAL);
         if(GetEnvironmentVariableW(L"NOVA_TEST_CAPTURE",NULL,0)){

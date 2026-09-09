@@ -21,3 +21,5 @@ Pinning changes only the HWND_TOPMOST band, preserving window geometry and resiz
 Caption controls share a single 30 logical px title bar: desktop fence, pin, settings, minimize, maximize/restore, close, aligned flush right in 46 px cells. Use 1 logical px strokes, neutral dark hover, red close hover; leave the workspace header free of window controls. Caption blank space supports native drag and double-click maximize through hit testing.
 
 Validation: inspect the rendered Windows surface and keyboard/control names; core import/persistence/startup tests use isolated state, and window integration verifies topmost on/off without changing geometry.
+
+Batch tasks expose an Add to workspace action in the header. A native popup lists only ordinary workspaces. Task launch items use the NOVA icon, their current saved name, and a tooltip with command, mode and folder count. Double-click, Enter and Launch all share the internal task dispatcher. Launch all distinguishes accepted asynchronous tasks from completed app launches; duplicate active/pending task requests are ignored. Removing a task shortcut leaves the saved task intact.

@@ -448,12 +448,18 @@ static void refresh_apps(void) {
     HIMAGELIST next=ImageList_Create(px(40),px(40),ILC_COLOR32|ILC_MASK,MAX_APPS,1);
     Workspace *ws=&spaces[active_space];int row=0;
     for(int i=0;i<ws->app_count;i++){
-        AppItem *a=&ws->apps[i];if(!contains(a->name,query)&&!contains(a->target,query))continue;
+        AppItem *a=&ws->apps[i];BOOL batch=wcsncmp(a->target,BATCH_TARGET_PREFIX,11)==0;
+        BatchTask batch_value;wchar_t batch_name[128];const wchar_t *display=a->name;
+        if(batch){
+            if(batch_tasks_lookup(batch_task_target_id(a->target),&batch_value))display=batch_value.name;
+            else{swprintf(batch_name,128,nova_text(L"%ls（任务已删除）",L"%ls (task unavailable)"),a->name);display=batch_name;}
+        }
+        if(!contains(display,query)&&!contains(a->target,query))continue;
         wchar_t resolved[MAX_PATH];const wchar_t *target=a->target;
-        if(!wcschr(target,L'\\')&&SearchPathW(NULL,target,NULL,MAX_PATH,resolved,NULL))target=resolved;
-        HICON owned=shell_icon_without_overlay(target);
+        if(!batch&&!wcschr(target,L'\\')&&SearchPathW(NULL,target,NULL,MAX_PATH,resolved,NULL))target=resolved;
+        HICON owned=batch?(HICON)LoadImageW(GetModuleHandleW(NULL),MAKEINTRESOURCEW(IDI_NOVA),IMAGE_ICON,px(40),px(40),0):shell_icon_without_overlay(target);
         HICON icon=owned?owned:LoadIconW(NULL,IDI_APPLICATION);int image_index=ImageList_AddIcon(next,icon);if(owned)DestroyIcon(owned);
-        LVITEMW item={0};item.mask=LVIF_TEXT|LVIF_IMAGE|LVIF_PARAM;item.iItem=row++;item.pszText=a->name;item.iImage=image_index;item.lParam=i;
+        LVITEMW item={0};item.mask=LVIF_TEXT|LVIF_IMAGE|LVIF_PARAM;item.iItem=row++;item.pszText=(LPWSTR)display;item.iImage=image_index;item.lParam=i;
         SendMessageW(app_list,LVM_INSERTITEMW,0,(LPARAM)&item);
     }
     ListView_SetImageList(app_list,next,LVSIL_NORMAL);if(images)ImageList_Destroy(images);images=next;
@@ -511,24 +517,37 @@ static void moved_item(int source,int destination,int at,void *context){
 }
 static int open_item(const AppItem *item){
     if(!item||!*item->target)return 0;
+    if(wcsncmp(item->target,BATCH_TARGET_PREFIX,11)==0){
+        long long id=batch_task_target_id(item->target);BatchTask value;
+        if(!batch_tasks_lookup(id,&value)||!value.directory_count)return 0;
+        if(test_mode){test_launch_count++;return 1;}
+        return batch_tasks_launch(main_window,id);
+    }
     if(test_mode){test_launch_count++;return 1;}
     if(!lstrcmpiW(item->target,L"explorer.exe")){open_file_manager();return files_page&&IsWindow(files_view);}
     return (INT_PTR)ShellExecuteW(main_window,L"open",item->target,NULL,NULL,SW_SHOWNORMAL)>32;
 }
 static void launch_workspace(void){
+    if(active_space==0)return;
     if(!ensure_items(active_space))return;
     if(bulk_launch_running){set_notice(nova_text(L"当前工作区已在执行全部启动。",L"Launch all is already running for this workspace."));return;}
     Workspace snapshot=spaces[active_space];
     if(snapshot.app_count<1){set_notice(nova_text(L"当前工作区没有可启动的项目。",L"This workspace has no items to launch."));return;}
     bulk_launch_running=TRUE;
     EnableWindow(launch_button,FALSE);
-    int failed=0;for(int i=0;i<snapshot.app_count;i++)if(!open_item(&snapshot.apps[i]))failed++;
+    int failed=0,batch_count=0;for(int i=0;i<snapshot.app_count;i++){
+        if(!open_item(&snapshot.apps[i]))failed++;
+        else if(wcsncmp(snapshot.apps[i].target,BATCH_TARGET_PREFIX,11)==0)batch_count++;
+    }
     bulk_launch_running=FALSE;EnableWindow(launch_button,spaces[active_space].app_count>0);
-    wchar_t message[180];swprintf(message,180,nova_text(L"全部启动完成：已对 %d 个项目各执行一次打开，失败 %d 个。",L"Launch all finished: opened %d items once each; %d failed."),snapshot.app_count,failed);set_notice(message);
+    wchar_t message[256];
+    if(batch_count)swprintf(message,256,nova_text(L"已提交 %d 个启动项，其中 %d 个批量任务已接受（运行中或排队）；失败 %d 个。",L"Submitted %d items; %d batch tasks accepted (running or queued); %d failed."),snapshot.app_count,batch_count,failed);
+    else swprintf(message,256,nova_text(L"全部启动完成：已对 %d 个项目各执行一次打开，失败 %d 个。",L"Launch all finished: opened %d items once each; %d failed."),snapshot.app_count,failed);
+    set_notice(message);
 }
 static void open_app(void) {
     int i=selected_app();if(i<0)return;
-    if(!open_item(&spaces[active_space].apps[i]))error_message(nova_text(L"启动失败。请检查文件是否被移动、删除，或是否存在对应的默认打开程序。",L"Launch failed. Check whether the file was moved or deleted and whether a default app is available."));
+    if(!open_item(&spaces[active_space].apps[i]))error_message(wcsncmp(spaces[active_space].apps[i].target,BATCH_TARGET_PREFIX,11)==0?nova_text(L"批量任务无法启动：任务可能已删除、没有执行目录，或队列已满。请在设置中检查任务。",L"Unable to start batch task: it may be deleted, have no folders, or the queue may be full. Check Batch tasks in Settings."):nova_text(L"启动失败。请检查文件是否被移动、删除，或是否存在对应的默认打开程序。",L"Launch failed. Check whether the file was moved or deleted and whether a default app is available."));
 }
 static void remove_app(void) {
     int i=selected_app();if(i<0)return;
@@ -579,6 +598,29 @@ static void add_tray(void){
     lstrcpyW(tray.szTip,APP_NAME);Shell_NotifyIconW(NIM_ADD,&tray);
 }
 static void restore_window(void){ShowWindow(main_window,SW_RESTORE);SetForegroundWindow(main_window);if(files_page)file_manager_update_visibility();}
+/* Store an internal task reference, never a copy of its command or a disk shortcut. */
+static int insert_batch_shortcut(long long task_id,int destination){
+    if(destination<=0||destination>=space_count)return -3;
+    BatchTask value;if(!batch_tasks_lookup(task_id,&value)||!ensure_items(destination)||storage_failed)return -1;
+    Workspace *ws=&spaces[destination];wchar_t target[NOVA_PATH_CAP];if(!batch_task_target(task_id,target,NOVA_PATH_CAP))return -1;
+    for(int i=0;i<ws->app_count;i++)if(!lstrcmpW(ws->apps[i].target,target))return 0;
+    if(ws->app_count==MAX_APPS)return -2;
+    Workspace previous=*ws;AppItem *item=&ws->apps[ws->app_count++];ZeroMemory(item,sizeof(*item));lstrcpynW(item->name,value.name,64);lstrcpyW(item->target,target);
+    if(!store_save_workspaces(spaces,space_count,active_space,prefer_pin)){*ws=previous;return -1;}
+    if(destination==active_space)refresh_apps();
+    return 1;
+}
+static void choose_batch_workspace(const BatchTask *value){
+    if(!value)return;
+    HMENU menu=CreatePopupMenu();if(!menu)return;
+    for(int i=1;i<space_count;i++)AppendMenuW(menu,MF_STRING,(UINT_PTR)(i+1),spaces[i].name);
+    if(space_count<=1)AppendMenuW(menu,MF_STRING|MF_GRAYED,0,nova_text(L"请先新建普通工作区",L"Create a launcher workspace first"));
+    POINT p;GetCursorPos(&p);HWND owner=batch_tasks_window();if(!owner)owner=main_window;
+    UINT choice=TrackPopupMenu(menu,TPM_RETURNCMD|TPM_RIGHTBUTTON,p.x,p.y,0,owner,NULL);DestroyMenu(menu);if(!choice)return;
+    int result=insert_batch_shortcut(value->id,(int)choice-1);
+    const wchar_t *message=result==1?nova_text(L"批量任务已添加到工作区，可双击或使用全部启动。",L"Batch task added. Double-click it or use Launch all."):result==0?nova_text(L"该工作区已经有此任务的快捷入口。",L"This workspace already has a shortcut to this task."):result==-2?nova_text(L"工作区已满，最多 20 个启动项。",L"The workspace is full (20 launch items maximum)."):nova_text(L"无法保存任务快捷入口，请检查工作区和本地数据库。",L"Unable to save the task shortcut. Check the workspace and local database.");
+    set_notice(message);MessageBoxW(owner,message,L"NOVA Desktop",MB_OK|(result>=0?MB_ICONINFORMATION:MB_ICONWARNING));
+}
 static void settings_menu(void){
     startup_enabled=read_startup();HMENU menu=CreatePopupMenu();
     HMENU language=CreatePopupMenu();
@@ -670,7 +712,19 @@ static LRESULT CALLBACK window_proc(HWND hwnd,UINT msg,WPARAM wp,LPARAM lp){
     }
     case WM_NOTIFY:{NMHDR *n=(NMHDR*)lp;
         if(n->idFrom==ID_APPS&&n->code==NM_DBLCLK&&!hold_drag.dragging)open_app();
-        if(n->idFrom==ID_APPS&&n->code==LVN_GETINFOTIPW){NMLVGETINFOTIPW *tip=(NMLVGETINFOTIPW*)lp;LVITEMW i={0};i.mask=LVIF_PARAM;i.iItem=tip->iItem;SendMessageW(app_list,LVM_GETITEMW,0,(LPARAM)&i);lstrcpynW(tip->pszText,spaces[active_space].apps[i.lParam].target,tip->cchTextMax);}
+        if(n->idFrom==ID_APPS&&n->code==LVN_GETINFOTIPW){
+            NMLVGETINFOTIPW *tip=(NMLVGETINFOTIPW*)lp;LVITEMW i={0};i.mask=LVIF_PARAM;i.iItem=tip->iItem;
+            if(!SendMessageW(app_list,LVM_GETITEMW,0,(LPARAM)&i)||i.lParam<0||i.lParam>=spaces[active_space].app_count)return 0;
+            const wchar_t *target=spaces[active_space].apps[i.lParam].target;
+            if(wcsncmp(target,BATCH_TARGET_PREFIX,11)==0){
+                BatchTask value;
+                if(batch_tasks_lookup(batch_task_target_id(target),&value)){
+                    wchar_t details[BATCH_COMMAND_CAP+BATCH_NAME_CAP+128];
+                    swprintf(details,sizeof(details)/sizeof(details[0]),nova_text(L"批量任务：%ls\n%ls · %d 个目录\n%ls",L"Batch task: %ls\n%ls · %d folders\n%ls"),value.name,value.mode==BATCH_PARALLEL?nova_text(L"同时执行",L"Parallel"):nova_text(L"顺序执行",L"Sequential"),value.directory_count,value.command);
+                    lstrcpynW(tip->pszText,details,tip->cchTextMax);
+                }else lstrcpynW(tip->pszText,nova_text(L"任务已删除或不可用。可移除此快捷入口。",L"Task deleted or unavailable. You can remove this shortcut."),tip->cchTextMax);
+            }else lstrcpynW(tip->pszText,target,tip->cchTextMax);
+        }
         if(n->idFrom==ID_APPS&&n->code==LVN_GETEMPTYMARKUP){NMLVEMPTYMARKUP *m=(NMLVEMPTYMARKUP*)lp;m->dwFlags=EMF_CENTERED;lstrcpyW(m->szMarkup,spaces[active_space].app_count?nova_text(L"没有匹配的启动项。清空搜索以查看全部。",L"No matching launch items. Clear the search to show all items."):nova_text(L"把应用或文件拖到这里\n也可以点击上方「添加文件」。",L"Drop an app or file here\nor click Add file above."));return TRUE;}
         return 0;
     }
@@ -682,6 +736,8 @@ static LRESULT CALLBACK window_proc(HWND hwnd,UINT msg,WPARAM wp,LPARAM lp){
         if(wp==START_PIN_TIMER){KillTimer(hwnd,START_PIN_TIMER);set_pinned(TRUE);return 0;}if(IsWindowVisible(hwnd)&&!IsIconic(hwnd)){sample_stats();RECT r;GetClientRect(hwnd,&r);r.top=r.bottom-px(60);InvalidateRect(hwnd,&r,FALSE);}return 0;
     case WM_RESTORE_NOVA:case WM_HOTKEY:restore_window();return 0;
     case WM_NOVA_BATCH_EVENT:batch_tasks_handle_event(lp);return 0;
+    case WM_NOVA_BATCH_SHORTCUT:choose_batch_workspace((const BatchTask*)lp);return 0;
+    case WM_NOVA_BATCH_CHANGED:if(app_list)refresh_apps();return 0;
     case WM_TRAY:if(lp==WM_LBUTTONUP)restore_window();if(lp==WM_RBUTTONUP)tray_menu();return 0;
     case WM_CLOSE:file_manager_close();DestroyWindow(hwnd);return 0;
     case WM_DESTROY:batch_tasks_shutdown();file_manager_close();save_config();KillTimer(hwnd,STATS_TIMER);KillTimer(hwnd,START_PIN_TIMER);KillTimer(hwnd,START_DESKTOP_TIMER);UnregisterHotKey(hwnd,ID_HOTKEY);if(!test_mode)Shell_NotifyIconW(NIM_DELETE,&tray);PostQuitMessage(0);return 0;

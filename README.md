@@ -113,7 +113,17 @@ Each task keeps its own execution mode:
 NOVA runs one saved task at a time, with up to 24 commands active in parallel.
 Cancel skips folders that have not started; it lets active commands finish.
 A nonzero exit code is reported per folder and does not stop other folders.
-Deleting a task removes only its saved configuration.
+Use **Add to workspace…** in the task manager to place a shortcut in a normal
+launcher workspace. Double-click the shortcut, press Enter, or use the
+workspace's **Launch all** button. If several task shortcuts are launched,
+their configurations are snapshotted and queued in order; each task retains
+its own sequential/parallel folder mode. Repeated launches of an active or
+queued task are ignored. Cancel pending also clears queued tasks.
+
+Task shortcuts follow the saved task by a stable ID, including after rename
+or reorder. Removing a shortcut does not delete the task. Deleting a task
+makes its remaining shortcuts unavailable; they never launch another task.
+The fixed Files workspace cannot contain task shortcuts.
 
 Commands use Windows cmd syntax, up to 2047 characters; for example
 `git pull origin main`, `npm run build`, or `git status && git log -1`.

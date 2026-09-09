@@ -1,5 +1,12 @@
 # Changelog / 更新记录
 
+## Unreleased / 未发布
+
+- 批量任务可添加为普通工作区快捷入口，由双击、Enter 或“全部启动”触发。
+- 多条任务按快照依次排队，并保留各自的目录执行模式；运行中或已排队任务自动去重。
+- 新增稳定任务 ID 与迁移，避免任务改名、重排或删除后快捷入口误启动。
+- Added workspace task shortcuts, bounded deduplicated task queue and stable task identities with migration.
+
 ## v0.6.0 — 多任务批量执行 / Saved batch tasks
 
 ### 简体中文
