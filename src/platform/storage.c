@@ -127,6 +127,117 @@ BOOL store_save_workspaces(Workspace *spaces,int count,int active,BOOL pinned){
     ok=store_set_int(L"app",L"Nova",L"Active",active)&&ok;ok=store_set_int(L"app",L"Nova",L"AlwaysOnTop",pinned)&&ok;
     return store_end(ok);
 }
+BOOL store_load_batch_task(BatchTask *task){
+    if(!task)return FALSE;ZeroMemory(task,sizeof(*task));
+    wchar_t command[BATCH_COMMAND_CAP+1];
+    if(!store_get(L"batch_git_pull_main",L"Task",L"Command",L"git pull origin main",command,BATCH_COMMAND_CAP+1))return FALSE;
+    if(wcslen(command)>=BATCH_COMMAND_CAP){lstrcpyW(error_text,nova_text(L"保存的命令超过长度限制，未修改原数据。",L"The saved command exceeds the length limit. Data was not changed."));return FALSE;}
+    lstrcpyW(task->command,command);
+    int count=store_int(L"batch_git_pull_main",L"Task",L"DirectoryCount",0);
+    if(count<0||count>BATCH_DIRECTORY_LIMIT){lstrcpyW(error_text,nova_text(L"批量任务目录数量超过本版本容量，原数据未修改。",L"The batch task contains more folders than this version supports. The original data was not changed."));return FALSE;}
+    for(int i=0;i<count;i++){
+        wchar_t key[32],directory[BATCH_DIRECTORY_CAP];swprintf(key,32,L"Directory%d",i);
+        if(!store_get(L"batch_git_pull_main",L"Task",key,L"",directory,BATCH_DIRECTORY_CAP)||batch_task_add_directory(task,directory)!=1){
+            lstrcpyW(error_text,nova_text(L"批量任务数据无效或包含重复目录，原数据未修改。",L"The batch task data is invalid or contains duplicate folders. The original data was not changed."));ZeroMemory(task,sizeof(*task));return FALSE;
+        }
+    }
+    return TRUE;
+}
+BOOL store_save_batch_task(const BatchTask *task){
+    if(!batch_task_is_valid(task)){lstrcpyW(error_text,nova_text(L"批量任务数据无效，未保存。",L"The batch task data is invalid and was not saved."));return FALSE;}
+    if(!store_begin())return FALSE;
+    BOOL ok=store_clear(L"batch_git_pull_main");
+    ok=store_set(L"batch_git_pull_main",L"Task",L"Command",task->command)&&ok;
+    ok=store_set_int(L"batch_git_pull_main",L"Task",L"DirectoryCount",task->directory_count)&&ok;
+    for(int i=0;i<task->directory_count&&ok;i++){
+        wchar_t key[32];swprintf(key,32,L"Directory%d",i);ok=store_set(L"batch_git_pull_main",L"Task",key,task->directories[i]);
+    }
+    return store_end(ok);
+}
+/* Versioned collection in a separate scope; the legacy single task is kept intact. */
+static BOOL batch_read_text(const wchar_t *section,const wchar_t *key,wchar_t *value,int capacity){
+    sqlite3_stmt *s=prepare("SELECT value FROM settings WHERE scope='batch_tasks' AND section=? AND key=?");
+    if(!s)return FALSE;
+    bind_text(s,1,section);bind_text(s,2,key);
+    int rc=sqlite3_step(s);BOOL ok=FALSE;
+    if(rc==SQLITE_ROW){
+        const wchar_t *text=sqlite3_column_text16(s,0);
+        int bytes=sqlite3_column_bytes16(s,0);
+        if(text&&bytes>=0&&bytes<capacity*(int)sizeof(wchar_t)&&wcslen(text)==(size_t)bytes/sizeof(wchar_t)){
+            lstrcpyW(value,text);ok=TRUE;
+        }
+    }
+    if(rc!=SQLITE_ROW&&rc!=SQLITE_DONE)check(rc);
+    sqlite3_finalize(s);
+    if(!ok)lstrcpyW(error_text,nova_text(L"批量任务配置缺失、损坏或超过容量，未修改原数据。",L"Batch task settings are missing, damaged, or exceed capacity. Data was not changed."));
+    return ok;
+}
+static BOOL batch_read_number(const wchar_t *section,const wchar_t *key,int maximum,int *value){
+    wchar_t text[32],*end;
+    if(!batch_read_text(section,key,text,32)||!text[0])return FALSE;
+    long parsed=wcstol(text,&end,10);
+    if(*end||parsed<0||parsed>maximum){
+        lstrcpyW(error_text,nova_text(L"批量任务数量、版本或执行模式无效，未修改原数据。",L"Invalid batch task count, version, or execution mode. Data was not changed."));return FALSE;
+    }
+    *value=(int)parsed;return TRUE;
+}
+BOOL store_save_batch_tasks(const BatchTaskList *tasks){
+    if(!tasks||tasks->count<0||tasks->count>BATCH_TASK_LIMIT)return FALSE;
+    for(int i=0;i<tasks->count;i++){
+        const BatchTask *t=&tasks->tasks[i];
+        if(!batch_task_is_valid(t)||!t->name[wcsspn(t->name,L" \t\r\n")]||!t->command[wcsspn(t->command,L" \t\r\n")]){
+            lstrcpyW(error_text,nova_text(L"请填写任务名称和命令，并选择有效执行模式。",L"Enter a task name and command, and select a valid execution mode."));return FALSE;
+        }
+    }
+    if(!store_begin())return FALSE;
+    BOOL ok=store_clear(L"batch_tasks");
+    ok=store_set_int(L"batch_tasks",L"Collection",L"Version",1)&&ok;
+    ok=store_set_int(L"batch_tasks",L"Collection",L"Count",tasks->count)&&ok;
+    for(int i=0;i<tasks->count&&ok;i++){
+        const BatchTask *t=&tasks->tasks[i];wchar_t section[32];swprintf(section,32,L"Task%d",i);
+        ok=store_set(L"batch_tasks",section,L"Name",t->name)&&ok;
+        ok=store_set(L"batch_tasks",section,L"Command",t->command)&&ok;
+        ok=store_set_int(L"batch_tasks",section,L"Mode",t->mode)&&ok;
+        ok=store_set_int(L"batch_tasks",section,L"DirectoryCount",t->directory_count)&&ok;
+        for(int j=0;j<t->directory_count&&ok;j++){
+            wchar_t key[32];swprintf(key,32,L"Directory%d",j);ok=store_set(L"batch_tasks",section,key,t->directories[j]);
+        }
+    }
+    return store_end(ok);
+}
+BOOL store_load_batch_tasks(BatchTaskList *tasks){
+    if(!tasks)return FALSE;
+    BatchTaskList *next=calloc(1,sizeof(*next));if(!next)return FALSE;
+    sqlite3_stmt *s=prepare("SELECT count(*) FROM settings WHERE scope='batch_tasks'");
+    if(!s){free(next);return FALSE;}
+    int rc=sqlite3_step(s);BOOL fresh=rc==SQLITE_ROW&&sqlite3_column_int(s,0)==0;
+    BOOL ok=check(rc);sqlite3_finalize(s);
+    if(ok&&fresh){
+        next->count=1;ok=store_load_batch_task(&next->tasks[0]);
+        lstrcpyW(next->tasks[0].name,nova_text(L"任务 1",L"Task 1"));
+        if(ok&&!next->tasks[0].command[0])lstrcpyW(next->tasks[0].command,L"git pull origin main");
+        if(ok)ok=store_save_batch_tasks(next);
+    }else if(ok){
+        int version=0;
+        ok=batch_read_number(L"Collection",L"Version",1,&version)&&version==1;
+        if(ok)ok=batch_read_number(L"Collection",L"Count",BATCH_TASK_LIMIT,&next->count);
+        for(int i=0;i<next->count&&ok;i++){
+            BatchTask *t=&next->tasks[i];wchar_t section[32];swprintf(section,32,L"Task%d",i);
+            ok=batch_read_text(section,L"Name",t->name,BATCH_NAME_CAP)&&
+                batch_read_text(section,L"Command",t->command,BATCH_COMMAND_CAP)&&
+                batch_read_number(section,L"Mode",BATCH_PARALLEL,&t->mode)&&
+                batch_read_number(section,L"DirectoryCount",BATCH_DIRECTORY_LIMIT,&t->directory_count);
+            for(int j=0;j<t->directory_count&&ok;j++){
+                wchar_t key[32];swprintf(key,32,L"Directory%d",j);
+                ok=batch_read_text(section,key,t->directories[j],BATCH_DIRECTORY_CAP);
+            }
+            if(ok)ok=batch_task_is_valid(t)&&t->name[0]&&t->command[0];
+        }
+    }
+    if(ok)*tasks=*next;
+    else lstrcpyW(error_text,nova_text(L"批量任务配置无效或来自更新版本，原数据未修改。",L"Batch task settings are invalid or from a newer version. Data was not changed."));
+    free(next);return ok;
+}
 BOOL store_backup(void){
     if(!db)return FALSE;
     wchar_t path[MAX_PATH],temp[MAX_PATH];swprintf(path,MAX_PATH,L"%ls\\nova.backup.sqlite",root);swprintf(temp,MAX_PATH,L"%ls\\nova.backup.tmp",root);

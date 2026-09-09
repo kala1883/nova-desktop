@@ -1,6 +1,7 @@
 #ifndef NOVA_STORAGE_H
 #define NOVA_STORAGE_H
 #include <windows.h>
+#include "../core/batch_task.h"
 #include "../core/workspace.h"
 /* Single UI-thread connection; SQLite is embedded, never a service. */
 BOOL store_open(const wchar_t *directory);
@@ -18,5 +19,9 @@ long long store_new_id(void);
 int store_load_workspaces(Workspace *spaces); /* -1 error, 0 new database */
 BOOL store_load_items(Workspace *workspace);
 BOOL store_save_workspaces(Workspace *spaces,int count,int active,BOOL pinned);
+BOOL store_load_batch_task(BatchTask *task);
+BOOL store_save_batch_task(const BatchTask *task);
+BOOL store_load_batch_tasks(BatchTaskList *tasks);
+BOOL store_save_batch_tasks(const BatchTaskList *tasks);
 BOOL store_backup(void);
 #endif

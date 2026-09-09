@@ -445,7 +445,7 @@ static BOOL splitter_geometry(int layout,int index,int width,int height,Splitter
 static int hit_splitter(POINT point,int *split){
     RECT r;GetClientRect(fm.window,&r);int top=scale(46),height=r.bottom-top-scale(27),tolerance=scale(6);point.y-=top;
     if(point.y<0||point.y>height)return 0;
-    for(int i=0;i<split_count(fm.layout);i++){Splitter s;splitter_geometry(fm.layout,i,r.right,height,&s);
+    for(int i=0;i<split_count(fm.layout);i++){Splitter s={0};if(!splitter_geometry(fm.layout,i,r.right,height,&s))continue;
         int across=s.vertical?point.y:point.x,delta=(s.vertical?point.x:point.y)-s.coordinate;
         if(across>=s.range_start&&across<=s.range_end&&delta>=-tolerance&&delta<=tolerance){*split=i;return s.vertical?1:2;}
     }return 0;
@@ -459,7 +459,9 @@ static void update_splitter(POINT point){
         if(fm.drag_split>0)low=split_pixel(fm.drag_layout,fm.drag_split-1,total)+minimum;
         if(fm.drag_split+1<count)high=split_pixel(fm.drag_layout,fm.drag_split+1,total)-minimum;
     }
-    if(low>high)return;if(coordinate<low)coordinate=low;if(coordinate>high)coordinate=high;
+    if(low>high)return;
+    if(coordinate<low)coordinate=low;
+    if(coordinate>high)coordinate=high;
     fm.splits[fm.drag_layout][fm.drag_split]=MulDiv(coordinate,SPLIT_SCALE,total);arrange();
 }
 static void cancel_splitter(BOOL restore){

@@ -1,7 +1,51 @@
 #define wWinMain nova_entry
 #include "../src/main.c"
 #undef wWinMain
+#include "../src/platform/batch_runner.h"
 #include <assert.h>
+#include <stdlib.h>
+
+static HANDLE batch_gate,batch_cancel;
+static volatile LONG batch_calls;
+static int batch_parallel,batch_cancel_after_first;
+static BOOL batch_fake_execute(const wchar_t *command,const wchar_t *directory,DWORD *code,DWORD *error){
+    assert(!wcscmp(command,L"fake command"));
+    LONG call=InterlockedIncrement(&batch_calls);
+    if(batch_parallel){if(call==3)SetEvent(batch_gate);assert(WaitForSingleObject(batch_gate,5000)==WAIT_OBJECT_0);}
+    else assert(directory[0]==L'A'+call-1);
+    if(batch_cancel_after_first)SetEvent(batch_cancel);
+    *code=directory[0]==L'B'?7:0;*error=0;return TRUE;
+}
+static void test_batch_modes(void){
+    BatchTask value={0};lstrcpyW(value.command,L"fake command");
+    assert(batch_task_add_directory(&value,L"A")==1);assert(batch_task_add_directory(&value,L"B")==1);assert(batch_task_add_directory(&value,L"C")==1);
+    batch_gate=CreateEventW(NULL,TRUE,FALSE,NULL);batch_cancel=CreateEventW(NULL,TRUE,FALSE,NULL);assert(batch_gate&&batch_cancel);
+    BatchResult result=batch_runner_task(&value,batch_cancel,NULL,NULL,batch_fake_execute);
+    assert(batch_calls==3&&result.success==2&&result.failed==1&&!result.skipped);
+    batch_calls=0;batch_parallel=1;value.mode=BATCH_PARALLEL;
+    result=batch_runner_task(&value,batch_cancel,NULL,NULL,batch_fake_execute);
+    assert(batch_calls==3&&result.success==2&&result.failed==1&&!result.skipped);
+    batch_calls=0;batch_parallel=0;batch_cancel_after_first=1;value.mode=BATCH_SEQUENTIAL;
+    result=batch_runner_task(&value,batch_cancel,NULL,NULL,batch_fake_execute);
+    assert(batch_calls==1&&result.success==1&&result.skipped==2&&!result.failed);
+    batch_calls=0;value.mode=BATCH_PARALLEL;
+    result=batch_runner_task(&value,batch_cancel,NULL,NULL,batch_fake_execute);
+    assert(batch_calls==0&&result.skipped==3);
+    CloseHandle(batch_gate);CloseHandle(batch_cancel);
+    puts("PASS sequential order, concurrent start barrier, failure accounting and pending cancellation (fake commands)");
+}
+
+static void capture_batch(HWND target,const wchar_t *path){
+    RECT r;GetWindowRect(target,&r);int width=r.right-r.left,height=r.bottom-r.top;
+    HDC dc=GetDC(target),memory=CreateCompatibleDC(dc);BITMAPINFO info={0};
+    info.bmiHeader.biSize=sizeof(BITMAPINFOHEADER);info.bmiHeader.biWidth=width;info.bmiHeader.biHeight=-height;info.bmiHeader.biPlanes=1;info.bmiHeader.biBitCount=32;
+    void *bits=NULL;HBITMAP bitmap=CreateDIBSection(dc,&info,DIB_RGB_COLORS,&bits,NULL,0);assert(bitmap&&bits);
+    HGDIOBJ previous=SelectObject(memory,bitmap);RedrawWindow(target,NULL,NULL,RDW_INVALIDATE|RDW_ERASE|RDW_ALLCHILDREN|RDW_UPDATENOW);assert(PrintWindow(target,memory,0));
+    BITMAPFILEHEADER header={0};header.bfType=0x4d42;header.bfOffBits=sizeof(header)+sizeof(info.bmiHeader);header.bfSize=header.bfOffBits+(DWORD)(width*height*4);
+    HANDLE file=CreateFileW(path,GENERIC_WRITE,0,NULL,CREATE_ALWAYS,0,NULL);assert(file!=INVALID_HANDLE_VALUE);DWORD written;
+    assert(WriteFile(file,&header,sizeof(header),&written,NULL));assert(WriteFile(file,&info.bmiHeader,sizeof(info.bmiHeader),&written,NULL));assert(WriteFile(file,bits,(DWORD)(width*height*4),&written,NULL));CloseHandle(file);
+    SelectObject(memory,previous);DeleteObject(bitmap);DeleteDC(memory);ReleaseDC(target,dc);
+}
 
 int wmain(int argc,wchar_t **argv) {
     wchar_t tempdir[MAX_PATH],dir[MAX_PATH],path[MAX_PATH],command[MAX_PATH+40];
@@ -36,6 +80,18 @@ int wmain(int argc,wchar_t **argv) {
     puts("PASS bulk launch opens every snapshot item exactly once");
     assert(startup_command(command,MAX_PATH+40));assert(command[0]==L'"');assert(wcsstr(command,L"\" --startup"));
     puts("PASS quoted startup command; user registry untouched");
+    DWORD saved_path_size=GetEnvironmentVariableW(L"PATH",NULL,0);wchar_t *saved_path=saved_path_size?malloc((size_t)saved_path_size*sizeof(wchar_t)):NULL;
+    if(saved_path)GetEnvironmentVariableW(L"PATH",saved_path,saved_path_size);
+    wchar_t old_directory[MAX_PATH],fake_git[MAX_PATH],found_git[MAX_PATH];GetCurrentDirectoryW(MAX_PATH,old_directory);swprintf(fake_git,MAX_PATH,L"%ls\\git.exe",dir);
+    f=CreateFileW(fake_git,GENERIC_WRITE,0,NULL,CREATE_NEW,0,NULL);assert(f!=INVALID_HANDLE_VALUE);CloseHandle(f);assert(SetCurrentDirectoryW(dir));assert(SetEnvironmentVariableW(L"PATH",L"."));
+    DWORD find_error=0;assert(!batch_runner_find_git(found_git,MAX_PATH,&find_error)&&find_error==ERROR_FILE_NOT_FOUND);assert(SetEnvironmentVariableW(L"PATH",dir));assert(batch_runner_find_git(found_git,MAX_PATH,&find_error)&&!lstrcmpiW(found_git,fake_git));
+    assert(SetCurrentDirectoryW(old_directory));assert(SetEnvironmentVariableW(L"PATH",saved_path));free(saved_path);assert(DeleteFileW(fake_git));
+    puts("PASS Git executable resolution ignores relative PATH entries and never executes the test file");
+    DWORD command_exit=0,command_error=0;
+    assert(batch_runner_command(L"exit /b 17",dir,&command_exit,&command_error)&&command_exit==17&&command_error==0);
+    assert(batch_runner_command(L"ver >nul && exit /b 0",dir,&command_exit,&command_error)&&command_exit==0);
+    puts("PASS configurable cmd commands, compound syntax and exit codes in isolated folder");
+    test_batch_modes();
     /* Real WM_DROPFILES payload through production handler, using isolated config. */
     size_t bytes=sizeof(DROPFILES)+(wcslen(path)+2)*sizeof(wchar_t);
     HGLOBAL memory=GlobalAlloc(GHND,bytes);DROPFILES *drop=GlobalLock(memory);drop->pFiles=sizeof(DROPFILES);drop->fWide=TRUE;
@@ -71,6 +127,18 @@ int wmain(int argc,wchar_t **argv) {
         assert(!GetDlgItem(window,ID_STARTUP)&&!GetDlgItem(window,ID_RENAME)&&!GetDlgItem(window,ID_DELETE));
         assert(!GetDlgItem(window,ID_FILES));
         assert(GetDlgItem(window,ID_SETTINGS)&&GetDlgItem(window,ID_NEW)&&GetDlgItem(window,ID_DESKTOP)&&GetDlgItem(window,ID_LAUNCH_ALL));
+        SendMessageW(window,WM_COMMAND,ID_BATCH_TASKS,0);assert(batch_tasks_window()&&GetWindow(batch_tasks_window(),GW_OWNER)==window);
+        HWND batch_window=batch_tasks_window();SetWindowTextW(GetDlgItem(batch_window,2111),L"更新代码");SetWindowTextW(GetDlgItem(batch_window,2106),L"git pull origin main");SendMessageW(batch_window,WM_COMMAND,2107,0);
+        SendMessageW(batch_window,WM_COMMAND,2108,0);SetWindowTextW(GetDlgItem(batch_window,2111),L"构建项目");SetWindowTextW(GetDlgItem(batch_window,2106),L"npm run build");SendMessageW(GetDlgItem(batch_window,2112),CB_SETCURSEL,BATCH_PARALLEL,0);SendMessageW(batch_window,WM_COMMAND,2107,0);
+        BatchTaskList *saved_tasks=calloc(1,sizeof(*saved_tasks));assert(saved_tasks&&store_load_batch_tasks(saved_tasks));assert(saved_tasks->count==2&&saved_tasks->tasks[1].mode==BATCH_PARALLEL&&!wcscmp(saved_tasks->tasks[1].command,L"npm run build"));free(saved_tasks);
+        SendMessageW(GetDlgItem(batch_window,2110),LB_SETCURSEL,0,0);SendMessageW(batch_window,WM_COMMAND,MAKEWPARAM(2110,LBN_SELCHANGE),0);
+        wchar_t selected_command[BATCH_COMMAND_CAP];GetWindowTextW(GetDlgItem(batch_window,2106),selected_command,BATCH_COMMAND_CAP);assert(!wcscmp(selected_command,L"git pull origin main"));assert(SendMessageW(GetDlgItem(batch_window,2112),CB_GETCURSEL,0,0)==BATCH_SEQUENTIAL);
+        if(GetEnvironmentVariableW(L"NOVA_TEST_CAPTURE",NULL,0)){
+            capture_batch(batch_window,L"build\\batch-tasks-zh.bmp");nova_english=TRUE;batch_tasks_language_changed();SetWindowPos(batch_window,NULL,0,0,px(820),px(520),SWP_NOMOVE|SWP_NOZORDER);capture_batch(batch_window,L"build\\batch-tasks-en.bmp");nova_english=FALSE;batch_tasks_language_changed();
+        }
+        SendMessageW(batch_window,WM_CLOSE,0,0);assert(!batch_tasks_window());
+        puts("PASS independent named tasks, command editing, mode selection and task switching through native controls");
+        puts("PASS settings opens the localized batch-task manager without running commands");
         RECT first_icon;assert(ListView_GetItemRect(app_list,0,&first_icon,LVIR_ICON));hold_drag_message(&hold_drag,WM_LBUTTONDOWN,0,MAKELPARAM((first_icon.left+first_icon.right)/2,(first_icon.top+first_icon.bottom)/2));assert(hold_drag.armed&&hold_drag.left_down&&hold_drag.source==0&&GetCapture()==app_list);
         assert(hold_drag_message(&hold_drag,WM_TIMER,HOLD_DRAG_TIMER_ID,0)&&hold_drag.dragging);assert(ListView_GetItemState(app_list,0,LVIS_DROPHILITED)&LVIS_DROPHILITED);hold_drag_cancel(&hold_drag);
         /* Drive this test window's release path; never interact with external apps. */

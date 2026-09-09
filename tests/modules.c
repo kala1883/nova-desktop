@@ -1,5 +1,6 @@
 #include "../src/core/workspace.h"
 #include "../src/core/launch_queue.h"
+#include "../src/core/batch_task.h"
 #include <assert.h>
 #include <stdio.h>
 #include <string.h>
@@ -24,5 +25,11 @@ int main(void){
     w[1].app_count=1;assert(launch_queue_begin(&q,&w[1]));launch_queue_step(&q,fake_launch,NULL);assert(q.failed==1);
     assert(launch_queue_begin(&q,&w[0]));launch_queue_cancel(&q);assert(!launch_queue_step(&q,fake_launch,NULL));assert(calls==3);
     puts("PASS queue snapshot, busy guard, one dispatch per step, failure accounting and cancellation (no apps launched)");
+    BatchTask task={0};assert(batch_task_add_directory(&task,L"C:\\repo-one\\")==1);assert(!wcscmp(task.directories[0],L"C:\\repo-one"));
+    assert(batch_task_add_directory(&task,L"c:\\REPO-ONE")==0);assert(batch_task_add_directory(&task,L"D:\\repo-two")==1);
+    assert(batch_task_remove_directory(&task,0)==1&&!wcscmp(task.directories[0],L"D:\\repo-two"));assert(!batch_task_remove_directory(&task,2));
+    task=(BatchTask){0};for(int i=0;i<BATCH_DIRECTORY_LIMIT;i++){wchar_t path[40];swprintf(path,40,L"C:\\repo-%d",i);assert(batch_task_add_directory(&task,path)==1);}
+    assert(batch_task_add_directory(&task,L"C:\\one-too-many")==-1);assert(batch_task_is_valid(&task));
+    puts("PASS batch task normalization, duplicate rejection, removal, validation and capacity");
     return 0;
 }

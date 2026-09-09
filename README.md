@@ -23,6 +23,9 @@ required.
 - **Workspace launcher** — organize up to 8 workspaces with 20 items each;
   reorder or move items with press-and-hold drag, search the current workspace,
   or launch every item once.
+- **Saved batch tasks** — up to 16 named tasks, each with its own command, up to
+  24 working folders, and sequential or parallel execution. Launch a selected
+  task from **Settings → Batch tasks**.
 - **Local session restore** — workspaces, tabs, layout, navigation-tree state,
   and favorites are stored in an embedded SQLite database.
 - **Window modes** — normal, always on top, and desktop-fence mode, plus tray
@@ -96,6 +99,28 @@ normal command such as `git status` starts `cmd.exe` with the current pane's
 filesystem folder as its working directory. Prefix a command with `>` to force
 command mode.
 
+## Batch tasks
+
+Open **Settings → Batch tasks…**. Use **New task** to create a named task,
+set its command, add its working folders, and choose **Save task**. Select a
+saved task in the left list and choose **Run task**. Editing, switching tasks
+and closing the window save the current task; invalid edits must be corrected.
+Each task keeps its own execution mode:
+
+- **Sequential** waits for each folder to finish before starting the next.
+- **Parallel** starts all folders without waiting for earlier ones to finish.
+
+NOVA runs one saved task at a time, with up to 24 commands active in parallel.
+Cancel skips folders that have not started; it lets active commands finish.
+A nonzero exit code is reported per folder and does not stop other folders.
+Deleting a task removes only its saved configuration.
+
+Commands use Windows cmd syntax, up to 2047 characters; for example
+`git pull origin main`, `npm run build`, or `git status && git log -1`.
+The existing single-task configuration becomes the first saved task.
+Tasks persist in local SQLite; folder paths are passed separately as working
+directories to system `cmd.exe /d /s /c`.
+
 ## Validation
 
 ```powershell
@@ -110,9 +135,9 @@ not change the real Windows startup entry or operate on personal work files.
 
 ## Current limitations
 
-- Paths added to launcher workspaces are limited to 259 characters. The file
-  manager address field supports up to 2047 characters, while actual access is
-  still subject to Windows Shell behavior.
+- Paths added to launcher workspaces and batch tasks are limited to 259
+  characters. The file manager address field supports up to 2047 characters,
+  while actual access is still subject to Windows Shell behavior.
 - This is an independent implementation of a Q-Dir-style core workflow, not a
   one-for-one clone. It does not import `.qdr` sessions or reproduce every
   Q-Dir option.
