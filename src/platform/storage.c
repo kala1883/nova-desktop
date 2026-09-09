@@ -128,7 +128,8 @@ BOOL store_save_workspaces(Workspace *spaces,int count,int active,BOOL pinned){
     return store_end(ok);
 }
 BOOL store_load_batch_task(BatchTask *task){
-    if(!task)return FALSE;ZeroMemory(task,sizeof(*task));
+    if(!task)return FALSE;
+    ZeroMemory(task,sizeof(*task));
     wchar_t command[BATCH_COMMAND_CAP+1];
     if(!store_get(L"batch_git_pull_main",L"Task",L"Command",L"git pull origin main",command,BATCH_COMMAND_CAP+1))return FALSE;
     if(wcslen(command)>=BATCH_COMMAND_CAP){lstrcpyW(error_text,nova_text(L"保存的命令超过长度限制，未修改原数据。",L"The saved command exceeds the length limit. Data was not changed."));return FALSE;}
