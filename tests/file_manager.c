@@ -30,15 +30,21 @@ int wmain(void){
     HWND host=CreateWindowExW(0,L"STATIC",L"NOVA embedded file test",WS_OVERLAPPEDWINDOW|WS_VISIBLE,0,0,1200,820,NULL,NULL,GetModuleHandleW(NULL),NULL);assert(host);
     puts("Creating four native views...");assert(file_manager_open(host,root));pump(600);puts("Views created.");
     assert(GetParent(fm.window)==host);assert(GetAncestor(fm.window,GA_ROOT)==host);assert((GetWindowLongPtrW(fm.window,GWL_STYLE)&WS_CHILD)!=0);
-    assert(IsWindow(fm.tooltip)&&fm.tooltips_added==42&&SendMessageW(fm.tooltip,TTM_GETTOOLCOUNT,0,0)==42);
+    assert(IsWindow(fm.tooltip)&&fm.tooltips_added==62&&SendMessageW(fm.tooltip,TTM_GETTOOLCOUNT,0,0)==62);
     wchar_t icon_face[64]=L"";HDC icon_dc=GetDC(fm.window);HFONT old_icon_font=SelectObject(icon_dc,fm.icon_font);GetTextFaceW(icon_dc,64,icon_face);SelectObject(icon_dc,old_icon_font);ReleaseDC(fm.window,icon_dc);assert(!lstrcmpW(icon_face,L"Segoe MDL2 Assets"));
     assert(button_glyph(C_BACK)[0]==0xE72B&&button_glyph(C_FORWARD)[0]==0xE72A&&button_glyph(C_REFRESH)[0]==0xE72C&&button_glyph(C_UP)[0]==0xE74A);
     SendMessageW(fm.toolbar[0],WM_MOUSEMOVE,0,0);assert(fm.hot_button==fm.toolbar[0]);SendMessageW(fm.toolbar[0],WM_MOUSELEAVE,0,0);assert(!fm.hot_button);
-    for(int i=0;i<10;i++){RECT button_rect;wchar_t accessible_name[40];GetWindowRect(fm.toolbar[i],&button_rect);GetWindowTextW(fm.toolbar[i],accessible_name,40);assert(button_rect.right-button_rect.left==scale(34)&&accessible_name[0]);}
-    puts("PASS compact icon toolbar retains accessible names and 42 tooltips");
+    for(int i=0;i<MANAGER_TOOLBAR_COUNT;i++){RECT button_rect;wchar_t accessible_name[40];GetWindowRect(fm.toolbar[i],&button_rect);GetWindowTextW(fm.toolbar[i],accessible_name,40);assert(button_rect.right-button_rect.left==scale(34)&&accessible_name[0]);}
+    for(int i=0;i<4;i++){
+        Pane *pane=&fm.panes[i];HWND actions[]={pane->cut,pane->paste,pane->delete_file,pane->new_folder};RECT back_rect;GetWindowRect(pane->back,&back_rect);
+        for(int j=0;j<4;j++){RECT action_rect;wchar_t accessible_name[40];assert(GetParent(actions[j])==pane->window);GetWindowRect(actions[j],&action_rect);GetWindowTextW(actions[j],accessible_name,40);assert(action_rect.top==back_rect.top&&action_rect.right-action_rect.left==scale(32)&&accessible_name[0]);}
+    }
+    puts("PASS global and per-pane icon toolbars retain accessible names and 62 tooltips");
     HWND embedded=fm.window;file_manager_hide();assert(!IsWindowVisible(embedded));assert(file_manager_open(host,root)==embedded);assert(IsWindowVisible(embedded));
     for(int i=0;i<4;i++)assert(fm.panes[i].count==1&&current(&fm.panes[i])->browser);
     for(int i=0;i<4;i++)assert((GetWindowLongPtrW(fm.panes[i].tabs,GWL_STYLE)&TCS_OWNERDRAWFIXED)!=0);
+    Pane *narrow=&fm.panes[0];MoveWindow(narrow->window,0,0,scale(128),scale(300),TRUE);pane_layout(narrow);RECT narrow_client;GetClientRect(narrow->window,&narrow_client);assert(IsWindowVisible(narrow->navigation_menu)&&!IsWindowVisible(narrow->back));
+    HWND compact[]={narrow->navigation_menu,narrow->cut,narrow->paste,narrow->delete_file,narrow->new_folder};LONG previous_right=0;for(int i=0;i<5;i++){RECT item;GetWindowRect(compact[i],&item);MapWindowPoints(NULL,narrow->window,(POINT*)&item,2);assert(item.left>=previous_right&&item.right<=narrow_client.right);previous_right=item.right;}
     fm.layout=0;arrange();RECT manager_rect;GetClientRect(fm.window,&manager_rect);int content_height=manager_rect.bottom-scale(46)-scale(27);
     POINT divider={split_pixel(0,0,manager_rect.right),scale(46)+content_height/2};int divider_index=-1;
     assert(hit_splitter(divider,&divider_index)==1&&divider_index==0);
@@ -58,8 +64,14 @@ int wmain(void){
     pump(700);
     assert(SUCCEEDED(navigate(t,b)));assert(wait_location(t,b));
     command(p,C_BACK);assert(wait_location(t,a));command(p,C_FORWARD);assert(wait_location(t,b));
-    assert(add_tab(p,a));assert(wait_location(current(p),a));assert(p->count==2);select_tab(p,0);assert(current(p)==t);assert(same_path(t->location,b));
-    select_tab(p,1);close_tab(p);assert(p->count==1&&current(p)==t);
+    assert(add_tab(p,a));assert(wait_location(current(p),a));assert(p->count==2);Tab *added=current(p);select_tab(p,0);assert(current(p)==t);assert(same_path(t->location,b));
+    RECT first_tab,last_tab;assert(TabCtrl_GetItemRect(p->tabs,0,&first_tab)&&TabCtrl_GetItemRect(p->tabs,1,&last_tab));POINT press={(first_tab.left+first_tab.right)/2,(first_tab.top+first_tab.bottom)/2},drop={last_tab.right-1,(last_tab.top+last_tab.bottom)/2};
+    SendMessageW(p->tabs,WM_LBUTTONDOWN,MK_LBUTTON,MAKELPARAM(press.x,press.y));assert(p->tab_drag_armed&&p->tab_drag_source==0&&GetCapture()==p->tabs);SendMessageW(p->tabs,WM_TIMER,TAB_DRAG_TIMER_ID,0);assert(p->tab_dragging);
+    SendMessageW(p->tabs,WM_MOUSEMOVE,MK_LBUTTON,MAKELPARAM(drop.x,drop.y));SendMessageW(p->tabs,WM_LBUTTONUP,0,MAKELPARAM(drop.x,drop.y));assert(!p->tab_drag_armed&&!p->tab_dragging&&p->items[0]==added&&p->items[1]==t&&current(p)==t);
+    pump(500);wchar_t persisted[LOCATION_SIZE];session_get(L"Pane0",L"Tab1",L"",persisted,LOCATION_SIZE);assert(same_path(persisted,t->location));
+    SendMessageW(p->tabs,WM_LBUTTONDOWN,MK_LBUTTON,MAKELPARAM(drop.x,drop.y));SendMessageW(p->tabs,WM_TIMER,TAB_DRAG_TIMER_ID,0);assert(p->tab_dragging);MSG escape={p->tabs,WM_KEYDOWN,VK_ESCAPE,0,0,{0,0}};assert(file_manager_message(&escape));assert(!p->tab_drag_armed&&!p->tab_dragging&&p->items[1]==t);
+    select_tab(p,0);close_tab(p);assert(p->count==1&&current(p)==t);
+    puts("PASS press-and-hold tab drag reorders within one pane, persists, and Escape cancels safely");
     assert(SUCCEEDED(navigate(t,a)));assert(wait_location(t,a));
     PIDLIST_ABSOLUTE id=NULL;assert(SUCCEEDED(SHParseDisplayName(file,NULL,&id,0,NULL)));
     IShellView *view=NULL;assert(SUCCEEDED(IExplorerBrowser_GetCurrentView(t->browser,&IID_IShellView,(void**)&view)));

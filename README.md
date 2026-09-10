@@ -16,10 +16,12 @@ required.
   single pane, four three-pane arrangements, and three/four-column or row
   layouts. Drag pane dividers to resize them; proportions are restored locally.
 - **Independent tabs and history** — up to 12 clearly highlighted tabs per pane,
-  with separate paths and back/forward history.
+  with separate paths and back/forward history. Press and hold a folder tab,
+  then drag it to change that pane's saved tab order.
 - **Native Windows file operations** — selection, sorting, filtering, context
   menus, thumbnails, clipboard operations, drag and drop, rename, delete, and
-  new-folder actions use Windows Shell behavior.
+  new-folder actions use Windows Shell behavior. Cut, paste, delete, and new
+  folder controls are available directly in every pane.
 - **Workspace launcher** — organize up to 8 workspaces with 20 items each;
   reorder or move items with press-and-hold drag, search the current workspace,
   or launch every item once.
