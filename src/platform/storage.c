@@ -252,6 +252,60 @@ BOOL store_load_batch_tasks(BatchTaskList *tasks){
     else lstrcpyW(error_text,nova_text(L"批量任务配置无效或来自更新版本，原数据未修改。",L"Batch task settings are invalid or from a newer version. Data was not changed."));
     free(next);return ok;
 }
+BOOL store_save_file_commands(const FileCommandList *commands){
+    if(!file_command_list_is_valid(commands)){
+        lstrcpyW(error_text,nova_text(L"命令预设无效：请填写名称和命令，并确保名称不重复。",L"Command presets are invalid. Enter a name and command, and use unique names."));
+        return FALSE;
+    }
+    if(!store_begin())return FALSE;
+    BOOL ok=store_clear(L"file_commands");
+    ok=store_set_int(L"file_commands",L"Commands",L"Version",1)&&ok;
+    ok=store_set_int(L"file_commands",L"Commands",L"Count",commands->count)&&ok;
+    ok=store_set_int(L"file_commands",L"Commands",L"Default",commands->default_index)&&ok;
+    for(int i=0;i<commands->count&&ok;i++){
+        wchar_t section[32];swprintf(section,32,L"Command%d",i);
+        ok=store_set(L"file_commands",section,L"Name",commands->items[i].name)&&ok;
+        ok=store_set(L"file_commands",section,L"Command",commands->items[i].command)&&ok;
+    }
+    return store_end(ok);
+}
+
+static BOOL command_read_text(const wchar_t *section,const wchar_t *key,wchar_t *value,int capacity){
+    sqlite3_stmt *s=prepare("SELECT value FROM settings WHERE scope='file_commands' AND section=? AND key=?");if(!s)return FALSE;
+    bind_text(s,1,section);bind_text(s,2,key);int rc=sqlite3_step(s);BOOL ok=FALSE;
+    if(rc==SQLITE_ROW){
+        const wchar_t *text=sqlite3_column_text16(s,0);int bytes=sqlite3_column_bytes16(s,0);
+        if(text&&bytes>=0&&bytes<capacity*(int)sizeof(wchar_t)&&wcslen(text)==(size_t)bytes/sizeof(wchar_t)){lstrcpyW(value,text);ok=TRUE;}
+    }
+    if(rc!=SQLITE_ROW&&rc!=SQLITE_DONE)check(rc);
+    sqlite3_finalize(s);return ok;
+}
+static BOOL command_read_number(const wchar_t *key,int maximum,int *value){
+    wchar_t text[32],*end;if(!command_read_text(L"Commands",key,text,32)||!text[0])return FALSE;
+    long parsed=wcstol(text,&end,10);if(*end||parsed<0||parsed>maximum)return FALSE;*value=(int)parsed;return TRUE;
+}
+
+BOOL store_load_file_commands(FileCommandList *commands){
+    if(!commands)return FALSE;
+    sqlite3_stmt *s=prepare("SELECT count(*) FROM settings WHERE scope='file_commands'");if(!s)return FALSE;
+    int rc=sqlite3_step(s);BOOL fresh=rc==SQLITE_ROW&&sqlite3_column_int(s,0)==0,ok=check(rc);sqlite3_finalize(s);
+    if(!ok)return FALSE;
+    if(fresh){file_command_defaults(commands);return store_save_file_commands(commands);}
+    FileCommandList next={0};
+    int version=0;ok=command_read_number(L"Version",1,&version)&&version==1;
+    if(ok)ok=command_read_number(L"Count",FILE_COMMAND_LIMIT,&next.count)&&next.count>=1;
+    if(ok)ok=command_read_number(L"Default",FILE_COMMAND_LIMIT-1,&next.default_index)&&next.default_index<next.count;
+    for(int i=0;i<next.count&&ok;i++){
+        wchar_t section[32];swprintf(section,32,L"Command%d",i);
+        ok=command_read_text(section,L"Name",next.items[i].name,FILE_COMMAND_NAME_CAP)&&
+           command_read_text(section,L"Command",next.items[i].command,FILE_COMMAND_TEXT_CAP);
+    }
+    ok=ok&&file_command_list_is_valid(&next);
+    if(ok)*commands=next;
+    else lstrcpyW(error_text,nova_text(L"命令预设缺失、损坏或来自更新版本，原数据未修改。",L"Command presets are missing, damaged, or from a newer version. The original data was not changed."));
+    return ok;
+}
+
 BOOL store_backup(void){
     if(!db)return FALSE;
     wchar_t path[MAX_PATH],temp[MAX_PATH];swprintf(path,MAX_PATH,L"%ls\\nova.backup.sqlite",root);swprintf(temp,MAX_PATH,L"%ls\\nova.backup.tmp",root);

@@ -52,6 +52,11 @@ int wmain(void){
     assert(store_save_batch_tasks(collection));collection->count=0;assert(store_save_batch_tasks(collection));assert(store_load_batch_tasks(restored)&&restored->count==0);
     free(collection);free(restored);
     puts("PASS single-task migration, independent task commands/folders/modes, deletion, empty collection and over-capacity refusal");
+    FileCommandList commands={0},restored_commands={0};assert(store_load_file_commands(&commands));assert(commands.count==1&&!wcscmp(commands.items[0].name,L"cmd.exe"));
+    assert(file_command_add(&commands,L"检查状态",L"git status")==1);commands.default_index=1;assert(store_save_file_commands(&commands));assert(store_load_file_commands(&restored_commands));
+    assert(restored_commands.count==2&&restored_commands.default_index==1&&!wcscmp(restored_commands.items[1].command,L"git status"));
+    assert(store_set_int(L"file_commands",L"Commands",L"Version",2));assert(!store_load_file_commands(&restored_commands));assert(store_int(L"file_commands",L"Commands",L"Version",0)==2);assert(store_save_file_commands(&commands));
+    puts("PASS bounded command presets and default selection persist transactionally; newer data is preserved");
     assert(store_backup());sqlite3 *reader=NULL;assert(sqlite3_open16(backup,&reader)==SQLITE_OK);sqlite3_stmt *q=NULL;
     assert(sqlite3_prepare_v2(reader,"SELECT count(*) FROM items",-1,&q,NULL)==SQLITE_OK);assert(sqlite3_step(q)==SQLITE_ROW&&sqlite3_column_int(q,0)==2);sqlite3_finalize(q);sqlite3_close(reader);
     printf("PASS stable IDs, cross-workspace transaction, unloaded-item preservation, rollback and SQLite backup; SQLite heap %lu bytes\n",(unsigned long)sqlite3_memory_used());

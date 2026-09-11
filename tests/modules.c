@@ -1,6 +1,7 @@
 #include "../src/core/workspace.h"
 #include "../src/core/launch_queue.h"
 #include "../src/core/batch_task.h"
+#include "../src/core/file_command.h"
 #include <assert.h>
 #include <stdio.h>
 #include <string.h>
@@ -42,5 +43,11 @@ int main(void){
     run.id=BATCH_TASK_LIMIT+1;assert(batch_task_queue_add(&batch_queue,&run)==-1);batch_queue.active_id=0;assert(batch_task_queue_take(&batch_queue,&taken)&&taken.id==2);
     batch_task_queue_cancel(&batch_queue);assert(!batch_queue.count&&batch_queue.active_id==2);
     puts("PASS stable internal task references and bounded FIFO snapshot queue with deduplication and cancellation");
+    FileCommandList commands;file_command_defaults(&commands);assert(file_command_list_is_valid(&commands));
+    assert(commands.count==1&&commands.default_index==0&&!wcscmp(commands.items[0].command,L"cd ."));
+    assert(file_command_add(&commands,L"Git status",L"git status")==1);assert(file_command_add(&commands,L"git STATUS",L"dir")==0);
+    commands.default_index=1;assert(file_command_remove(&commands,0)&&commands.count==1&&commands.default_index==0&&!wcscmp(commands.items[0].name,L"Git status"));
+    assert(!file_command_remove(&commands,0));commands.items[0].command[0]=0;assert(!file_command_list_is_valid(&commands));
+    puts("PASS command preset defaults, unique names, default adjustment, validation and minimum collection");
     return 0;
 }

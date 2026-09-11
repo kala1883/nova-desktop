@@ -30,16 +30,18 @@ int wmain(void){
     HWND host=CreateWindowExW(0,L"STATIC",L"NOVA embedded file test",WS_OVERLAPPEDWINDOW|WS_VISIBLE,0,0,1200,820,NULL,NULL,GetModuleHandleW(NULL),NULL);assert(host);
     puts("Creating four native views...");assert(file_manager_open(host,root));pump(600);puts("Views created.");
     assert(GetParent(fm.window)==host);assert(GetAncestor(fm.window,GA_ROOT)==host);assert((GetWindowLongPtrW(fm.window,GWL_STYLE)&WS_CHILD)!=0);
-    assert(IsWindow(fm.tooltip)&&fm.tooltips_added==62&&SendMessageW(fm.tooltip,TTM_GETTOOLCOUNT,0,0)==62);
+    assert(IsWindow(fm.tooltip)&&fm.tooltips_added==66&&SendMessageW(fm.tooltip,TTM_GETTOOLCOUNT,0,0)==66);
     wchar_t icon_face[64]=L"";HDC icon_dc=GetDC(fm.window);HFONT old_icon_font=SelectObject(icon_dc,fm.icon_font);GetTextFaceW(icon_dc,64,icon_face);SelectObject(icon_dc,old_icon_font);ReleaseDC(fm.window,icon_dc);assert(!lstrcmpW(icon_face,L"Segoe MDL2 Assets"));
-    assert(button_glyph(C_BACK)[0]==0xE72B&&button_glyph(C_FORWARD)[0]==0xE72A&&button_glyph(C_REFRESH)[0]==0xE72C&&button_glyph(C_UP)[0]==0xE74A);
+    assert(button_glyph(C_BACK)[0]==0xE72B&&button_glyph(C_FORWARD)[0]==0xE72A&&button_glyph(C_REFRESH)[0]==0xE72C&&button_glyph(C_UP)[0]==0xE74A&&button_glyph(C_COMMAND)[0]==0xE756);
     SendMessageW(fm.toolbar[0],WM_MOUSEMOVE,0,0);assert(fm.hot_button==fm.toolbar[0]);SendMessageW(fm.toolbar[0],WM_MOUSELEAVE,0,0);assert(!fm.hot_button);
     for(int i=0;i<MANAGER_TOOLBAR_COUNT;i++){RECT button_rect;wchar_t accessible_name[40];GetWindowRect(fm.toolbar[i],&button_rect);GetWindowTextW(fm.toolbar[i],accessible_name,40);assert(button_rect.right-button_rect.left==scale(34)&&accessible_name[0]);}
     for(int i=0;i<4;i++){
         Pane *pane=&fm.panes[i];HWND actions[]={pane->cut,pane->paste,pane->delete_file,pane->new_folder};RECT back_rect;GetWindowRect(pane->back,&back_rect);
         for(int j=0;j<4;j++){RECT action_rect;wchar_t accessible_name[40];assert(GetParent(actions[j])==pane->window);GetWindowRect(actions[j],&action_rect);GetWindowTextW(actions[j],accessible_name,40);assert(action_rect.top==back_rect.top&&action_rect.right-action_rect.left==scale(32)&&accessible_name[0]);}
+        RECT command_rect,new_folder_rect;wchar_t command_name[80];GetWindowRect(pane->command_button,&command_rect);GetWindowRect(pane->new_folder,&new_folder_rect);GetWindowTextW(pane->command_button,command_name,80);
+        assert(IsWindowVisible(pane->command_button)&&command_rect.left>new_folder_rect.right&&command_rect.right-command_rect.left==scale(48)&&command_name[0]);
     }
-    puts("PASS global and per-pane icon toolbars retain accessible names and 62 tooltips");
+    puts("PASS global and per-pane icon toolbars retain accessible names and 66 tooltips");
     HWND embedded=fm.window;file_manager_hide();assert(!IsWindowVisible(embedded));assert(file_manager_open(host,root)==embedded);assert(IsWindowVisible(embedded));
     for(int i=0;i<4;i++)assert(fm.panes[i].count==1&&current(&fm.panes[i])->browser);
     for(int i=0;i<4;i++)assert((GetWindowLongPtrW(fm.panes[i].tabs,GWL_STYLE)&TCS_OWNERDRAWFIXED)!=0);
@@ -56,10 +58,13 @@ int wmain(void){
     SendMessageW(fm.window,WM_MOUSEMOVE,MK_LBUTTON,MAKELPARAM(divider.x-scale(40),divider.y));SendMessageW(fm.window,WM_CANCELMODE,0,0);assert(!fm.splitter_dragging&&fm.splits[0][0]==resized_split);
     puts("PASS pane dividers resize, cancel safely, debounce to SQLite, and directory tabs use a clear owner-drawn selection state");
     Pane *p=&fm.panes[0];Tab *t=current(p);
-    fm.test_mode=TRUE;SetWindowTextW(p->address,L"echo nova");open_address(p);assert(fm.command_runs==1&&!lstrcmpW(fm.last_command,L"echo nova")&&same_path(fm.last_command_directory,root));
-    SetWindowTextW(p->address,L"> C:\\Tools\\demo.exe --check");open_address(p);assert(fm.command_runs==2&&!lstrcmpW(fm.last_command,L"C:\\Tools\\demo.exe --check"));fm.test_mode=FALSE;
+    fm.test_mode=TRUE;command(p,C_COMMAND);assert(fm.command_runs==1&&!lstrcmpW(fm.last_command,L"cd .")&&same_path(fm.last_command_directory,root));
+    assert(file_command_add(&fm.commands,L"检查状态",L"git status")==1);assert(set_default_command(1));command(p,C_COMMAND);assert(fm.command_runs==2&&!lstrcmpW(fm.last_command,L"git status"));
+    open_command_manager();assert(IsWindow(fm.command_window)&&SendMessageW(fm.command_list,LB_GETCOUNT,0,0)==2);DestroyWindow(fm.command_window);
+    SetWindowTextW(p->address,L"echo nova");open_address(p);assert(fm.command_runs==3&&!lstrcmpW(fm.last_command,L"echo nova")&&same_path(fm.last_command_directory,root));
+    SetWindowTextW(p->address,L"> C:\\Tools\\demo.exe --check");open_address(p);assert(fm.command_runs==4&&!lstrcmpW(fm.last_command,L"C:\\Tools\\demo.exe --check"));fm.test_mode=FALSE;
     SetWindowTextW(p->address,L"中文源目录");open_address(p);assert(wait_location(t,a));assert(lstrcmpiW(current(&fm.panes[1])->location,a));
-    puts("PASS each pane switches relative directories and dispatches commands with its own working directory");
+    puts("PASS command split button, preset editor/default persistence, and address bar dispatch use the active pane working directory");
     assert(SUCCEEDED(navigate(t,a)));assert(wait_location(t,a));
     pump(700);
     assert(SUCCEEDED(navigate(t,b)));assert(wait_location(t,b));

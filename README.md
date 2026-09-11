@@ -22,6 +22,10 @@ required.
   menus, thumbnails, clipboard operations, drag and drop, rename, delete, and
   new-folder actions use Windows Shell behavior. Cut, paste, delete, and new
   folder controls are available directly in every pane.
+- **Per-folder command presets** — run the default command from a pane toolbar,
+  choose another saved command from its drop-down menu, or manage up to 16
+  named presets. The active pane's filesystem folder is always the working
+  directory.
 - **Workspace launcher** — organize up to 8 workspaces with 20 items each;
   reorder or move items with press-and-hold drag, search the current workspace,
   or launch every item once.
@@ -100,6 +104,13 @@ locations, and environment variables such as `%USERPROFILE%`. Entering a
 normal command such as `git status` starts `cmd.exe` with the current pane's
 filesystem folder as its working directory. Prefix a command with `>` to force
 command mode.
+
+Each pane also has a command split button after the file-operation controls.
+Click its main area to run the default preset, or click the arrow to run a
+different preset, choose the default, or open **Manage commands…**. Preset
+names and commands are stored locally in SQLite. NOVA starts with a `cmd.exe`
+preset (`cd .`), which opens a command prompt in the current folder without
+changing its contents.
 
 ## Batch tasks
 

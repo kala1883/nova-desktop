@@ -2,6 +2,7 @@
 #define NOVA_STORAGE_H
 #include <windows.h>
 #include "../core/batch_task.h"
+#include "../core/file_command.h"
 #include "../core/workspace.h"
 /* Single UI-thread connection; SQLite is embedded, never a service. */
 BOOL store_open(const wchar_t *directory);
@@ -23,5 +24,7 @@ BOOL store_load_batch_task(BatchTask *task);
 BOOL store_save_batch_task(const BatchTask *task);
 BOOL store_load_batch_tasks(BatchTaskList *tasks);
 BOOL store_save_batch_tasks(BatchTaskList *tasks);
+BOOL store_load_file_commands(FileCommandList *commands);
+BOOL store_save_file_commands(const FileCommandList *commands);
 BOOL store_backup(void);
 #endif
