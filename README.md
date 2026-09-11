@@ -105,6 +105,9 @@ place. A valid database is backed up as `nova.backup.sqlite` during startup.
 | `F2` / `Delete` | Rename / delete |
 | `Ctrl+Shift+N` | New folder |
 
+Refreshing also resynchronizes the native file view with the pane size if the
+folder list appears clipped into the upper-left corner.
+
 The address bar accepts normal paths, relative paths, UNC paths, `shell:`
 locations, and environment variables such as `%USERPROFILE%`. Entering a
 normal command such as `git status` starts `cmd.exe` with the current pane's

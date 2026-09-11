@@ -35,6 +35,7 @@
 #define MANAGER_TOOLBAR_COUNT 6
 #define TAB_DRAG_TIMER_ID 7702
 #define TAB_DRAG_HOLD_MS 350
+#define PANE_LAYOUT_MESSAGE (WM_APP+42)
 enum { C_LAYOUT=200, C_FAVORITES, C_VIEW, C_COPY, C_CUT, C_PASTE, C_RENAME,
        C_DELETE, C_NEWFOLDER, C_HELP, C_BACK=240, C_FORWARD, C_UP, C_GO,
        C_NEWTAB, C_CLOSETAB, C_REFRESH, C_ADDRESS, C_TABS, C_NAVMENU,
@@ -95,6 +96,7 @@ static const wchar_t *layout_name(int index){return nova_english?layout_names_en
 static int scale(int n){return MulDiv(n,fm.dpi?fm.dpi:96,96);}
 static Tab *current(Pane *p){return p->count?p->items[p->selected]:NULL;}
 static void arrange(void);
+static void pane_layout(Pane *p);
 static void save_session(void);
 static BOOL flush_session(void);
 static BOOL ensure_browser(Tab *t);
@@ -215,6 +217,8 @@ static HRESULT STDMETHODCALLTYPE event_pending(IExplorerBrowserEvents *self,PCID
 static HRESULT STDMETHODCALLTYPE event_created(IExplorerBrowserEvents *self,IShellView *view){
     Tab *t=(Tab*)self;IFolderView2 *folder=NULL;
     if(SUCCEEDED(IShellView_QueryInterface(view,&IID_IFolderView2,(void**)&folder))){IFolderView2_SetViewModeAndIconSize(folder,t->view_mode,t->icon_size);IFolderView2_Release(folder);}
+    /* Shell creates views asynchronously. Resize after its callback unwinds. */
+    if(!fm.closing)PostMessageW(t->pane->window,PANE_LAYOUT_MESSAGE,0,0);
     return S_OK;
 }
 static void record_history(Tab *t){
@@ -235,6 +239,7 @@ static HRESULT STDMETHODCALLTYPE event_complete(IExplorerBrowserEvents *self,PCI
     Pane *p=t->pane;
     for(int i=0;i<p->count;i++)if(p->items[i]==t){TCITEMW item={0};item.mask=TCIF_TEXT;item.pszText=t->title;TabCtrl_SetItem(p->tabs,i,&item);}
     if(current(p)==t)SetWindowTextW(p->address,t->location);
+    if(!fm.closing)PostMessageW(p->window,PANE_LAYOUT_MESSAGE,0,0);
     if(!fm.loading&&!fm.closing)PostMessageW(fm.window,WM_APP+41,0,0);
     return S_OK;
 }
@@ -263,10 +268,14 @@ static void release_tab(Tab *t){
 static BOOL ensure_browser(Tab *t){
     if(!t)return FALSE;
     if(t->browser)return TRUE;
-    t->host=CreateWindowExW(WS_EX_CONTROLPARENT,L"STATIC",nova_text(L"文件视图",L"File view"),WS_CHILD|WS_CLIPCHILDREN,0,0,10,10,t->pane->window,NULL,GetModuleHandleW(NULL),NULL);
+    RECT bounds;GetClientRect(t->pane->window,&bounds);
+    int width=bounds.right-2*scale(4),height=bounds.bottom-scale(107);
+    if(width<1)width=1;
+    if(height<1)height=1;
+    t->host=CreateWindowExW(WS_EX_CONTROLPARENT,L"STATIC",nova_text(L"文件视图",L"File view"),WS_CHILD|WS_CLIPCHILDREN,scale(4),scale(103),width,height,t->pane->window,NULL,GetModuleHandleW(NULL),NULL);
     HRESULT hr=t->host?CoCreateInstance(&CLSID_ExplorerBrowser,NULL,CLSCTX_INPROC_SERVER,&IID_IExplorerBrowser,(void**)&t->browser):E_OUTOFMEMORY;
     if(SUCCEEDED(hr)){
-        RECT r={0,0,100,100};FOLDERSETTINGS fs={t->view_mode,FWF_AUTOARRANGE};
+        RECT r;GetClientRect(t->host,&r);FOLDERSETTINGS fs={t->view_mode,FWF_AUTOARRANGE};
         IExplorerBrowser_SetOptions(t->browser,EBO_NOBORDER|(fm.navigation_tree?EBO_SHOWFRAMES:0));
         hr=IExplorerBrowser_Initialize(t->browser,t->host,&r,&fs);
     }
@@ -313,6 +322,7 @@ static void shell_verb(Tab *t,const char *verb,BOOL background){
     if(FAILED(hr))failure(nova_text(L"操作未完成，请选择文件或使用文件视图的右键菜单",L"The operation did not complete. Select a file or use the file view context menu"),hr);
 }
 static void refresh(Tab *t){
+    if(t)pane_layout(t->pane);
     IShellView *view=NULL;if(t&&t->browser&&SUCCEEDED(IExplorerBrowser_GetCurrentView(t->browser,&IID_IShellView,(void**)&view))){IShellView_Refresh(view);IShellView_Release(view);}
 }
 static void popup_favorites(void){
@@ -635,7 +645,7 @@ static void pane_layout(Pane *p){
     }
     MoveWindow(p->address,s,scale(70),w-scale(42),bh,TRUE);MoveWindow(p->go,w-scale(36),scale(70),scale(32),bh,TRUE);
     for(int i=0;i<p->count;i++){
-        Tab *t=p->items[i];if(!t->browser)continue;MoveWindow(t->host,s,scale(103),w-2*s,h-scale(107)>0?h-scale(107):1,TRUE);
+        Tab *t=p->items[i];if(!t->browser)continue;MoveWindow(t->host,s,scale(103),w-2*s>0?w-2*s:1,h-scale(107)>0?h-scale(107):1,TRUE);
         RECT rect;GetClientRect(t->host,&rect);IExplorerBrowser_SetRect(t->browser,NULL,rect);
     }
 }
@@ -728,13 +738,15 @@ static void arrange(void){
     if(fm.active>=count)fm.active=0;
     for(int i=0;i<4;i++){
         Pane *p=&fm.panes[i];ShowWindow(p->window,i<count?SW_SHOW:SW_HIDE);
+        /* Establish the final host geometry before starting asynchronous navigation. */
+        if(i<count){RECT q=boxes[i];MoveWindow(p->window,q.left+gap,q.top+top+gap,q.right-q.left-2*gap,q.bottom-q.top-2*gap,TRUE);}
         for(int j=0;j<p->count;j++){
             Tab *t=p->items[j];BOOL visible=i<count&&j==p->selected&&IsWindowVisible(fm.window)&&!IsIconic(GetAncestor(fm.window,GA_ROOT));
             if(visible){t->hidden_since=0;if(!fm.loading)ensure_browser(t);}
             else if(t->browser&&!t->hidden_since)t->hidden_since=GetTickCount64();
             if(t->host)ShowWindow(t->host,visible?SW_SHOW:SW_HIDE);
         }
-        if(i<count){RECT q=boxes[i];MoveWindow(p->window,q.left+gap,q.top+top+gap,q.right-q.left-2*gap,q.bottom-q.top-2*gap,TRUE);pane_layout(p);}
+        if(i<count)pane_layout(p);
     }
     SetWindowTextW(fm.toolbar[0],layout_name(fm.layout));
 }
@@ -808,7 +820,7 @@ static LRESULT CALLBACK pane_proc(HWND h,UINT msg,WPARAM wp,LPARAM lp){
     switch(msg){
     case WM_COMMAND:activate(p);if(HIWORD(wp)==BN_CLICKED)command(p,LOWORD(wp));return 0;
     case WM_NOTIFY:if(((NMHDR*)lp)->hwndFrom==p->tabs&&((NMHDR*)lp)->code==TCN_SELCHANGE){activate(p);select_tab(p,TabCtrl_GetCurSel(p->tabs));save_session();}return 0;
-    case WM_SIZE:pane_layout(p);return 0;
+    case WM_SIZE:case PANE_LAYOUT_MESSAGE:pane_layout(p);return 0;
     case WM_DRAWITEM:{DRAWITEMSTRUCT *draw=(DRAWITEMSTRUCT*)lp;return draw->hwndItem==p->tabs?draw_tab(p,draw):draw_button(draw);}
     case WM_CTLCOLOREDIT:SetTextColor((HDC)wp,RGB(236,241,249));SetBkColor((HDC)wp,RGB(22,29,42));return (LRESULT)fm.panel;
     case WM_PAINT:{PAINTSTRUCT ps;HDC dc=BeginPaint(h,&ps);RECT r;GetClientRect(h,&r);FillRect(dc,&r,fm.panel);

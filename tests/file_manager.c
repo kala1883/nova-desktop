@@ -16,6 +16,15 @@ static BOOL wait_location(Tab *t,const wchar_t *path){
 }
 static BOOL CALLBACK find_tree(HWND h,LPARAM data){wchar_t cls[64];GetClassNameW(h,cls,64);if(!lstrcmpW(cls,L"SysTreeView32"))*(BOOL*)data=TRUE;return TRUE;}
 static int live_views(void){int n=0;for(int i=0;i<4;i++)for(int j=0;j<fm.panes[i].count;j++)if(fm.panes[i].items[j]->browser)n++;return n;}
+static void assert_view_fills_host(Tab *t){
+    IShellView *view=NULL;HWND window=NULL;RECT host_rect,view_rect;
+    assert(SUCCEEDED(IExplorerBrowser_GetCurrentView(t->browser,&IID_IShellView,(void**)&view)));
+    assert(SUCCEEDED(IShellView_GetWindow(view,&window)));IShellView_Release(view);
+    assert(GetClientRect(t->host,&host_rect)&&GetWindowRect(window,&view_rect));
+    MapWindowPoints(NULL,t->host,(POINT*)&view_rect,2);
+    assert(host_rect.right>100&&host_rect.bottom>100);
+    assert(EqualRect(&host_rect,&view_rect));
+}
 int wmain(void){
     setvbuf(stdout,NULL,_IONBF,0);
     assert(SUCCEEDED(OleInitialize(NULL)));
@@ -58,6 +67,16 @@ int wmain(void){
     SendMessageW(fm.window,WM_MOUSEMOVE,MK_LBUTTON,MAKELPARAM(divider.x-scale(40),divider.y));SendMessageW(fm.window,WM_CANCELMODE,0,0);assert(!fm.splitter_dragging&&fm.splits[0][0]==resized_split);
     puts("PASS pane dividers resize, cancel safely, debounce to SQLite, and directory tabs use a clear owner-drawn selection state");
     Pane *p=&fm.panes[0];Tab *t=current(p);
+    assert(wait_location(t,root));assert_view_fills_host(t);
+    /* Reproduce the stale 100x100 browser rectangle without resizing the pane. */
+    RECT stale={0,0,100,100};assert(SUCCEEDED(IExplorerBrowser_SetRect(t->browser,NULL,stale)));
+    command(p,C_REFRESH);pump(200);assert_view_fills_host(t);
+    IShellView *created_view=NULL;
+    assert(SUCCEEDED(IExplorerBrowser_GetCurrentView(t->browser,&IID_IShellView,(void**)&created_view)));
+    event_created(&t->events,created_view);IShellView_Release(created_view);
+    assert(SUCCEEDED(IExplorerBrowser_SetRect(t->browser,NULL,stale)));
+    pump(200);assert_view_fills_host(t);
+    puts("PASS refresh and deferred view-created layout recover a stale 100x100 Shell view");
     fm.test_mode=TRUE;command(p,C_COMMAND);assert(fm.command_runs==1&&!lstrcmpW(fm.last_command,L"cd .")&&same_path(fm.last_command_directory,root));
     assert(file_command_add(&fm.commands,L"检查状态",L"git status")==1);assert(set_default_command(1));command(p,C_COMMAND);assert(fm.command_runs==2&&!lstrcmpW(fm.last_command,L"git status"));
     open_command_manager();assert(IsWindow(fm.command_window)&&SendMessageW(fm.command_list,LB_GETCOUNT,0,0)==2);DestroyWindow(fm.command_window);
@@ -119,7 +138,7 @@ int wmain(void){
     fm.layout=0;arrange();pump(400);assert(live_views()==4);
     p=&fm.panes[0];t=current(p);assert(wait_location(t,root));assert(SUCCEEDED(navigate(t,a)));assert(wait_location(t,a));
     select_tab(p,1);pump(200);assert(live_views()==5);evict_views(GetTickCount64()+VIEW_IDLE_MS+1);assert(!t->browser&&live_views()==4);
-    select_tab(p,0);assert(wait_location(t,a));command(p,C_BACK);assert(wait_location(t,root));command(p,C_FORWARD);assert(wait_location(t,a));
+    select_tab(p,0);assert(wait_location(t,a));assert_view_fills_host(t);command(p,C_BACK);assert(wait_location(t,root));command(p,C_FORWARD);assert(wait_location(t,a));assert_view_fills_host(t);
     file_manager_hide();evict_views(GetTickCount64()+VIEW_IDLE_MS+1);assert(live_views()==0);
     assert(file_manager_open(host,root));pump(300);assert(live_views()==4&&wait_location(t,a));
     /* State writes are coalesced, but closing flushes without waiting for a timer. */
