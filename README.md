@@ -28,7 +28,7 @@ required.
   directory.
 - **Workspace launcher** — organize up to 8 workspaces with 20 items each;
   reorder or move items with press-and-hold drag, search the current workspace,
-  or launch every item once.
+  launch every item once, or collapse the workspace sidebar into a compact rail.
 - **Saved batch tasks** — up to 16 named tasks, each with its own command, up to
   24 working folders, and sequential or parallel execution. Launch a selected
   task from **Settings → Batch tasks**.
@@ -79,6 +79,9 @@ place. A valid database is backed up as `nova.backup.sqlite` during startup.
   from NOVA does not delete the original file.
 - Use the `+` button to create a workspace. Rename and delete actions are in
   **Settings**. The fixed **Files** workspace cannot be renamed or deleted.
+- Use the chevron beside the NOVA wordmark, or press `Ctrl+B`, to collapse or
+  expand the workspace sidebar. The compact rail keeps workspace switching
+  available, and the chosen state is restored on the next launch.
 - Press `Ctrl+K` to search the active workspace. Clear the search before
   reordering items. In an unfiltered workspace, drag an icon onto another icon
   to reorder it, or onto another normal workspace to move it. Dragging starts

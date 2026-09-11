@@ -50,6 +50,7 @@
 #define ID_LANGUAGE_ZH 123
 #define ID_LANGUAGE_EN 124
 #define ID_BATCH_TASKS 125
+#define ID_SIDEBAR 126
 #define STATS_TIMER 1
 #define START_PIN_TIMER 2
 #define START_DESKTOP_TIMER 4
@@ -58,7 +59,7 @@ static HoldDrag hold_drag;
 static Workspace spaces[MAX_WORKSPACES];
 static int space_count=4, active_space, dpi=96;
 static HWND main_window, space_list, app_list, search_edit, name_edit;
-static HWND add_button, folder_button, launch_button, pin_button, desktop_button, settings_button, new_button, tooltip, hover_button;
+static HWND add_button, folder_button, launch_button, pin_button, desktop_button, settings_button, new_button, sidebar_button, tooltip, hover_button;
 static HWND minimize_button, maximize_button, close_button;
 static HWND files_view;
 static BOOL files_page;
@@ -68,7 +69,7 @@ static HBRUSH background, panel_brush;
 static HIMAGELIST images;
 static NOTIFYICONDATAW tray;
 static UINT taskbar_message;
-static BOOL pinned, prefer_pin, desktop_mode, prefer_desktop, editing_name, startup_enabled, test_mode, bulk_launch_running;
+static BOOL pinned, prefer_pin, desktop_mode, prefer_desktop, sidebar_collapsed, editing_name, startup_enabled, test_mode, bulk_launch_running;
 BOOL nova_english=FALSE;
 static int test_launch_count;
 static unsigned paint_generation;
@@ -87,6 +88,7 @@ static void layout_controls(void);
 static BOOL save_config(void);
 static BOOL set_pinned(BOOL value);
 static BOOL set_desktop_mode(BOOL value);
+static void set_sidebar_collapsed(BOOL value);
 static void refresh_spaces(void);
 static void launch_workspace(void);
 static void error_message(const wchar_t *message);
@@ -172,6 +174,7 @@ static BOOL save_config(void){
     BOOL ok=store_save_workspaces(spaces,space_count,active_space,prefer_pin);
     if(ok)ok=store_set_int(L"app",L"Nova",L"DesktopMode",prefer_desktop);
     if(ok)ok=store_set_int(L"app",L"Nova",L"Language",nova_english?1:0);
+    if(ok)ok=store_set_int(L"app",L"Nova",L"SidebarCollapsed",sidebar_collapsed?1:0);
     if(!ok)set_notice(store_error());
     return ok;
 }
@@ -220,6 +223,7 @@ static void load_config(void){
     if(active_space<0||active_space>=space_count)active_space=0;
     prefer_pin=store_int(L"app",L"Nova",L"AlwaysOnTop",0)!=0;
     prefer_desktop=store_int(L"app",L"Nova",L"DesktopMode",0)!=0;
+    sidebar_collapsed=store_int(L"app",L"Nova",L"SidebarCollapsed",0)!=0;
     if(prefer_desktop)prefer_pin=FALSE;
     if(!ensure_items(active_space))return;
     if(repair_loaded_names()){
@@ -314,21 +318,25 @@ static void text(HDC dc,const wchar_t *str,RECT rect,HFONT font,COLORREF color,U
     HFONT old=SelectObject(dc,font);SetBkMode(dc,TRANSPARENT);SetTextColor(dc,color);DrawTextW(dc,str,-1,&rect,flags|DT_NOPREFIX);SelectObject(dc,old);
 }
 static RECT box(int x,int y,int w,int h){RECT r={x,y,x+w,y+h};return r;}
+static int sidebar_width(void){return px(sidebar_collapsed?64:220);}
+static int content_left(void){return sidebar_width()+px(34);}
 static void paint(HDC dc,RECT client) {
     RECT title=box(0,0,client.right,caption_height());HBRUSH titlebrush=CreateSolidBrush(RGB(32,33,33));FillRect(dc,&title,titlebrush);DeleteObject(titlebrush);
     text(dc,APP_NAME,box(px(12),0,client.right-px(296),caption_height()),small_font,TEXT,DT_SINGLELINE|DT_VCENTER|DT_END_ELLIPSIS);
     int saved=SaveDC(dc);IntersectClipRect(dc,0,caption_height(),client.right,client.bottom);
     SetViewportOrgEx(dc,0,caption_height(),NULL);client.bottom-=caption_height();
-    FillRect(dc,&client,background);RECT side=box(0,0,px(220),client.bottom);FillRect(dc,&side,panel_brush);
-    text(dc,L"NOVA",box(px(28),px(27),px(164),px(38)),brand_font,TEXT,DT_LEFT);
-    text(dc,nova_text(L"工作区",L"WORKSPACES"),box(px(28),px(78),px(160),px(24)),small_font,MUTED,DT_LEFT);
-    int left=px(254),width=client.right-left-px(32);
+    FillRect(dc,&client,background);RECT side=box(0,0,sidebar_width(),client.bottom);FillRect(dc,&side,panel_brush);
+    if(!sidebar_collapsed){
+        text(dc,L"NOVA",box(px(28),px(27),px(138),px(38)),brand_font,TEXT,DT_LEFT);
+        text(dc,nova_text(L"工作区",L"WORKSPACES"),box(px(28),px(78),px(126),px(24)),small_font,MUTED,DT_LEFT);
+    }
+    int left=content_left(),width=client.right-left-px(32);
     text(dc,active_space==0?nova_text(L"目录",L"Files"):spaces[active_space].name,box(left,px(27),width-px(148),px(47)),title_font,TEXT,DT_LEFT|DT_END_ELLIPSIS);
     text(dc,nova_text(L"启动项",L"LAUNCH ITEMS"),box(left,px(157),width,px(25)),body_font,TEXT,DT_LEFT);
     RECT status=box(left,client.bottom-px(56),width,px(50));FillRect(dc,&status,background);
     text(dc,notice,box(left,client.bottom-px(49),width,px(23)),small_font,MUTED,DT_LEFT|DT_SINGLELINE|DT_END_ELLIPSIS);
     wchar_t metrics[80];swprintf(metrics,80,nova_text(L"系统 CPU %d%%    内存 %d%%",L"System CPU %d%%    Memory %d%%"),system_cpu,memory_load);
-    text(dc,metrics,box(px(20),client.bottom-px(38),px(188),px(25)),small_font,MUTED,DT_LEFT);
+    if(!sidebar_collapsed)text(dc,metrics,box(px(20),client.bottom-px(38),px(188),px(25)),small_font,MUTED,DT_LEFT);
     RestoreDC(dc,saved);
 }
 static void create_fonts(void) {
@@ -355,6 +363,7 @@ static void apply_language(BOOL english){
     nova_english=english;
     if(!main_window)return;
     SetWindowTextW(new_button,nova_text(L"新建工作区",L"New workspace"));
+    SetWindowTextW(sidebar_button,sidebar_collapsed?nova_text(L"展开侧边栏 (Ctrl+B)",L"Expand sidebar (Ctrl+B)"):nova_text(L"折叠侧边栏 (Ctrl+B)",L"Collapse sidebar (Ctrl+B)"));
     SetWindowTextW(settings_button,nova_text(L"设置",L"Settings"));
     SetWindowTextW(pin_button,pinned?nova_text(L"取消置顶 (F11)",L"Unpin (F11)"):nova_text(L"窗口置顶 (F11)",L"Always on top (F11)"));
     SetWindowTextW(desktop_button,desktop_mode?nova_text(L"退出桌面围栏",L"Leave desktop fence"):nova_text(L"放到桌面",L"Place on desktop"));
@@ -368,6 +377,7 @@ static void apply_language(BOOL english){
     update_tooltip(pin_button,nova_text(L"置顶 / 取消置顶 (F11)",L"Always on top / unpin (F11)"));
     update_tooltip(settings_button,nova_text(L"设置：批量任务、语言、开机启动、工作区管理",L"Settings: batch tasks, language, startup, and workspace management"));
     update_tooltip(new_button,nova_text(L"新建工作区（最多 8 个）",L"New workspace (up to 8)"));
+    update_tooltip(sidebar_button,sidebar_collapsed?nova_text(L"展开侧边栏 (Ctrl+B)",L"Expand sidebar (Ctrl+B)"):nova_text(L"折叠侧边栏 (Ctrl+B)",L"Collapse sidebar (Ctrl+B)"));
     update_tooltip(launch_button,nova_text(L"将当前工作区的每个项目各打开一次",L"Open every item in this workspace once"));
     update_tooltip(minimize_button,nova_text(L"最小化",L"Minimize"));update_tooltip(maximize_button,nova_text(L"最大化 / 还原",L"Maximize / restore"));update_tooltip(close_button,nova_text(L"关闭",L"Close"));
     refresh_spaces();
@@ -379,14 +389,19 @@ static void apply_language(BOOL english){
 }
 static void draw_icon(DRAWITEMSTRUCT *d){
     BOOL active=(d->CtlID==ID_PIN&&pinned)||(d->CtlID==ID_DESKTOP&&desktop_mode);
-    BOOL caption=d->CtlID!=ID_NEW;
-    COLORREF fill=active?RGB(53,77,122):(hover_button==d->hwndItem||(d->itemState&ODS_SELECTED))?RGB(39,51,71):d->CtlID==ID_NEW?PANEL:BG;
+    BOOL panel_icon=d->CtlID==ID_NEW||d->CtlID==ID_SIDEBAR;
+    BOOL caption=!panel_icon;
+    COLORREF fill=active?RGB(53,77,122):(hover_button==d->hwndItem||(d->itemState&ODS_SELECTED))?RGB(39,51,71):panel_icon?PANEL:BG;
     if(caption)fill=active?RGB(59,70,82):(hover_button==d->hwndItem||(d->itemState&ODS_SELECTED))?(d->CtlID==ID_CLOSE?RGB(196,43,28):RGB(57,58,58)):RGB(32,33,33);
     HBRUSH bg=CreateSolidBrush(fill);FillRect(d->hDC,&d->rcItem,bg);DeleteObject(bg);
     COLORREF color=(d->itemState&ODS_DISABLED)?RGB(112,128,150):active?RGB(193,213,255):TEXT;
     HPEN pen=CreatePen(PS_SOLID,caption?px(1):px(2),color);HGDIOBJ oldpen=SelectObject(d->hDC,pen),oldbrush=SelectObject(d->hDC,GetStockObject(NULL_BRUSH));
     int x=(d->rcItem.left+d->rcItem.right)/2,y=(d->rcItem.top+d->rcItem.bottom)/2;
     if(d->CtlID==ID_NEW){MoveToEx(d->hDC,x-px(7),y,NULL);LineTo(d->hDC,x+px(7),y);MoveToEx(d->hDC,x,y-px(7),NULL);LineTo(d->hDC,x,y+px(7));}
+    else if(d->CtlID==ID_SIDEBAR){
+        int direction=sidebar_collapsed?1:-1;
+        MoveToEx(d->hDC,x-direction*px(3),y-px(6),NULL);LineTo(d->hDC,x+direction*px(3),y);LineTo(d->hDC,x-direction*px(3),y+px(6));
+    }
     else if(d->CtlID==ID_MINIMIZE){MoveToEx(d->hDC,x-px(5),y,NULL);LineTo(d->hDC,x+px(5),y);}
     else if(d->CtlID==ID_CLOSE){MoveToEx(d->hDC,x-px(5),y-px(5),NULL);LineTo(d->hDC,x+px(5),y+px(5));MoveToEx(d->hDC,x+px(5),y-px(5),NULL);LineTo(d->hDC,x-px(5),y+px(5));}
     else if(d->CtlID==ID_MAXIMIZE){
@@ -414,9 +429,11 @@ static void draw_icon(DRAWITEMSTRUCT *d){
 static void move(HWND h,int x,int y,int w,int height){MoveWindow(h,x,y+caption_height(),w,height,TRUE);}
 static void layout_controls(void) {
     if(!app_list)return;
-    RECT r;GetClientRect(main_window,&r);r.bottom-=caption_height();int left=px(254),width=r.right-left-px(32);
-    move(space_list,px(16),px(112),px(188),r.bottom-px(170));
-    move(new_button,px(162),px(68),px(40),px(36));
+    RECT r;GetClientRect(main_window,&r);r.bottom-=caption_height();int left=content_left(),width=r.right-left-px(32);
+    int list_x=px(sidebar_collapsed?8:16),list_width=sidebar_width()-list_x-px(sidebar_collapsed?8:16);
+    move(space_list,list_x,px(112),list_width,r.bottom-px(sidebar_collapsed?128:170));
+    move(sidebar_button,px(sidebar_collapsed?12:174),px(sidebar_collapsed?20:27),px(36),px(36));
+    move(new_button,px(sidebar_collapsed?12:162),px(68),px(40),px(36));
     HWND caption_buttons[]={desktop_button,pin_button,settings_button,minimize_button,maximize_button,close_button};
     for(int i=0;i<6;i++)MoveWindow(caption_buttons[i],r.right-px(46)*(6-i),0,px(46),caption_height(),TRUE);
     SetWindowTextW(maximize_button,IsZoomed(main_window)?nova_text(L"还原",L"Restore"):nova_text(L"最大化",L"Maximize"));
@@ -425,9 +442,17 @@ static void layout_controls(void) {
     move(add_button,r.right-px(236),px(97),px(96),px(38));move(folder_button,r.right-px(132),px(97),px(100),px(38));
     move(app_list,left,px(190),width,r.bottom-px(255));
     move(name_edit,left,px(32),width-px(104),px(39));
-    if(IsWindow(files_view))move(files_view,px(228),0,r.right-px(236),r.bottom-px(8));
+    if(IsWindow(files_view))move(files_view,sidebar_width()+px(8),0,r.right-sidebar_width()-px(16),r.bottom-px(8));
     if(files_page)file_manager_update_visibility();
     InvalidateRect(main_window,NULL,FALSE);
+}
+static void set_sidebar_collapsed(BOOL value){
+    if(value==sidebar_collapsed)return;
+    if(hold_drag.dragging||hold_drag.armed)hold_drag_cancel(&hold_drag);
+    end_name_edit(TRUE);sidebar_collapsed=value;
+    SetWindowTextW(sidebar_button,sidebar_collapsed?nova_text(L"展开侧边栏 (Ctrl+B)",L"Expand sidebar (Ctrl+B)"):nova_text(L"折叠侧边栏 (Ctrl+B)",L"Collapse sidebar (Ctrl+B)"));
+    update_tooltip(sidebar_button,sidebar_collapsed?nova_text(L"展开侧边栏 (Ctrl+B)",L"Expand sidebar (Ctrl+B)"):nova_text(L"折叠侧边栏 (Ctrl+B)",L"Collapse sidebar (Ctrl+B)"));
+    save_config();layout_controls();InvalidateRect(main_window,NULL,TRUE);
 }
 static void refresh_spaces(void) {
     SendMessageW(space_list,LB_RESETCONTENT,0,0);
@@ -579,13 +604,14 @@ static void delete_space(void){
 static LRESULT CALLBACK child_proc(HWND hwnd,UINT msg,WPARAM wp,LPARAM lp,UINT_PTR id,DWORD_PTR data){
     (void)id;(void)data;
     if(hwnd==app_list&&hold_drag_message(&hold_drag,msg,wp,lp))return 0;
-    if(hwnd==pin_button||hwnd==desktop_button||hwnd==settings_button||hwnd==new_button||hwnd==minimize_button||hwnd==maximize_button||hwnd==close_button){
+    if(hwnd==pin_button||hwnd==desktop_button||hwnd==settings_button||hwnd==new_button||hwnd==sidebar_button||hwnd==minimize_button||hwnd==maximize_button||hwnd==close_button){
         if(msg==WM_MOUSEMOVE&&hover_button!=hwnd){hover_button=hwnd;TRACKMOUSEEVENT t={sizeof(t),TME_LEAVE,hwnd,0};TrackMouseEvent(&t);InvalidateRect(hwnd,NULL,TRUE);}
         if(msg==WM_MOUSELEAVE){if(hover_button==hwnd)hover_button=NULL;InvalidateRect(hwnd,NULL,TRUE);}
     }
     if(msg==WM_DROPFILES){handle_drop((HDROP)wp);return 0;}
     if(msg==WM_KEYDOWN){
         if(wp==VK_F11){set_pinned(!pinned);return 0;}
+        if(wp=='B'&&(GetKeyState(VK_CONTROL)&0x8000)){set_sidebar_collapsed(!sidebar_collapsed);return 0;}
         if(wp=='K'&&(GetKeyState(VK_CONTROL)&0x8000)){SetFocus(search_edit);return 0;}
         if(hwnd==name_edit&&wp==VK_RETURN){end_name_edit(TRUE);return 0;}
         if(hwnd==name_edit&&wp==VK_ESCAPE){end_name_edit(FALSE);return 0;}
@@ -662,6 +688,7 @@ static LRESULT CALLBACK window_proc(HWND hwnd,UINT msg,WPARAM wp,LPARAM lp){
         main_window=hwnd;HDC dc=GetDC(hwnd);dpi=GetDeviceCaps(dc,LOGPIXELSX);ReleaseDC(hwnd,dc);create_fonts();
         space_list=control(L"LISTBOX",nova_text(L"工作区",L"Workspaces"),LBS_NOTIFY|LBS_OWNERDRAWFIXED|LBS_HASSTRINGS|WS_VSCROLL,ID_SPACES);SendMessageW(space_list,LB_SETITEMHEIGHT,0,px(44));
         new_button=button(nova_text(L"新建工作区",L"New workspace"),ID_NEW);
+        sidebar_button=button(sidebar_collapsed?nova_text(L"展开侧边栏 (Ctrl+B)",L"Expand sidebar (Ctrl+B)"):nova_text(L"折叠侧边栏 (Ctrl+B)",L"Collapse sidebar (Ctrl+B)"),ID_SIDEBAR);
         startup_enabled=read_startup();settings_button=button(nova_text(L"设置",L"Settings"),ID_SETTINGS);pin_button=button(nova_text(L"窗口置顶 (F11)",L"Always on top (F11)"),ID_PIN);desktop_button=button(nova_text(L"放到桌面",L"Place on desktop"),ID_DESKTOP);
         minimize_button=button(nova_text(L"最小化",L"Minimize"),ID_MINIMIZE);maximize_button=button(nova_text(L"最大化",L"Maximize"),ID_MAXIMIZE);close_button=button(nova_text(L"关闭",L"Close"),ID_CLOSE);
         search_edit=control(L"EDIT",L"",ES_AUTOHSCROLL,ID_SEARCH);SendMessageW(search_edit,EM_SETCUEBANNER,TRUE,(LPARAM)nova_text(L"搜索当前工作区  Ctrl+K",L"Search this workspace  Ctrl+K"));SendMessageW(search_edit,EM_SETLIMITTEXT,127,0);
@@ -670,10 +697,11 @@ static LRESULT CALLBACK window_proc(HWND hwnd,UINT msg,WPARAM wp,LPARAM lp){
         hold_drag_init(&hold_drag,app_list,space_list,moved_item,NULL);
         ListView_SetBkColor(app_list,BG);ListView_SetTextBkColor(app_list,BG);ListView_SetTextColor(app_list,TEXT);ListView_SetExtendedListViewStyle(app_list,LVS_EX_DOUBLEBUFFER|LVS_EX_INFOTIP);ListView_SetIconSpacing(app_list,px(136),px(112));SetWindowTheme(app_list,L"DarkMode_Explorer",NULL);
         name_edit=control(L"EDIT",L"",ES_AUTOHSCROLL,ID_NAME);SendMessageW(name_edit,EM_SETLIMITTEXT,39,0);ShowWindow(name_edit,SW_HIDE);
-        HWND children[]={space_list,new_button,settings_button,pin_button,desktop_button,minimize_button,maximize_button,close_button,search_edit,add_button,folder_button,launch_button,app_list,name_edit};
+        HWND children[]={space_list,new_button,sidebar_button,settings_button,pin_button,desktop_button,minimize_button,maximize_button,close_button,search_edit,add_button,folder_button,launch_button,app_list,name_edit};
         for(unsigned i=0;i<sizeof(children)/sizeof(children[0]);i++){SetWindowSubclass(children[i],child_proc,1,0);DragAcceptFiles(children[i],TRUE);}DragAcceptFiles(hwnd,TRUE);
         tooltip=CreateWindowExW(WS_EX_TOPMOST,TOOLTIPS_CLASSW,NULL,WS_POPUP|TTS_ALWAYSTIP|TTS_NOPREFIX,CW_USEDEFAULT,CW_USEDEFAULT,CW_USEDEFAULT,CW_USEDEFAULT,hwnd,NULL,GetModuleHandleW(NULL),NULL);
         add_tooltip(desktop_button,nova_text(L"桌面围栏 / 恢复普通窗口",L"Desktop fence / restore normal window"));add_tooltip(pin_button,nova_text(L"置顶 / 取消置顶 (F11)",L"Always on top / unpin (F11)"));add_tooltip(settings_button,nova_text(L"设置：批量任务、语言、开机启动、工作区管理",L"Settings: batch tasks, language, startup, and workspace management"));add_tooltip(new_button,nova_text(L"新建工作区（最多 8 个）",L"New workspace (up to 8)"));
+        add_tooltip(sidebar_button,sidebar_collapsed?nova_text(L"展开侧边栏 (Ctrl+B)",L"Expand sidebar (Ctrl+B)"):nova_text(L"折叠侧边栏 (Ctrl+B)",L"Collapse sidebar (Ctrl+B)"));
         add_tooltip(launch_button,nova_text(L"将当前工作区的每个项目各打开一次",L"Open every item in this workspace once"));
         add_tooltip(minimize_button,nova_text(L"最小化",L"Minimize"));add_tooltip(maximize_button,nova_text(L"最大化 / 还原",L"Maximize / restore"));add_tooltip(close_button,nova_text(L"关闭",L"Close"));
         refresh_spaces();refresh_apps();layout_controls();sample_stats();SetTimer(hwnd,STATS_TIMER,3000,NULL);if(prefer_desktop)SetTimer(hwnd,START_DESKTOP_TIMER,800,NULL);else if(prefer_pin)SetTimer(hwnd,START_PIN_TIMER,800,NULL);
@@ -690,7 +718,7 @@ static LRESULT CALLBACK window_proc(HWND hwnd,UINT msg,WPARAM wp,LPARAM lp){
     case WM_CTLCOLOREDIT:case WM_CTLCOLORLISTBOX:case WM_CTLCOLORSTATIC:SetTextColor((HDC)wp,TEXT);SetBkColor((HDC)wp,PANEL);return (LRESULT)panel_brush;
     case WM_DRAWITEM:{
         DRAWITEMSTRUCT *d=(DRAWITEMSTRUCT*)lp;wchar_t caption[80];BOOL selected=(d->itemState&ODS_SELECTED)!=0;
-        if(d->CtlID==ID_PIN||d->CtlID==ID_DESKTOP||d->CtlID==ID_SETTINGS||d->CtlID==ID_NEW||d->CtlID==ID_MINIMIZE||d->CtlID==ID_MAXIMIZE||d->CtlID==ID_CLOSE){draw_icon(d);return TRUE;}
+        if(d->CtlID==ID_PIN||d->CtlID==ID_DESKTOP||d->CtlID==ID_SETTINGS||d->CtlID==ID_NEW||d->CtlID==ID_SIDEBAR||d->CtlID==ID_MINIMIZE||d->CtlID==ID_MAXIMIZE||d->CtlID==ID_CLOSE){draw_icon(d);return TRUE;}
         COLORREF fill=selected?RGB(48,65,95):PANEL;
         if(d->CtlID==ID_ADD||d->CtlID==ID_LAUNCH_ALL)fill=selected?RGB(76,103,159):RGB(53,77,122);
         BOOL drop_hover=d->CtlID==ID_SPACES&&hold_drag.dragging&&hold_drag.hover_workspace==(int)d->itemID;
@@ -698,8 +726,10 @@ static LRESULT CALLBACK window_proc(HWND hwnd,UINT msg,WPARAM wp,LPARAM lp){
         else GetWindowTextW(d->hwndItem,caption,80);
         HBRUSH b=CreateSolidBrush(fill);FillRect(d->hDC,&d->rcItem,b);DeleteObject(b);
         if(drop_hover){COLORREF edge=d->itemID?RGB(193,213,255):RGB(226,118,118);HPEN pen=CreatePen(PS_SOLID,px(2),edge);HGDIOBJ oldpen=SelectObject(d->hDC,pen),oldbrush=SelectObject(d->hDC,GetStockObject(NULL_BRUSH));RECT outline=d->rcItem;InflateRect(&outline,-px(1),-px(1));Rectangle(d->hDC,outline.left,outline.top,outline.right,outline.bottom);SelectObject(d->hDC,oldbrush);SelectObject(d->hDC,oldpen);DeleteObject(pen);}
-        RECT t=d->rcItem;t.left+=px(12);t.right-=px(8);
-        text(d->hDC,caption,t,body_font,(d->itemState&ODS_DISABLED)?RGB(112,128,150):TEXT,DT_SINGLELINE|DT_VCENTER|DT_END_ELLIPSIS|(d->CtlID==ID_SPACES?DT_LEFT:DT_CENTER));
+        RECT t=d->rcItem;t.left+=px(sidebar_collapsed&&d->CtlID==ID_SPACES?2:12);t.right-=px(sidebar_collapsed&&d->CtlID==ID_SPACES?2:8);
+        wchar_t compact[3]={0};const wchar_t *label=caption;UINT alignment=d->CtlID==ID_SPACES?DT_LEFT:DT_CENTER;
+        if(sidebar_collapsed&&d->CtlID==ID_SPACES){compact[0]=caption[0];if(caption[0]>=0xd800&&caption[0]<=0xdbff&&caption[1]>=0xdc00&&caption[1]<=0xdfff)compact[1]=caption[1];label=compact;alignment=DT_CENTER;}
+        text(d->hDC,label,t,body_font,(d->itemState&ODS_DISABLED)?RGB(112,128,150):TEXT,DT_SINGLELINE|DT_VCENTER|DT_END_ELLIPSIS|alignment);
         if(d->itemState&ODS_FOCUS){RECT f=d->rcItem;InflateRect(&f,-3,-3);DrawFocusRect(d->hDC,&f);}return TRUE;
     }
     case WM_COMMAND:{int id=LOWORD(wp);
@@ -710,6 +740,7 @@ static LRESULT CALLBACK window_proc(HWND hwnd,UINT msg,WPARAM wp,LPARAM lp){
         if(id==ID_SETTINGS){settings_menu();return 0;}
         if(id==ID_BATCH_TASKS){batch_tasks_open(main_window);return 0;}
         if(id==ID_DESKTOP){set_desktop_mode(!desktop_mode);return 0;}
+        if(id==ID_SIDEBAR){set_sidebar_collapsed(!sidebar_collapsed);return 0;}
         if(id==ID_LAUNCH_ALL){launch_workspace();return 0;}
         if(id==ID_FILES){if(active_space!=0){active_space=0;save_config();refresh_spaces();}open_file_manager();return 0;}
         if(id==ID_SPACES&&HIWORD(wp)==LBN_SELCHANGE){end_name_edit(TRUE);int i=(int)SendMessageW(space_list,LB_GETCURSEL,0,0);if(i>=0){active_space=i;save_config();SetWindowTextW(search_edit,L"");if(active_space==0)open_file_manager();else{if(files_page)show_workspace_page();refresh_apps();}}return 0;}
@@ -737,7 +768,7 @@ static LRESULT CALLBACK window_proc(HWND hwnd,UINT msg,WPARAM wp,LPARAM lp){
     }
     case WM_CONTEXTMENU:if((HWND)wp==app_list&&selected_app()>=0){HMENU m=CreatePopupMenu();AppendMenuW(m,MF_STRING,ID_REMOVE,nova_text(L"从工作区移除",L"Remove from workspace"));POINT p;GetCursorPos(&p);UINT id=TrackPopupMenu(m,TPM_RETURNCMD,p.x,p.y,0,hwnd,NULL);DestroyMenu(m);if(id==ID_REMOVE)remove_app();}return 0;
     case WM_DROPFILES:handle_drop((HDROP)wp);return 0;
-    case WM_KEYDOWN:if(wp==VK_F11)set_pinned(!pinned);if(wp==VK_ESCAPE&&pinned)set_pinned(FALSE);return 0;
+    case WM_KEYDOWN:if(wp==VK_F11)set_pinned(!pinned);if(wp=='B'&&(GetKeyState(VK_CONTROL)&0x8000))set_sidebar_collapsed(!sidebar_collapsed);if(wp==VK_ESCAPE&&pinned)set_pinned(FALSE);return 0;
     case WM_TIMER:
         if(wp==START_DESKTOP_TIMER){KillTimer(hwnd,START_DESKTOP_TIMER);set_desktop_mode(TRUE);return 0;}
         if(wp==START_PIN_TIMER){KillTimer(hwnd,START_PIN_TIMER);set_pinned(TRUE);return 0;}if(IsWindowVisible(hwnd)&&!IsIconic(hwnd)){sample_stats();RECT r;GetClientRect(hwnd,&r);r.top=r.bottom-px(60);InvalidateRect(hwnd,&r,FALSE);}return 0;
@@ -776,6 +807,7 @@ int WINAPI wWinMain(HINSTANCE instance,HINSTANCE previous,PWSTR command,int show
     if(active_space==0)open_file_manager();
     MSG msg={0};while(GetMessageW(&msg,NULL,0,0)>0){
         if(msg.message==WM_KEYDOWN&&msg.wParam==VK_F11){set_pinned(!pinned);continue;}
+        if(msg.message==WM_KEYDOWN&&msg.wParam=='B'&&(GetKeyState(VK_CONTROL)&0x8000)&&GetAncestor(msg.hwnd,GA_ROOT)==hwnd){set_sidebar_collapsed(!sidebar_collapsed);continue;}
         if(msg.message==WM_KEYDOWN&&msg.wParam=='K'&&(GetKeyState(VK_CONTROL)&0x8000)&&files_page)show_workspace_page();
         if(file_manager_message(&msg))continue;
         HWND batch_window=batch_tasks_window();if(batch_window&&IsDialogMessageW(batch_window,&msg))continue;

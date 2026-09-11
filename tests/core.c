@@ -53,10 +53,10 @@ int wmain(int argc,wchar_t **argv) {
     GetTempPathW(MAX_PATH,tempdir);swprintf(dir,MAX_PATH,L"%lsnova-test-%lu",tempdir,GetCurrentProcessId());
     assert(CreateDirectoryW(dir,NULL));swprintf(config_path,MAX_PATH,L"%ls\\config.ini",dir);
     WritePrivateProfileStringW(L"Fixture",L"Preserve",L"legacy",config_path);
-    defaults();lstrcpyW(spaces[0].name,L"中文工作区 演示");active_space=2;prefer_pin=TRUE;
+    defaults();lstrcpyW(spaces[0].name,L"中文工作区 演示");active_space=2;prefer_pin=TRUE;sidebar_collapsed=TRUE;
     assert(save_config());ZeroMemory(spaces,sizeof(spaces));active_space=0;prefer_pin=FALSE;load_config();
-    assert(lstrcmpW(spaces[0].name,L"目录")==0&&active_space==2&&prefer_pin);
-    assert(spaces[0].app_count==0);puts("PASS fixed directory workspace, UTF-16 config and pin preference");
+    assert(lstrcmpW(spaces[0].name,L"目录")==0&&active_space==2&&prefer_pin&&sidebar_collapsed);
+    assert(spaces[0].app_count==0);puts("PASS fixed directory workspace, UTF-16 config, pin and sidebar preferences");
     space_count=5;ZeroMemory(&spaces[4],sizeof(spaces[4]));spaces[4].items_loaded=1;lstrcpyW(spaces[4].name,L"??? 5");
     assert(repair_workspace_name(4)&&lstrcmpW(spaces[4].name,L"工作区 5")==0);assert(save_config());
     ZeroMemory(spaces,sizeof(spaces));load_config();assert(space_count==5&&lstrcmpW(spaces[4].name,L"工作区 5")==0);
@@ -66,6 +66,7 @@ int wmain(int argc,wchar_t **argv) {
     assert(store_set_int(L"app",L"Nova",L"Language",1));nova_english=FALSE;load_config();
     assert(nova_english&&!lstrcmpW(nova_text(L"中文",L"English"),L"English"));
     nova_english=FALSE;assert(store_set_int(L"app",L"Nova",L"Language",0));
+    sidebar_collapsed=FALSE;assert(save_config());
     puts("PASS persisted Simplified Chinese / English language preference");
     active_space=3;assert(ensure_items(3));spaces[3].app_count=0;
     swprintf(path,MAX_PATH,L"%ls\\启动文件.cmd",dir);
@@ -132,7 +133,15 @@ int wmain(int argc,wchar_t **argv) {
         else assert(set_pinned(FALSE));
         assert(!GetDlgItem(window,ID_STARTUP)&&!GetDlgItem(window,ID_RENAME)&&!GetDlgItem(window,ID_DELETE));
         assert(!GetDlgItem(window,ID_FILES));
-        assert(GetDlgItem(window,ID_SETTINGS)&&GetDlgItem(window,ID_NEW)&&GetDlgItem(window,ID_DESKTOP)&&GetDlgItem(window,ID_LAUNCH_ALL));
+        assert(GetDlgItem(window,ID_SETTINGS)&&GetDlgItem(window,ID_NEW)&&GetDlgItem(window,ID_SIDEBAR)&&GetDlgItem(window,ID_DESKTOP)&&GetDlgItem(window,ID_LAUNCH_ALL));
+        RECT expanded_apps,collapsed_apps;GetWindowRect(app_list,&expanded_apps);
+        if(GetEnvironmentVariableW(L"NOVA_TEST_CAPTURE",NULL,0))capture_batch(window,L"build\\sidebar-expanded.bmp");
+        SendMessageW(window,WM_COMMAND,ID_SIDEBAR,0);GetWindowRect(app_list,&collapsed_apps);
+        if(GetEnvironmentVariableW(L"NOVA_TEST_CAPTURE",NULL,0))capture_batch(window,L"build\\sidebar-collapsed.bmp");
+        wchar_t sidebar_name[80];GetWindowTextW(sidebar_button,sidebar_name,80);
+        assert(sidebar_collapsed&&collapsed_apps.left<expanded_apps.left&&wcsstr(sidebar_name,L"展开"));
+        SendMessageW(window,WM_COMMAND,ID_SIDEBAR,0);assert(!sidebar_collapsed&&store_int(L"app",L"Nova",L"SidebarCollapsed",1)==0);
+        puts("PASS collapsible sidebar expands content, remains keyboard-accessible and persists its state");
         BatchTaskList *shortcut_tasks=calloc(1,sizeof(*shortcut_tasks));assert(shortcut_tasks);shortcut_tasks->count=2;
         for(int task_index=0;task_index<2;task_index++){
             BatchTask *value=&shortcut_tasks->tasks[task_index];swprintf(value->name,BATCH_NAME_CAP,L"Task %d",task_index+1);lstrcpyW(value->command,task_index?L"exit /b 0":L"exit /b 17");value->mode=task_index;
