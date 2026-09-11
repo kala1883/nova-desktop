@@ -166,19 +166,42 @@ int wmain(int argc,wchar_t **argv) {
         SendMessageW(batch_window,WM_CLOSE,0,0);assert(!batch_tasks_window());
         puts("PASS independent named tasks, command editing, mode selection and task switching through native controls");
         puts("PASS settings opens the localized batch-task manager without running commands");
-        RECT first_icon;assert(ListView_GetItemRect(app_list,0,&first_icon,LVIR_ICON));hold_drag_message(&hold_drag,WM_LBUTTONDOWN,0,MAKELPARAM((first_icon.left+first_icon.right)/2,(first_icon.top+first_icon.bottom)/2));assert(hold_drag.armed&&hold_drag.left_down&&hold_drag.source==0&&GetCapture()==app_list);
+        RECT first_icon;assert(ListView_GetItemRect(app_list,0,&first_icon,LVIR_ICON));hold_drag_message(&hold_drag,WM_LBUTTONDOWN,0,MAKELPARAM((first_icon.left+first_icon.right)/2,(first_icon.top+first_icon.bottom)/2));assert(hold_drag.armed&&hold_drag.left_down&&hold_drag.source==0&&hold_drag.source_row==0&&GetCapture()==app_list);
         assert(hold_drag_message(&hold_drag,WM_TIMER,HOLD_DRAG_TIMER_ID,0)&&hold_drag.dragging);assert(ListView_GetItemState(app_list,0,LVIS_DROPHILITED)&LVIS_DROPHILITED);hold_drag_cancel(&hold_drag);
+        test_launch_count=0;LPARAM icon_point=MAKELPARAM((first_icon.left+first_icon.right)/2,(first_icon.top+first_icon.bottom)/2);
+        SendMessageW(app_list,WM_LBUTTONDOWN,MK_LBUTTON,icon_point);SendMessageW(app_list,WM_LBUTTONUP,0,icon_point);SendMessageW(app_list,WM_LBUTTONDBLCLK,MK_LBUTTON,icon_point);SendMessageW(app_list,WM_LBUTTONUP,0,icon_point);
+        assert(test_launch_count==1&&!hold_drag.armed&&!hold_drag.dragging);
+        /* Crossing the native drag threshold reorders immediately; waiting for the hold timer is optional. */
+        assert(active_space==3&&insert_path(dir)==1&&save_config());SetWindowTextW(search_edit,L"");refresh_apps();assert(spaces[3].app_count>=2&&ListView_GetItemCount(app_list)>=2);
+        Workspace reorder_before=spaces[3];RECT second_icon;assert(ListView_GetItemRect(app_list,1,&second_icon,LVIR_ICON));LPARAM second_point=MAKELPARAM((second_icon.left+second_icon.right)/2,(second_icon.top+second_icon.bottom)/2);
+        SendMessageW(app_list,WM_LBUTTONDOWN,MK_LBUTTON,icon_point);SendMessageW(app_list,WM_MOUSEMOVE,MK_LBUTTON,second_point);
+        assert(hold_drag.dragging&&(ListView_GetItemState(app_list,1,LVIS_DROPHILITED)&LVIS_DROPHILITED));SendMessageW(app_list,WM_LBUTTONUP,0,second_point);
+        assert(!wcscmp(spaces[3].apps[0].target,reorder_before.apps[1].target)&&!wcscmp(spaces[3].apps[1].target,reorder_before.apps[0].target));
+        spaces[3]=reorder_before;assert(save_config());refresh_apps();assert(ListView_GetItemRect(app_list,0,&first_icon,LVIR_ICON));
+        /* Exercise the complete captured-pointer path into another ordinary workspace. */
+        assert(active_space==3&&ensure_items(1));Workspace drag_source_before=spaces[3],drag_target_before=spaces[1];
+        wchar_t moved_target[NOVA_PATH_CAP];lstrcpynW(moved_target,spaces[3].apps[0].target,NOVA_PATH_CAP);DWORD moved_attributes=GetFileAttributesW(moved_target);
+        RECT target_item;assert(SendMessageW(space_list,LB_GETITEMRECT,1,(LPARAM)&target_item)!=LB_ERR);POINT target_point={(target_item.left+target_item.right)/2,(target_item.top+target_item.bottom)/2};
+        ClientToScreen(space_list,&target_point);ScreenToClient(app_list,&target_point);
+        SendMessageW(app_list,WM_LBUTTONDOWN,MK_LBUTTON,MAKELPARAM((first_icon.left+first_icon.right)/2,(first_icon.top+first_icon.bottom)/2));SendMessageW(app_list,WM_TIMER,HOLD_DRAG_TIMER_ID,0);
+        SendMessageW(app_list,WM_MOUSEMOVE,MK_LBUTTON,MAKELPARAM(target_point.x,target_point.y));assert(hold_drag.hover_workspace==1);
+        SendMessageW(app_list,WM_LBUTTONUP,0,MAKELPARAM(target_point.x,target_point.y));
+        assert(spaces[3].app_count==drag_source_before.app_count-1&&spaces[1].app_count==drag_target_before.app_count+1);
+        assert(!wcscmp(spaces[1].apps[spaces[1].app_count-1].target,moved_target)&&GetFileAttributesW(moved_target)==moved_attributes);
+        assert(!hold_drag.armed&&!hold_drag.dragging&&hold_drag.hover_workspace==-1);
+        spaces[3]=drag_source_before;spaces[1]=drag_target_before;assert(save_config());refresh_apps();
         /* Drive this test window's release path; never interact with external apps. */
         int old_count=spaces[0].app_count,source_count=spaces[3].app_count;
         hold_drag.source=0;hold_drag.armed=1;hold_drag.dragging=1;
         RECT target_rect;GetWindowRect(space_list,&target_rect);POINT point={target_rect.left+10,target_rect.top+10};ScreenToClient(app_list,&point);
+        SendMessageW(app_list,WM_MOUSEMOVE,MK_LBUTTON,MAKELPARAM(point.x,point.y));assert(hold_drag.hover_workspace==0);
         SendMessageW(app_list,WM_LBUTTONUP,0,MAKELPARAM(point.x,point.y));
         assert(spaces[3].app_count==source_count&&spaces[0].app_count==old_count);
         assert(!hold_drag.armed&&!hold_drag.dragging);
         SetWindowTextW(search_edit,L"filter");assert(!hold_drag.enabled);SetWindowTextW(search_edit,L"");assert(hold_drag.enabled);
         active_space=1;assert(ensure_items(1));test_launch_count=0;int expected_launches=spaces[1].app_count;SendMessageW(window,WM_COMMAND,MAKEWPARAM(ID_SPACES,LBN_DBLCLK),(LPARAM)space_list);
         assert(test_launch_count==expected_launches&&!bulk_launch_running);
-        puts("PASS protected directory drop target, filter guard and one-shot bulk launch wiring (no apps launched)");
+        puts("PASS native-threshold reorder, cross-workspace pointer drop, protected directory target, filter guard and one-shot bulk launch wiring (no apps launched)");
         wchar_t fm_settings[MAX_PATH];swprintf(fm_settings,MAX_PATH,L"%ls\\file-manager.ini",dir);
         for(int i=0;i<4;i++){wchar_t section[32];swprintf(section,32,L"Pane%d",i);WritePrivateProfileStringW(section,L"Tab0",dir,fm_settings);}
         open_file_manager();assert(files_page&&IsWindow(files_view));

@@ -80,7 +80,10 @@ place. A valid database is backed up as `nova.backup.sqlite` during startup.
 - Use the `+` button to create a workspace. Rename and delete actions are in
   **Settings**. The fixed **Files** workspace cannot be renamed or deleted.
 - Press `Ctrl+K` to search the active workspace. Clear the search before
-  reordering items.
+  reordering items. In an unfiltered workspace, drag an icon onto another icon
+  to reorder it, or onto another normal workspace to move it. Dragging starts
+  after normal pointer movement or a 350 ms hold. The original file stays in
+  place, and the fixed **Files** workspace cannot receive items.
 - Use **Launch all** or double-click a workspace name to open a snapshot of all
   its items once. There is no recurring or background launch queue.
 

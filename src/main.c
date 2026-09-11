@@ -511,9 +511,14 @@ static void moved_item(int source,int destination,int at,void *context){
     (void)context;if(destination<0)destination=active_space;
     if(destination==0){set_notice(nova_text(L"「目录」是固定的文件管理工作区，不接收启动项。",L"Files is a fixed file-management workspace and cannot receive launch items."));return;}
     if(!ensure_items(active_space)||!ensure_items(destination))return;
+    Workspace source_before=spaces[active_space],destination_before=spaces[destination];
     int result=workspace_move(spaces,space_count,active_space,source,destination,at);
     if(result<0){set_notice(nova_text(L"无法移动：目标工作区已满或已有此项目。",L"Unable to move: the destination is full or already contains this item."));return;}
-    if(result>0){if(save_config())set_notice(destination==active_space?nova_text(L"已保存新的图标顺序。",L"The new icon order has been saved."):nova_text(L"已移动到目标工作区。原文件位置不变。",L"Moved to the destination workspace. The original file remains in place."));refresh_apps();}
+    if(result>0){
+        if(save_config())set_notice(destination==active_space?nova_text(L"已保存新的图标顺序。",L"The new icon order has been saved."):nova_text(L"已移动到目标工作区。原文件位置不变。",L"Moved to the destination workspace. The original file remains in place."));
+        else{spaces[active_space]=source_before;spaces[destination]=destination_before;set_notice(nova_text(L"无法保存这次移动，启动项已恢复到原工作区。",L"The move could not be saved, so the launch item was restored to its original workspace."));}
+        refresh_apps();
+    }
 }
 static int open_item(const AppItem *item){
     if(!item||!*item->target)return 0;
@@ -688,9 +693,11 @@ static LRESULT CALLBACK window_proc(HWND hwnd,UINT msg,WPARAM wp,LPARAM lp){
         if(d->CtlID==ID_PIN||d->CtlID==ID_DESKTOP||d->CtlID==ID_SETTINGS||d->CtlID==ID_NEW||d->CtlID==ID_MINIMIZE||d->CtlID==ID_MAXIMIZE||d->CtlID==ID_CLOSE){draw_icon(d);return TRUE;}
         COLORREF fill=selected?RGB(48,65,95):PANEL;
         if(d->CtlID==ID_ADD||d->CtlID==ID_LAUNCH_ALL)fill=selected?RGB(76,103,159):RGB(53,77,122);
-        if(d->CtlID==ID_SPACES){if(d->itemID==(UINT)-1)return TRUE;SendMessageW(space_list,LB_GETTEXT,d->itemID,(LPARAM)caption);if((int)d->itemID==active_space)fill=RGB(42,56,79);}
+        BOOL drop_hover=d->CtlID==ID_SPACES&&hold_drag.dragging&&hold_drag.hover_workspace==(int)d->itemID;
+        if(d->CtlID==ID_SPACES){if(d->itemID==(UINT)-1)return TRUE;SendMessageW(space_list,LB_GETTEXT,d->itemID,(LPARAM)caption);if((int)d->itemID==active_space)fill=RGB(42,56,79);if(drop_hover)fill=d->itemID?RGB(53,77,122):RGB(70,38,43);}
         else GetWindowTextW(d->hwndItem,caption,80);
         HBRUSH b=CreateSolidBrush(fill);FillRect(d->hDC,&d->rcItem,b);DeleteObject(b);
+        if(drop_hover){COLORREF edge=d->itemID?RGB(193,213,255):RGB(226,118,118);HPEN pen=CreatePen(PS_SOLID,px(2),edge);HGDIOBJ oldpen=SelectObject(d->hDC,pen),oldbrush=SelectObject(d->hDC,GetStockObject(NULL_BRUSH));RECT outline=d->rcItem;InflateRect(&outline,-px(1),-px(1));Rectangle(d->hDC,outline.left,outline.top,outline.right,outline.bottom);SelectObject(d->hDC,oldbrush);SelectObject(d->hDC,oldpen);DeleteObject(pen);}
         RECT t=d->rcItem;t.left+=px(12);t.right-=px(8);
         text(d->hDC,caption,t,body_font,(d->itemState&ODS_DISABLED)?RGB(112,128,150):TEXT,DT_SINGLELINE|DT_VCENTER|DT_END_ELLIPSIS|(d->CtlID==ID_SPACES?DT_LEFT:DT_CENTER));
         if(d->itemState&ODS_FOCUS){RECT f=d->rcItem;InflateRect(&f,-3,-3);DrawFocusRect(d->hDC,&f);}return TRUE;
