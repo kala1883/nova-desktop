@@ -18,6 +18,8 @@ typedef struct {
     wchar_t command[BATCH_COMMAND_CAP];
     int directory_count;
     wchar_t directories[BATCH_DIRECTORY_LIMIT][BATCH_DIRECTORY_CAP];
+    /* Empty override inherits the legacy task command. */
+    wchar_t commands[BATCH_DIRECTORY_LIMIT][BATCH_COMMAND_CAP];
 } BatchTask;
 
 typedef struct {
@@ -30,6 +32,8 @@ int batch_task_add_directory(BatchTask *task,const wchar_t *directory);
 /* Returns 1 when removed and 0 for an invalid index. */
 int batch_task_remove_directory(BatchTask *task,int index);
 int batch_task_is_valid(const BatchTask *task);
+const wchar_t *batch_task_command(const BatchTask *task,int index);
+int batch_task_edit_step(BatchTask *task,int index,const wchar_t *directory,const wchar_t *command);
 /* Reserved internal launcher target; never pass this scheme to Windows Shell. */
 #define BATCH_TARGET_PREFIX L"nova-batch:"
 int batch_task_target(long long id,wchar_t *target,size_t capacity);

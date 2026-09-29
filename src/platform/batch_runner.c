@@ -82,7 +82,7 @@ static DWORD WINAPI run_directory(void *parameter){
     if(run->progress)run->progress(run->context,BATCH_EVENT_STARTED,run->index,0,0,NULL);
     DWORD code=(DWORD)-1,error=0;
     wchar_t output[BATCH_OUTPUT_CAP]={0};
-    BOOL ok=run->execute(run->task->command,run->task->directories[run->index],run->cancel,&code,&error,output,BATCH_OUTPUT_CAP);
+    BOOL ok=run->execute(batch_task_command(run->task,run->index),run->task->directories[run->index],run->cancel,&code,&error,output,BATCH_OUTPUT_CAP);
     if(!ok&&!error)error=ERROR_GEN_FAILURE;
     if(error==ERROR_CANCELLED){
         run->state=RUN_CANCELLED;

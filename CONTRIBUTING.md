@@ -9,10 +9,11 @@ user-visible behavior, and include test coverage when practical.
 Before opening a pull request / 提交 PR 前：
 
 ```powershell
-.\build.bat
-.\tests\run.bat
-.\tests\storage.bat
-.\tests\files.bat
+.\deployment\build.bat
+.\deployment\test.bat
+.\deployment\test-storage.bat
+.\deployment\test-files.bat
+.\deployment\test-deployment.bat
 ```
 
 Use UTF-8 for documentation and UTF-16-aware Win32 APIs for user-visible text.

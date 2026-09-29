@@ -29,8 +29,8 @@ required.
 - **Workspace launcher** — organize up to 8 workspaces with 20 items each;
   reorder or move items with press-and-hold drag, search the current workspace,
   launch every item once, or collapse the workspace sidebar into a compact rail.
-- **Saved batch tasks** — up to 16 named tasks, each with its own command, up to
-  24 working folders, and sequential or parallel execution. Launch a selected
+- **Saved batch tasks** — up to 16 named tasks, each with up to 24 subtasks with
+  individually editable working folders and commands, and sequential or parallel execution. Launch a selected
   task from **Settings → Batch tasks**.
 - **Local session restore** — workspaces, tabs, layout, navigation-tree state,
   and favorites are stored in an embedded SQLite database.
@@ -51,9 +51,40 @@ the first build, no network access is needed.
 ## Build and run
 
 ```powershell
-.\build.bat
+.\deployment\build.bat
 .\build\nova-desktop.exe
 ```
+
+Build and test entry points are centralized in `deployment/`. Batch scripts
+resolve the repository from their own location and can be called from another
+working directory. An optional build argument selects an output path relative
+to the repository (or an absolute path), useful when the normal exe is running:
+
+```powershell
+.\deployment\build.bat "build\nova-desktop-preview.exe"
+.\deployment\test.bat --interactions
+.\deployment\test-storage.bat
+.\deployment\test-files.bat
+```
+
+For a local commit, push, build, and portable package, run:
+
+```powershell
+.\deployment\deploy_local.bat "feat: describe the changes"
+```
+
+The message is optional; the default includes a timestamp. The script stages
+**all non-ignored changes**, commits when needed, pushes the current branch to
+its configured upstream (or `origin` with the same branch name), then builds
+the exe and ZIP under `build/packages/`. Each package has a unique directory,
+the source commit ID, both READMEs, the license, and both notice files. Binaries
+remain local and ignored by Git; the script does not publish a release.
+It stops on any failure. A build failure after pushing leaves the source commit
+on the remote; rerunning can build it without creating an empty commit. It never
+closes a running NOVA instance. Run relevant tests before deploying.
+
+Optional Make entry point, from the repository root:
+`mingw32-make -f deployment/Makefile` (delegates to the same build script).
 
 Open directly in file-manager mode:
 
@@ -123,10 +154,21 @@ changing its contents.
 
 ## Batch tasks
 
-Open **Settings → Batch tasks…**. Use **New task** to create a named task,
-set its command, add its working folders, and choose **Save task**. Select a
-saved task in the left list and choose **Run task**. Editing, switching tasks
-and closing the window save the current task; invalid edits must be corrected.
+Open **Settings → Batch tasks…**. The left task library groups **New task** and
+**Delete task**; **Save task** is at the top right. Set the name, default command
+and execution mode, then use **Add subtask** to choose a working folder.
+Each new subtask copies the default command and can be edited independently.
+Select a row and use **Edit** (or double-click), change its folder or command
+in the editor below, then choose **Apply changes**. **Delete** removes that
+subtask's configuration only. Working folders within a task must remain unique.
+Legacy rows without their own command continue to inherit the default command.
+Use **Run selected** above the subtask list to execute only the selected row,
+including pending edits. Its status and captured output appear on that row;
+double-click any completed row to view output, including successful commands.
+Other rows keep their results. While running, another single-row run is disabled;
+**Cancel task** stops the active command and clears queued tasks.
+Select a saved task and choose **Run task**. Saving, switching rows or tasks,
+running, and closing the window also save pending edits; invalid edits must be corrected.
 Each task keeps its own execution mode:
 
 - **Sequential** waits for each folder to finish before starting the next.
@@ -152,18 +194,28 @@ The fixed Files workspace cannot contain task shortcuts.
 
 Commands use Windows cmd syntax, up to 2047 characters; for example
 `git pull origin main`, `npm run build`, or `git status && git log -1`.
-The existing single-task configuration becomes the first saved task.
+The existing single-task configuration becomes the first saved task. Existing
+task collections upgrade transactionally, retaining their IDs and commands.
 Tasks persist in local SQLite; folder paths are passed separately as working
 directories to system `cmd.exe /d /s /c`.
+
+The title bar places **Settings** first, followed by desktop fence, pin, and
+the standard window controls. Restoring from maximized centers a useful normal
+window in the current monitor's work area (up to 1100 × 760 logical pixels).
 
 ## Validation
 
 ```powershell
-.\tests\run.bat
-.\tests\run.bat --interactions
-.\tests\storage.bat
-.\tests\files.bat
+.\deployment\test.bat
+.\deployment\test.bat --interactions
+.\deployment\test-storage.bat
+.\deployment\test-files.bat
+.\deployment\test-deployment.bat
 ```
+
+The deployment test uses a temporary repository, a local bare remote, and a
+compiler stand-in to check packaging and failure handling without committing
+or pushing this repository.
 
 The tests use temporary directories and an isolated registry location. They do
 not change the real Windows startup entry or operate on personal work files.

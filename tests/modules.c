@@ -28,16 +28,22 @@ int main(void){
     puts("PASS queue snapshot, busy guard, one dispatch per step, failure accounting and cancellation (no apps launched)");
     BatchTask task={0};assert(batch_task_add_directory(&task,L"C:\\repo-one\\")==1);assert(!wcscmp(task.directories[0],L"C:\\repo-one"));
     assert(batch_task_add_directory(&task,L"c:\\REPO-ONE")==0);assert(batch_task_add_directory(&task,L"D:\\repo-two")==1);
+    assert(batch_task_edit_step(&task,1,L"D:\\repo-two\\",L"npm run build"));
+    assert(!batch_task_edit_step(&task,1,L"C:\\repo-one",L"replacement"));
+    assert(!batch_task_edit_step(&task,1,L"D:\\repo-two",L" \t"));
+    assert(!wcscmp(batch_task_command(&task,1),L"npm run build"));
     assert(batch_task_remove_directory(&task,0)==1&&!wcscmp(task.directories[0],L"D:\\repo-two"));assert(!batch_task_remove_directory(&task,2));
+    assert(!wcscmp(batch_task_command(&task,0),L"npm run build")&&!task.commands[1][0]);
     task=(BatchTask){0};for(int i=0;i<BATCH_DIRECTORY_LIMIT;i++){wchar_t path[40];swprintf(path,40,L"C:\\repo-%d",i);assert(batch_task_add_directory(&task,path)==1);}
     assert(batch_task_add_directory(&task,L"C:\\one-too-many")==-1);assert(batch_task_is_valid(&task));
     puts("PASS batch task normalization, duplicate rejection, removal, validation and capacity");
     wchar_t target[64];assert(batch_task_target(12345,target,64));assert(batch_task_target_id(target)==12345);
     assert(!batch_task_target_id(L"nova-batch:1x")&&!batch_task_target_id(L"nova-batch:-1")&&!batch_task_target_id(L"nova-batch:9223372036854775808")&&!batch_task_target_id(L"C:\\file.cmd"));
     static BatchTaskQueue batch_queue;BatchTask run={0},taken={0};run.id=1;run.mode=BATCH_PARALLEL;
-    wcscpy(run.command,L"fake command");assert(batch_task_add_directory(&run,L"C:\\one"));
+    wcscpy(run.command,L"fake command");assert(batch_task_add_directory(&run,L"C:\\one"));wcscpy(run.commands[0],L"step snapshot");
     assert(batch_task_queue_add(&batch_queue,&run)==1);assert(batch_task_queue_add(&batch_queue,&run)==0);
     wcscpy(run.command,L"changed");assert(batch_task_queue_take(&batch_queue,&taken));assert(!wcscmp(taken.command,L"fake command")&&taken.mode==BATCH_PARALLEL);
+    wcscpy(run.commands[0],L"changed step");assert(!wcscmp(batch_task_command(&taken,0),L"step snapshot"));
     assert(batch_task_queue_add(&batch_queue,&run)==0);
     for(int i=2;i<=BATCH_TASK_LIMIT;i++){run.id=i;assert(batch_task_queue_add(&batch_queue,&run)==1);}
     run.id=BATCH_TASK_LIMIT+1;assert(batch_task_queue_add(&batch_queue,&run)==-1);batch_queue.active_id=0;assert(batch_task_queue_take(&batch_queue,&taken)&&taken.id==2);

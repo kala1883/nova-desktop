@@ -195,7 +195,7 @@ BOOL store_save_batch_tasks(BatchTaskList *tasks){
     }
     if(!store_begin())return FALSE;
     BOOL ok=store_clear(L"batch_tasks");
-    ok=store_set_int(L"batch_tasks",L"Collection",L"Version",2)&&ok;
+    ok=store_set_int(L"batch_tasks",L"Collection",L"Version",3)&&ok;
     ok=store_set_int(L"batch_tasks",L"Collection",L"Count",tasks->count)&&ok;
     for(int i=0;i<tasks->count&&ok;i++){
         const BatchTask *t=&tasks->tasks[i];wchar_t section[32];swprintf(section,32,L"Task%d",i);
@@ -206,6 +206,7 @@ BOOL store_save_batch_tasks(BatchTaskList *tasks){
         ok=store_set_int(L"batch_tasks",section,L"DirectoryCount",t->directory_count)&&ok;
         for(int j=0;j<t->directory_count&&ok;j++){
             wchar_t key[32];swprintf(key,32,L"Directory%d",j);ok=store_set(L"batch_tasks",section,key,t->directories[j]);
+            swprintf(key,32,L"StepCommand%d",j);ok=store_set(L"batch_tasks",section,key,t->commands[j])&&ok;
         }
     }
     return store_end(ok);
@@ -224,11 +225,11 @@ BOOL store_load_batch_tasks(BatchTaskList *tasks){
         if(ok)ok=store_save_batch_tasks(next);
     }else if(ok){
         int version=0;
-        ok=batch_read_number(L"Collection",L"Version",2,&version)&&version>=1;
+        ok=batch_read_number(L"Collection",L"Version",3,&version)&&version>=1;
         if(ok)ok=batch_read_number(L"Collection",L"Count",BATCH_TASK_LIMIT,&next->count);
         for(int i=0;i<next->count&&ok;i++){
             BatchTask *t=&next->tasks[i];wchar_t section[32];swprintf(section,32,L"Task%d",i);
-            if(version==2){
+            if(version>=2){
                 wchar_t identity[40],target[64];
                 if(!batch_read_text(section,L"Id",identity,40)){ok=FALSE;break;}
                 swprintf(target,64,L"nova-batch:%ls",identity);t->id=batch_task_target_id(target);
@@ -243,10 +244,11 @@ BOOL store_load_batch_tasks(BatchTaskList *tasks){
             for(int j=0;j<t->directory_count&&ok;j++){
                 wchar_t key[32];swprintf(key,32,L"Directory%d",j);
                 ok=batch_read_text(section,key,t->directories[j],BATCH_DIRECTORY_CAP);
+                if(ok&&version>=3){swprintf(key,32,L"StepCommand%d",j);ok=batch_read_text(section,key,t->commands[j],BATCH_COMMAND_CAP);}
             }
             if(ok)ok=batch_task_is_valid(t)&&t->name[0]&&t->command[0];
         }
-        if(ok&&version==1)ok=store_save_batch_tasks(next);
+        if(ok&&version<3)ok=store_save_batch_tasks(next);
     }
     if(ok)*tasks=*next;
     else lstrcpyW(error_text,nova_text(L"批量任务配置无效或来自更新版本，原数据未修改。",L"Batch task settings are invalid or from a newer version. Data was not changed."));

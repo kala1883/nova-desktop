@@ -103,28 +103,36 @@ change, and update its README, source URL, hashes, and compatibility tests.
 Run commands from the repository root in PowerShell.
 
 ```powershell
-.\build.bat
-.\tests\run.bat
-.\tests\storage.bat
-.\tests\files.bat
+.\deployment\build.bat
+.\deployment\test.bat
+.\deployment\test-storage.bat
+.\deployment\test-files.bat
 ```
 
 Additional UI coverage:
 
 ```powershell
-.\tests\run.bat --interactions
-.\tests\run.bat --desktop
+.\deployment\test.bat --interactions
+.\deployment\test.bat --desktop
 ```
 
 Choose tests proportionally, but always compile after changing C code. Run:
 
-- `tests\run.bat` for core, launcher, drag/drop, startup, and main-window work.
-- `tests\storage.bat` for schema, migration, transactions, lazy loading, or
+- `deployment\test.bat` for core, launcher, drag/drop, startup, and main-window work.
+- `deployment\test-storage.bat` for schema, migration, transactions, lazy loading, or
   backup changes.
-- `tests\files.bat` for file-manager panes, tabs, navigation, commands, Shell
+- `deployment\test-files.bat` for file-manager panes, tabs, navigation, commands, Shell
   operations, layouts, favorites, or view lifecycle changes.
 - `--interactions` for workspace/UI command wiring; `--desktop` for window mode,
   geometry, resizing, and desktop-fence behavior.
+- `deployment\test-deployment.bat` for build/deployment script changes; it uses
+  a temporary Git repository, local bare remote, and compiler stand-in.
+
+Build entry points live in `deployment/`. `deployment\build.bat` accepts an
+optional repository-relative or absolute exe output path. `deploy_local.bat`
+stages all non-ignored changes, commits, pushes the current branch, then builds
+and packages local artifacts under ignored `build/packages/`. Creating or
+editing this script does not authorize running it against the user's repository.
 
 Tests must use temporary directories, fake callbacks, and isolated registry
 state. They must not open user launch items or modify personal work files. If

@@ -53,7 +53,21 @@ int batch_task_add_directory(BatchTask *task,const wchar_t *directory){
 int batch_task_remove_directory(BatchTask *task,int index){
     if(!task||task->directory_count<0||task->directory_count>BATCH_DIRECTORY_LIMIT||index<0||index>=task->directory_count)return 0;
     memmove(&task->directories[index],&task->directories[index+1],(size_t)(task->directory_count-index-1)*sizeof(task->directories[0]));
-    task->directory_count--;task->directories[task->directory_count][0]=0;return 1;
+    memmove(&task->commands[index],&task->commands[index+1],(size_t)(task->directory_count-index-1)*sizeof(task->commands[0]));
+    task->directory_count--;task->directories[task->directory_count][0]=0;task->commands[task->directory_count][0]=0;return 1;
+}
+
+const wchar_t *batch_task_command(const BatchTask *task,int index){
+    if(!task||index<0||index>=task->directory_count)return L"";
+    return task->commands[index][0]?task->commands[index]:task->command;
+}
+int batch_task_edit_step(BatchTask *task,int index,const wchar_t *directory,const wchar_t *command){
+    if(!task||task->directory_count<0||task->directory_count>BATCH_DIRECTORY_LIMIT||index<0||index>=task->directory_count||!directory||!command)return 0;
+    size_t length=normalized_length(directory),command_length=wcslen(command);
+    if(!length||length>=BATCH_DIRECTORY_CAP||command_length>=BATCH_COMMAND_CAP||!command[wcsspn(command,L" \t\r\n")])return 0;
+    wchar_t normalized[BATCH_DIRECTORY_CAP];wmemcpy(normalized,directory,length);normalized[length]=0;
+    for(int i=0;i<task->directory_count;i++)if(i!=index&&same_directory(task->directories[i],normalized))return 0;
+    wcscpy(task->directories[index],normalized);wcscpy(task->commands[index],command);return 1;
 }
 
 int batch_task_is_valid(const BatchTask *task){
@@ -62,6 +76,8 @@ int batch_task_is_valid(const BatchTask *task){
     if(!wmemchr(task->name,0,BATCH_NAME_CAP))return 0;
     if(!wmemchr(task->command,0,BATCH_COMMAND_CAP))return 0;
     for(int i=0;i<task->directory_count;i++){
+        if(!wmemchr(task->commands[i],0,BATCH_COMMAND_CAP))return 0;
+        if(task->commands[i][0]&&!task->commands[i][wcsspn(task->commands[i],L" \t\r\n")])return 0;
         if(!wmemchr(task->directories[i],0,BATCH_DIRECTORY_CAP))return 0;
         size_t length=wcslen(task->directories[i]);if(!length||length>=BATCH_DIRECTORY_CAP)return 0;
         for(int j=0;j<i;j++)if(same_directory(task->directories[i],task->directories[j]))return 0;

@@ -42,10 +42,16 @@ int wmain(void){
     assert(restored->tasks[0].id>0&&restored->tasks[1].id>0&&restored->tasks[0].id!=restored->tasks[1].id);
     long long retained_id=restored->tasks[1].id;BatchTask first=collection->tasks[0];collection->tasks[0]=collection->tasks[1];collection->tasks[1]=first;
     lstrcpyW(collection->tasks[0].name,L"构建项目 已改名");assert(store_save_batch_tasks(collection));assert(store_load_batch_tasks(restored));assert(restored->tasks[0].id==retained_id);
-    assert(store_set_int(L"batch_tasks",L"Collection",L"Version",1));assert(store_set(L"batch_tasks",L"Task0",L"Id",L""));assert(store_load_batch_tasks(restored));assert(restored->tasks[0].id>0&&store_int(L"batch_tasks",L"Collection",L"Version",0)==2);
+    assert(store_set_int(L"batch_tasks",L"Collection",L"Version",1));assert(store_set(L"batch_tasks",L"Task0",L"Id",L""));assert(store_load_batch_tasks(restored));assert(restored->tasks[0].id>0&&store_int(L"batch_tasks",L"Collection",L"Version",0)==3);
     *collection=*restored;retained_id=collection->tasks[0].id;
     collection->count=1;assert(store_save_batch_tasks(collection));assert(store_load_batch_tasks(restored)&&restored->count==1);
     assert(restored->tasks[0].id==retained_id);
+    assert(store_set_int(L"batch_tasks",L"Collection",L"Version",2));assert(store_load_batch_tasks(restored));
+    assert(restored->tasks[0].id==retained_id&&!wcscmp(batch_task_command(&restored->tasks[0],0),restored->tasks[0].command));
+    lstrcpyW(collection->tasks[0].commands[0],L"echo 独立命令");assert(store_save_batch_tasks(collection));assert(store_load_batch_tasks(restored));
+    assert(!wcscmp(restored->tasks[0].commands[0],L"echo 独立命令"));
+    assert(store_set(L"batch_tasks",L"Task0",L"StepCommand0",L" \t"));assert(!store_load_batch_tasks(restored));assert(!wcscmp(restored->tasks[0].commands[0],L"echo 独立命令"));assert(store_save_batch_tasks(collection));
+    assert(store_set_int(L"batch_tasks",L"Collection",L"Version",4));assert(!store_load_batch_tasks(restored));assert(store_int(L"batch_tasks",L"Collection",L"Version",0)==4);assert(store_save_batch_tasks(collection));
     assert(store_set(L"batch_tasks",L"Task0",L"Id",L"9223372036854775808"));assert(!store_load_batch_tasks(restored));assert(store_save_batch_tasks(collection));
     puts("PASS stable task IDs across rename/reorder/delete, v1 collection migration and malformed-ID refusal");
     assert(store_set_int(L"batch_tasks",L"Collection",L"Count",BATCH_TASK_LIMIT+1));assert(!store_load_batch_tasks(restored));assert(store_int(L"batch_tasks",L"Collection",L"Count",0)==BATCH_TASK_LIMIT+1);

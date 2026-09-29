@@ -434,7 +434,7 @@ static void layout_controls(void) {
     move(space_list,list_x,px(112),list_width,r.bottom-px(sidebar_collapsed?128:170));
     move(sidebar_button,px(sidebar_collapsed?12:174),px(sidebar_collapsed?20:27),px(36),px(36));
     move(new_button,px(sidebar_collapsed?12:162),px(68),px(40),px(36));
-    HWND caption_buttons[]={desktop_button,pin_button,settings_button,minimize_button,maximize_button,close_button};
+    HWND caption_buttons[]={settings_button,desktop_button,pin_button,minimize_button,maximize_button,close_button};
     for(int i=0;i<6;i++)MoveWindow(caption_buttons[i],r.right-px(46)*(6-i),0,px(46),caption_height(),TRUE);
     SetWindowTextW(maximize_button,IsZoomed(main_window)?nova_text(L"还原",L"Restore"):nova_text(L"最大化",L"Maximize"));
     move(launch_button,r.right-px(148),px(27),px(116),px(40));
@@ -628,6 +628,23 @@ static void add_tray(void){
     if(!tray.hIcon)tray.hIcon=LoadIconW(NULL,IDI_APPLICATION);
     lstrcpyW(tray.szTip,APP_NAME);Shell_NotifyIconW(NIM_ADD,&tray);
 }
+static void toggle_maximize(void){
+    if(desktop_mode&&!set_desktop_mode(FALSE))return;
+    if(!IsZoomed(main_window)){ShowWindow(main_window,SW_MAXIMIZE);return;}
+    MONITORINFO monitor={0};monitor.cbSize=sizeof(monitor);
+    if(!GetMonitorInfoW(MonitorFromWindow(main_window,MONITOR_DEFAULTTONEAREST),&monitor)){ShowWindow(main_window,SW_RESTORE);return;}
+    RECT work=monitor.rcWork;
+    int available_width=work.right-work.left,available_height=work.bottom-work.top;
+    int width=px(1100),height=px(760);
+    if(width>available_width*85/100)width=available_width*85/100;
+    if(height>available_height*85/100)height=available_height*85/100;
+    if(width<px(780))width=px(780);
+    if(height<px(600))height=px(600);
+    if(width>available_width)width=available_width;
+    if(height>available_height)height=available_height;
+    ShowWindow(main_window,SW_RESTORE);
+    SetWindowPos(main_window,NULL,work.left+(available_width-width)/2,work.top+(available_height-height)/2,width,height,SWP_NOZORDER|SWP_NOACTIVATE);
+}
 static void restore_window(void){ShowWindow(main_window,SW_RESTORE);SetForegroundWindow(main_window);if(files_page)file_manager_update_visibility();}
 /* Store an internal task reference, never a copy of its command or a disk shortcut. */
 static int insert_batch_shortcut(long long task_id,int destination){
@@ -712,7 +729,7 @@ static LRESULT CALLBACK window_proc(HWND hwnd,UINT msg,WPARAM wp,LPARAM lp){
     case WM_NCCALCSIZE:if(wp){RECT original=((NCCALCSIZE_PARAMS*)lp)->rgrc[0];DefWindowProcW(hwnd,msg,wp,lp);((NCCALCSIZE_PARAMS*)lp)->rgrc[0].top=original.top+(IsZoomed(hwnd)?GetSystemMetrics(SM_CYSIZEFRAME)+GetSystemMetrics(SM_CXPADDEDBORDER):1);return 0;}break;
     case WM_NCHITTEST:{LRESULT result=DefWindowProcW(hwnd,msg,wp,lp);if(result!=HTCLIENT)return result;POINT p={GET_X_LPARAM(lp),GET_Y_LPARAM(lp)};ScreenToClient(hwnd,&p);RECT r;GetClientRect(hwnd,&r);if(!IsZoomed(hwnd)&&p.y<px(4))return HTTOP;if(p.y<caption_height()&&p.x<r.right-px(276))return HTCAPTION;return HTCLIENT;}
     case WM_GETMINMAXINFO:{MINMAXINFO *m=(MINMAXINFO*)lp;m->ptMinTrackSize.x=px(780);m->ptMinTrackSize.y=px(600);return 0;}
-    case WM_SIZE:layout_controls();if(wp==SIZE_MINIMIZED&&!pinned)ShowWindow(hwnd,SW_HIDE);return 0;
+    case WM_SIZE:layout_controls();SetWindowTextW(maximize_button,IsZoomed(hwnd)?nova_text(L"还原",L"Restore"):nova_text(L"最大化",L"Maximize"));InvalidateRect(maximize_button,NULL,TRUE);if(wp==SIZE_MINIMIZED&&!pinned)ShowWindow(hwnd,SW_HIDE);return 0;
     case WM_ERASEBKGND:return 1;
     case WM_PAINT:{PAINTSTRUCT ps;HDC dc=BeginPaint(hwnd,&ps);RECT r;GetClientRect(hwnd,&r);paint(dc,r);paint_generation++;EndPaint(hwnd,&ps);return 0;}
     case WM_CTLCOLOREDIT:case WM_CTLCOLORLISTBOX:case WM_CTLCOLORSTATIC:SetTextColor((HDC)wp,TEXT);SetBkColor((HDC)wp,PANEL);return (LRESULT)panel_brush;
@@ -735,7 +752,7 @@ static LRESULT CALLBACK window_proc(HWND hwnd,UINT msg,WPARAM wp,LPARAM lp){
     case WM_COMMAND:{int id=LOWORD(wp);
         if(id==ID_SPACES&&HIWORD(wp)==LBN_DBLCLK){if(active_space==0)open_file_manager();else launch_workspace();return 0;}
         if(id==ID_MINIMIZE){ShowWindow(hwnd,SW_MINIMIZE);return 0;}
-        if(id==ID_MAXIMIZE){ShowWindow(hwnd,IsZoomed(hwnd)?SW_RESTORE:SW_MAXIMIZE);return 0;}
+        if(id==ID_MAXIMIZE){toggle_maximize();return 0;}
         if(id==ID_CLOSE){PostMessageW(hwnd,WM_CLOSE,0,0);return 0;}
         if(id==ID_SETTINGS){settings_menu();return 0;}
         if(id==ID_BATCH_TASKS){batch_tasks_open(main_window);return 0;}
@@ -758,7 +775,7 @@ static LRESULT CALLBACK window_proc(HWND hwnd,UINT msg,WPARAM wp,LPARAM lp){
                 BatchTask value;
                 if(batch_tasks_lookup(batch_task_target_id(target),&value)){
                     wchar_t details[BATCH_COMMAND_CAP+BATCH_NAME_CAP+128];
-                    swprintf(details,sizeof(details)/sizeof(details[0]),nova_text(L"批量任务：%ls\n%ls · %d 个目录\n%ls",L"Batch task: %ls\n%ls · %d folders\n%ls"),value.name,value.mode==BATCH_PARALLEL?nova_text(L"同时执行",L"Parallel"):nova_text(L"顺序执行",L"Sequential"),value.directory_count,value.command);
+                    swprintf(details,sizeof(details)/sizeof(details[0]),nova_text(L"批量任务：%ls\n%ls · %d 个子任务（独立命令）\n默认命令：%ls",L"Batch task: %ls\n%ls · %d subtasks (individual commands)\nDefault command: %ls"),value.name,value.mode==BATCH_PARALLEL?nova_text(L"同时执行",L"Parallel"):nova_text(L"顺序执行",L"Sequential"),value.directory_count,value.command);
                     lstrcpynW(tip->pszText,details,tip->cchTextMax);
                 }else lstrcpynW(tip->pszText,nova_text(L"任务已删除或不可用。可移除此快捷入口。",L"Task deleted or unavailable. You can remove this shortcut."),tip->cchTextMax);
             }else lstrcpynW(tip->pszText,target,tip->cchTextMax);
