@@ -7,7 +7,7 @@
       "scope": "app",
       "section": "Nova",
       "key": "Active",
-      "value": "1"
+      "value": "0"
     },
     {
       "scope": "app",
@@ -26,6 +26,84 @@
       "section": "Nova",
       "key": "Language",
       "value": "0"
+    },
+    {
+      "scope": "app",
+      "section": "Nova",
+      "key": "SidebarCollapsed",
+      "value": "0"
+    },
+    {
+      "scope": "batch_tasks",
+      "section": "Collection",
+      "key": "Count",
+      "value": "1"
+    },
+    {
+      "scope": "batch_tasks",
+      "section": "Collection",
+      "key": "Version",
+      "value": "3"
+    },
+    {
+      "scope": "batch_tasks",
+      "section": "Task0",
+      "key": "Command",
+      "value": "git pull origin main"
+    },
+    {
+      "scope": "batch_tasks",
+      "section": "Task0",
+      "key": "DirectoryCount",
+      "value": "0"
+    },
+    {
+      "scope": "batch_tasks",
+      "section": "Task0",
+      "key": "Id",
+      "value": "4871059821973365515"
+    },
+    {
+      "scope": "batch_tasks",
+      "section": "Task0",
+      "key": "Mode",
+      "value": "0"
+    },
+    {
+      "scope": "batch_tasks",
+      "section": "Task0",
+      "key": "Name",
+      "value": "任务 1"
+    },
+    {
+      "scope": "file_commands",
+      "section": "Command0",
+      "key": "Command",
+      "value": "cd ."
+    },
+    {
+      "scope": "file_commands",
+      "section": "Command0",
+      "key": "Name",
+      "value": "cmd.exe"
+    },
+    {
+      "scope": "file_commands",
+      "section": "Commands",
+      "key": "Count",
+      "value": "1"
+    },
+    {
+      "scope": "file_commands",
+      "section": "Commands",
+      "key": "Default",
+      "value": "0"
+    },
+    {
+      "scope": "file_commands",
+      "section": "Commands",
+      "key": "Version",
+      "value": "1"
     },
     {
       "scope": "files",
@@ -50,6 +128,138 @@
       "section": "Manager",
       "key": "NavigationTree",
       "value": "0"
+    },
+    {
+      "scope": "files",
+      "section": "Manager",
+      "key": "Split0_0",
+      "value": "5000"
+    },
+    {
+      "scope": "files",
+      "section": "Manager",
+      "key": "Split0_1",
+      "value": "5000"
+    },
+    {
+      "scope": "files",
+      "section": "Manager",
+      "key": "Split10_0",
+      "value": "3333"
+    },
+    {
+      "scope": "files",
+      "section": "Manager",
+      "key": "Split10_1",
+      "value": "6667"
+    },
+    {
+      "scope": "files",
+      "section": "Manager",
+      "key": "Split11_0",
+      "value": "3333"
+    },
+    {
+      "scope": "files",
+      "section": "Manager",
+      "key": "Split11_1",
+      "value": "6667"
+    },
+    {
+      "scope": "files",
+      "section": "Manager",
+      "key": "Split1_0",
+      "value": "5000"
+    },
+    {
+      "scope": "files",
+      "section": "Manager",
+      "key": "Split2_0",
+      "value": "5000"
+    },
+    {
+      "scope": "files",
+      "section": "Manager",
+      "key": "Split4_0",
+      "value": "5000"
+    },
+    {
+      "scope": "files",
+      "section": "Manager",
+      "key": "Split4_1",
+      "value": "5000"
+    },
+    {
+      "scope": "files",
+      "section": "Manager",
+      "key": "Split5_0",
+      "value": "5000"
+    },
+    {
+      "scope": "files",
+      "section": "Manager",
+      "key": "Split5_1",
+      "value": "5000"
+    },
+    {
+      "scope": "files",
+      "section": "Manager",
+      "key": "Split6_0",
+      "value": "5000"
+    },
+    {
+      "scope": "files",
+      "section": "Manager",
+      "key": "Split6_1",
+      "value": "5000"
+    },
+    {
+      "scope": "files",
+      "section": "Manager",
+      "key": "Split7_0",
+      "value": "5000"
+    },
+    {
+      "scope": "files",
+      "section": "Manager",
+      "key": "Split7_1",
+      "value": "5000"
+    },
+    {
+      "scope": "files",
+      "section": "Manager",
+      "key": "Split8_0",
+      "value": "2500"
+    },
+    {
+      "scope": "files",
+      "section": "Manager",
+      "key": "Split8_1",
+      "value": "5000"
+    },
+    {
+      "scope": "files",
+      "section": "Manager",
+      "key": "Split8_2",
+      "value": "7500"
+    },
+    {
+      "scope": "files",
+      "section": "Manager",
+      "key": "Split9_0",
+      "value": "2500"
+    },
+    {
+      "scope": "files",
+      "section": "Manager",
+      "key": "Split9_1",
+      "value": "5000"
+    },
+    {
+      "scope": "files",
+      "section": "Manager",
+      "key": "Split9_2",
+      "value": "7500"
     },
     {
       "scope": "files",
