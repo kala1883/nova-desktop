@@ -70,3 +70,15 @@ by Git. The primary file includes your names, paths and command text.
 
 启动时备份为 `nova.backup.json`。恢复时关闭 NOVA，再将备份复制覆盖 `nova.json`。
 备份和 `.nova-*.tmp` 被 Git 忽略。主配置包含用户名称、路径和命令文本。
+
+For cross-computer use, close NOVA on both computers first. Commit/push the
+source computer's changed JSON, then pull it on the destination and rebuild.
+Building/deploying on the destination alone cannot retrieve uncommitted source
+data. Build/deploy output reports the configuration path, task/tab counts and
+SHA256. Copy the whole standalone package, including its config folder, when
+not using a Git checkout. Stored absolute folder paths must exist on that computer.
+
+跨电脑使用时先关闭两台电脑的 NOVA。在源电脑提交、推送已修改的 JSON，目标电脑
+再拉取并编译；仅在目标电脑编译或部署，无法取得源电脑未提交的数据。
+编译、部署会显示配置路径、任务/标签数量和 SHA256。使用独立程序包时，复制整个包，
+包括 config 文件夹；已保存的绝对目录路径需要在该电脑存在。

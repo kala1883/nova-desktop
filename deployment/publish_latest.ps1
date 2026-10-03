@@ -3,6 +3,7 @@ param([Parameter(Mandatory = $true)][string]$Executable)
 
 $ErrorActionPreference = 'Stop'
 Set-StrictMode -Version Latest
+. (Join-Path $PSScriptRoot 'configuration_info.ps1')
 $repoRoot = Split-Path -Parent $PSScriptRoot
 $packageRoot = Join-Path $repoRoot 'build\packages'
 $latest = Join-Path $packageRoot 'nova-desktop.exe'
@@ -23,6 +24,7 @@ try {
         else { [IO.File]::Move($temporary, $latest) }
     }
     Write-Host "Latest EXE: $latest"
+    Show-NovaConfigurationInfo -Info (Get-NovaConfigurationInfo -Path (Join-Path $repoRoot 'config\nova.json'))
 }
 catch {
     Write-Host ('Cannot update latest executable; close it if running. The previous copy is preserved / 无法更新最新程序；如正在运行，请关闭后重试。保留原副本。' + "`n" + $_.Exception.Message) -ForegroundColor Red

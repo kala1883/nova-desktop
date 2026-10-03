@@ -90,6 +90,17 @@ It stops on any failure. A build failure after pushing leaves the source commit
 on the remote; rerunning can build it without creating an empty commit. It never
 closes a running NOVA instance. Run relevant tests before deploying.
 
+To carry usage data to another computer, close NOVA on the source computer so
+pending task/session edits are saved, then deploy there to commit and push the
+updated `config/nova.json`. On the destination computer, close NOVA **before**
+`git pull --ff-only`, then run `deployment/build.bat` and start the new executable.
+Deploy commits/pushes the current checkout; it does not pull remote updates.
+The deployment/build output prints the JSON path, initialization state, task
+count, per-pane tab counts and SHA256; the archive records the configuration hash
+in `revision.txt`. A “no changes” deployment cannot publish another computer's
+uncommitted configuration. Only directory paths are stored: the actual files
+and folders must exist on the destination computer.
+
 Optional Make entry point, from the repository root:
 `mingw32-make -f deployment/Makefile` (delegates to the same build script).
 
