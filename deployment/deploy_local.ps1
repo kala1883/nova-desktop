@@ -71,12 +71,15 @@ try {
     foreach ($name in @('LICENSE', 'NOTICE.md', 'NOTICE.zh-CN.md', 'README.md', 'README.zh-CN.md')) {
         Copy-Item -LiteralPath (Join-Path $repoRoot $name) -Destination $packageDir
     }
+    New-Item -ItemType Directory -Path (Join-Path $packageDir 'config') -Force | Out-Null
+    Copy-Item -LiteralPath (Join-Path $repoRoot 'config\nova.json') -Destination (Join-Path $packageDir 'config\nova.json')
     @("Commit: $revision", "Built (UTC): $([DateTime]::UtcNow.ToString('o'))") |
         Set-Content -LiteralPath (Join-Path $packageDir 'revision.txt') -Encoding UTF8
     $zip = "$packageDir.zip"
-    $packageFiles = @(Get-ChildItem -LiteralPath $packageDir -File | ForEach-Object { $_.FullName })
+    $packageFiles = @(Get-ChildItem -LiteralPath $packageDir | ForEach-Object { $_.FullName })
     Compress-Archive -LiteralPath $packageFiles -DestinationPath $zip -CompressionLevel Optimal
     Write-Host "EXE: $exe"
+    Write-Host "Latest EXE: $(Join-Path $repoRoot 'build\packages\nova-desktop.exe')"
     Write-Host "ZIP: $zip"
     exit 0
 }

@@ -1,0 +1,200 @@
+{
+  "version": 1,
+  "application": "NOVA Desktop",
+  "initialized": true,
+  "settings": [
+    {
+      "scope": "app",
+      "section": "Nova",
+      "key": "Active",
+      "value": "1"
+    },
+    {
+      "scope": "app",
+      "section": "Nova",
+      "key": "AlwaysOnTop",
+      "value": "0"
+    },
+    {
+      "scope": "app",
+      "section": "Nova",
+      "key": "DesktopMode",
+      "value": "0"
+    },
+    {
+      "scope": "app",
+      "section": "Nova",
+      "key": "Language",
+      "value": "0"
+    },
+    {
+      "scope": "files",
+      "section": "Manager",
+      "key": "FavoriteCount",
+      "value": "0"
+    },
+    {
+      "scope": "files",
+      "section": "Manager",
+      "key": "Layout",
+      "value": "0"
+    },
+    {
+      "scope": "files",
+      "section": "Manager",
+      "key": "Migrated",
+      "value": "1"
+    },
+    {
+      "scope": "files",
+      "section": "Manager",
+      "key": "NavigationTree",
+      "value": "0"
+    },
+    {
+      "scope": "files",
+      "section": "Pane0",
+      "key": "Count",
+      "value": "1"
+    },
+    {
+      "scope": "files",
+      "section": "Pane0",
+      "key": "Selected",
+      "value": "0"
+    },
+    {
+      "scope": "files",
+      "section": "Pane0",
+      "key": "Tab0",
+      "value": "::{20D04FE0-3AEA-1069-A2D8-08002B30309D}"
+    },
+    {
+      "scope": "files",
+      "section": "Pane1",
+      "key": "Count",
+      "value": "1"
+    },
+    {
+      "scope": "files",
+      "section": "Pane1",
+      "key": "Selected",
+      "value": "0"
+    },
+    {
+      "scope": "files",
+      "section": "Pane1",
+      "key": "Tab0",
+      "value": "D:\\"
+    },
+    {
+      "scope": "files",
+      "section": "Pane2",
+      "key": "Count",
+      "value": "1"
+    },
+    {
+      "scope": "files",
+      "section": "Pane2",
+      "key": "Selected",
+      "value": "0"
+    },
+    {
+      "scope": "files",
+      "section": "Pane2",
+      "key": "Tab0",
+      "value": "::{20D04FE0-3AEA-1069-A2D8-08002B30309D}"
+    },
+    {
+      "scope": "files",
+      "section": "Pane3",
+      "key": "Count",
+      "value": "1"
+    },
+    {
+      "scope": "files",
+      "section": "Pane3",
+      "key": "Selected",
+      "value": "0"
+    },
+    {
+      "scope": "files",
+      "section": "Pane3",
+      "key": "Tab0",
+      "value": "::{20D04FE0-3AEA-1069-A2D8-08002B30309D}"
+    }
+  ],
+  "workspaces": [
+    {
+      "id": "5879304720524684585",
+      "position": 0,
+      "name": "目录"
+    },
+    {
+      "id": "6969818039083397288",
+      "position": 1,
+      "name": "开发"
+    },
+    {
+      "id": "1246954245078678564",
+      "position": 2,
+      "name": "创作"
+    },
+    {
+      "id": "2765508233289839878",
+      "position": 3,
+      "name": "专注"
+    }
+  ],
+  "items": [
+    {
+      "id": "3554260130390486417",
+      "workspace_id": "1246954245078678564",
+      "position": 0,
+      "name": "画图",
+      "target": "mspaint.exe"
+    },
+    {
+      "id": "7108999021658353741",
+      "workspace_id": "1246954245078678564",
+      "position": 1,
+      "name": "照片",
+      "target": "ms-photos:"
+    },
+    {
+      "id": "2399251194423186828",
+      "workspace_id": "2765508233289839878",
+      "position": 0,
+      "name": "时钟",
+      "target": "ms-clock:"
+    },
+    {
+      "id": "8051094821148918867",
+      "workspace_id": "5879304720524684585",
+      "position": 0,
+      "name": "文件管理",
+      "target": "explorer.exe"
+    },
+    {
+      "id": "846657980680281799",
+      "workspace_id": "6969818039083397288",
+      "position": 0,
+      "name": "终端",
+      "target": "wt.exe"
+    },
+    {
+      "id": "4871963116899052790",
+      "workspace_id": "6969818039083397288",
+      "position": 1,
+      "name": "PowerShell",
+      "target": "powershell.exe"
+    },
+    {
+      "id": "7736834750687038093",
+      "workspace_id": "6969818039083397288",
+      "position": 2,
+      "name": "项目目录",
+      "target": "."
+    }
+  ]
+}

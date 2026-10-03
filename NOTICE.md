@@ -25,9 +25,14 @@ material changes and avoid misleading users about their origin.
 
 ## User content and privacy
 
-NOVA Desktop stores workspace metadata and file-manager session state locally
-in `%APPDATA%\NOVA Desktop\nova.sqlite`. Adding an item records its path; it
+NOVA Desktop stores preferences, saved tasks, workspace metadata and file-manager
+session state locally in `config/nova.json` (the repository's config folder when
+run inside a checkout, or the executable's config folder for a standalone package).
+Old AppData SQLite/INI files are read only during first migration and preserved.
+Adding an item records its path; it
 does not copy, move, upload, or claim rights in the user's files. The project
 includes no analytics, advertising SDK, or cloud synchronization service.
+The primary JSON is available to Git; reviewing or publishing it may disclose
+saved names, paths and command text. NOVA itself does not upload this data.
 
 For the Chinese version, see [NOTICE.zh-CN.md](NOTICE.zh-CN.md).

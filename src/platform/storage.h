@@ -4,8 +4,11 @@
 #include "../core/batch_task.h"
 #include "../core/file_command.h"
 #include "../core/workspace.h"
-/* Single UI-thread connection; SQLite is embedded, never a service. */
+/* Single UI-thread in-memory connection; all persisted configuration is JSON. */
 BOOL store_open(const wchar_t *directory);
+BOOL store_open_from(const wchar_t *directory,const wchar_t *legacy_directory);
+const wchar_t *store_directory(void);
+const wchar_t *store_legacy_directory(void);
 void store_close(void);
 BOOL store_ready(void);
 const wchar_t *store_error(void);

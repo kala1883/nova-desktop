@@ -783,6 +783,10 @@ static BOOL migrate_session(void){
     }
     ok=store_set_int(L"files",L"Manager",L"Migrated",1)&&ok;return store_end(ok);
 }
+BOOL file_manager_migrate_settings(const wchar_t *legacy_directory){
+    if(!store_ready()||!legacy_directory||wcslen(legacy_directory)+20>=MAX_PATH)return FALSE;
+    swprintf(fm.settings,MAX_PATH,L"%ls\\file-manager.ini",legacy_directory);return migrate_session();
+}
 static void save_session(void){
     if(fm.loading||fm.closing)return;
     fm.dirty=TRUE;
@@ -915,7 +919,7 @@ HWND file_manager_open(HWND owner,const wchar_t *settings_directory){
     if(fm.window){ShowWindow(fm.window,SW_SHOW);arrange();return fm.window;}
     ZeroMemory(&fm,sizeof(fm));fm.dpi=96;
     if(wcslen(settings_directory)+20>=MAX_PATH)return NULL;
-    swprintf(fm.settings,MAX_PATH,L"%ls\\file-manager.ini",settings_directory);
+    swprintf(fm.settings,MAX_PATH,L"%ls\\file-manager.ini",store_legacy_directory());
     if(!migrate_session())return NULL;
     if(!store_load_file_commands(&fm.commands))return NULL;
     INITCOMMONCONTROLSEX ic={sizeof(ic),ICC_WIN95_CLASSES};InitCommonControlsEx(&ic);

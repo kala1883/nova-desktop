@@ -8,11 +8,75 @@ static DWORD read_file(const wchar_t *path,BYTE *bytes,DWORD capacity){
     HANDLE f=CreateFileW(path,GENERIC_READ,FILE_SHARE_READ,NULL,OPEN_EXISTING,0,NULL);assert(f!=INVALID_HANDLE_VALUE);
     DWORD n=0;assert(ReadFile(f,bytes,capacity,&n,NULL));CloseHandle(f);return n;
 }
+static void write_text_file(const wchar_t *path,const char *text){
+    HANDLE file=CreateFileW(path,GENERIC_WRITE,0,NULL,CREATE_ALWAYS,0,NULL);assert(file!=INVALID_HANDLE_VALUE);
+    DWORD written,length=(DWORD)strlen(text);assert(WriteFile(file,text,length,&written,NULL)&&written==length);CloseHandle(file);
+}
+static void refused_json(const wchar_t *directory,const char *text){
+    wchar_t path[MAX_PATH];swprintf(path,MAX_PATH,L"%ls\\nova.json",directory);write_text_file(path,text);
+    assert(!store_open(directory)&&!store_ready());BYTE bytes[4096];DWORD length=read_file(path,bytes,sizeof(bytes));assert(length==strlen(text)&&!memcmp(bytes,text,length));
+}
+static void test_config_location(const wchar_t *parent){
+    wchar_t repository[MAX_PATH],config[MAX_PATH],marker[MAX_PATH],path[MAX_PATH],resolved[MAX_PATH],expected[MAX_PATH];
+    swprintf(repository,MAX_PATH,L"%ls\\repo",parent);swprintf(config,MAX_PATH,L"%ls\\config",repository);
+    assert(CreateDirectoryW(repository,NULL)&&CreateDirectoryW(config,NULL));swprintf(marker,MAX_PATH,L"%ls\\.git",repository);write_text_file(marker,"fixture");
+    swprintf(path,MAX_PATH,L"%ls\\nova.json",config);write_text_file(path,"fixture");
+    swprintf(path,MAX_PATH,L"%ls\\build\\packages\\archive\\nova-desktop.exe",repository);
+    assert(resolve_config_directory(path,resolved)&&!wcscmp(resolved,config));
+    swprintf(path,MAX_PATH,L"%ls\\portable\\nova-desktop.exe",parent);swprintf(expected,MAX_PATH,L"%ls\\portable\\config",parent);
+    assert(resolve_config_directory(path,resolved)&&!wcscmp(resolved,expected));
+    swprintf(path,MAX_PATH,L"%ls\\nova.json",config);DeleteFileW(path);DeleteFileW(marker);assert(RemoveDirectoryW(config)&&RemoveDirectoryW(repository));
+    puts("PASS repository executables share root config; standalone packages resolve adjacent config independently of cwd");
+}
+static void test_usage_data(const wchar_t *parent){
+    wchar_t directory[MAX_PATH],path[MAX_PATH],second[MAX_PATH];swprintf(directory,MAX_PATH,L"%ls\\usage",parent);swprintf(second,MAX_PATH,L"%ls\\second",directory);assert(CreateDirectoryW(directory,NULL));
+    assert(store_open(directory));
+    BatchTaskList *tasks=calloc(1,sizeof(*tasks)),*restored=calloc(1,sizeof(*restored));assert(tasks&&restored);
+    tasks->count=1;lstrcpyW(tasks->tasks[0].name,L"任务使用数据");lstrcpyW(tasks->tasks[0].command,L"echo fixture");tasks->tasks[0].mode=BATCH_PARALLEL;
+    assert(batch_task_add_directory(&tasks->tasks[0],directory)==1&&batch_task_add_directory(&tasks->tasks[0],second)==1);
+    lstrcpyW(tasks->tasks[0].commands[0],L"echo first");lstrcpyW(tasks->tasks[0].commands[1],L"echo second");assert(store_save_batch_tasks(tasks));long long task_id=tasks->tasks[0].id;
+    Workspace *values=calloc(MAX_WORKSPACES,sizeof(*values));assert(values);lstrcpyW(values[0].name,L"目录");lstrcpyW(values[1].name,L"使用数据");values[0].items_loaded=values[1].items_loaded=1;values[1].app_count=1;
+    lstrcpyW(values[1].apps[0].name,L"任务入口");swprintf(values[1].apps[0].target,NOVA_PATH_CAP,L"nova-batch:%lld",task_id);assert(store_save_workspaces(values,2,1,FALSE));
+    FileCommandList presets;file_command_defaults(&presets);assert(file_command_add(&presets,L"检查",L"echo checked")==1);presets.default_index=1;assert(store_save_file_commands(&presets));
+    assert(store_begin());assert(store_set_int(L"files",L"Manager",L"Migrated",1)&&store_set_int(L"files",L"Manager",L"FavoriteCount",1)&&store_set(L"files",L"Favorites",L"Item0",directory));
+    assert(store_set_int(L"files",L"Pane0",L"Count",2)&&store_set_int(L"files",L"Pane0",L"Selected",1)&&store_set(L"files",L"Pane0",L"Tab0",directory)&&store_set(L"files",L"Pane0",L"Tab1",second));assert(store_end(TRUE));
+    store_close();assert(store_open(directory));assert(store_load_batch_tasks(restored)&&restored->count==1&&restored->tasks[0].id==task_id&&restored->tasks[0].mode==BATCH_PARALLEL);
+    assert(!wcscmp(restored->tasks[0].commands[0],L"echo first")&&!wcscmp(restored->tasks[0].commands[1],L"echo second"));assert(store_load_workspaces(values)==2&&store_load_items(&values[1]));
+    assert(batch_task_target_id(values[1].apps[0].target)==task_id&&store_load_file_commands(&presets)&&presets.default_index==1);
+    wchar_t location[MAX_PATH];assert(store_get(L"files",L"Pane0",L"Tab1",L"",location,MAX_PATH)&&!wcscmp(location,second));assert(store_int(L"files",L"Pane0",L"Selected",0)==1&&store_int(L"files",L"Manager",L"FavoriteCount",0)==1);
+    swprintf(path,MAX_PATH,L"%ls\\nova.sqlite",directory);assert(GetFileAttributesW(path)==INVALID_FILE_ATTRIBUTES);store_close();swprintf(path,MAX_PATH,L"%ls\\nova.json",directory);DeleteFileW(path);assert(RemoveDirectoryW(directory));free(values);free(tasks);free(restored);
+    puts("PASS tasks, independent subtask commands, shortcuts, presets, tabs and favorites reload from config JSON without a disk database");
+}
+static void test_json_migration(const wchar_t *parent){
+    wchar_t legacy[MAX_PATH],target[MAX_PATH],database[MAX_PATH],json_path[MAX_PATH];
+    swprintf(legacy,MAX_PATH,L"%ls\\legacy",parent);swprintf(target,MAX_PATH,L"%ls\\config",parent);assert(CreateDirectoryW(legacy,NULL)&&CreateDirectoryW(target,NULL));
+    swprintf(database,MAX_PATH,L"%ls\\nova.sqlite",legacy);swprintf(json_path,MAX_PATH,L"%ls\\nova.json",target);
+    sqlite3 *source=NULL;assert(sqlite3_open16(database,&source)==SQLITE_OK);
+    assert(sqlite3_exec(source,"CREATE TABLE settings(scope TEXT,section TEXT,key TEXT,value TEXT,PRIMARY KEY(scope,section,key));"
+        "CREATE TABLE workspaces(id INTEGER PRIMARY KEY,position INTEGER,name TEXT);"
+        "CREATE TABLE items(id INTEGER PRIMARY KEY,workspace_id INTEGER,position INTEGER,name TEXT,target TEXT);"
+        "INSERT INTO workspaces VALUES(9223372036854775807,0,'Files');"
+        "INSERT INTO items VALUES(9223372036854775806,9223372036854775807,0,'quote \" and slash','C:\\fixture');"
+        "INSERT INTO settings VALUES('app','Nova','Language','1');PRAGMA application_id=1313822273;PRAGMA user_version=1",NULL,NULL,NULL)==SQLITE_OK);
+    sqlite3_close(source);BYTE *before=malloc(1024*1024),*after=malloc(1024*1024);assert(before&&after);DWORD length=read_file(database,before,1024*1024);
+    write_text_file(json_path,"{\"version\":1,\"application\":\"NOVA Desktop\",\"initialized\":false,\"settings\":[],\"workspaces\":[],\"items\":[]}");
+    BOOL migrated=store_open_from(target,legacy);if(!migrated)fwprintf(stderr,L"Migration failed: %ls\n",store_error());assert(migrated);Workspace values[MAX_WORKSPACES];assert(store_load_workspaces(values)==1&&values[0].id==9223372036854775807LL);
+    assert(store_load_items(&values[0])&&values[0].apps[0].id==9223372036854775806LL&&store_int(L"app",L"Nova",L"Language",0)==1);
+    assert(read_file(database,after,1024*1024)==length&&!memcmp(before,after,length));
+    assert(store_set(L"app",L"Unicode",L"Escapes",L"中文\n\"quoted\"\\path"));store_close();
+    assert(store_open_from(target,legacy));wchar_t restored[80];assert(store_get(L"app",L"Unicode",L"Escapes",L"",restored,80)&&!wcscmp(restored,L"中文\n\"quoted\"\\path"));store_close();
+    assert(sqlite3_open16(database,&source)==SQLITE_OK);assert(sqlite3_exec(source,"PRAGMA user_version=99",NULL,NULL,NULL)==SQLITE_OK);sqlite3_close(source);
+    assert(store_open_from(target,legacy));store_close(); /* JSON wins after the one-time migration. */
+    DeleteFileW(json_path);length=read_file(database,before,1024*1024);assert(!store_open_from(target,legacy));
+    assert(read_file(database,after,1024*1024)==length&&!memcmp(before,after,length));free(before);free(after);
+    DeleteFileW(database);assert(RemoveDirectoryW(legacy)&&RemoveDirectoryW(target));
+    puts("PASS read-only SQLite migration, exact 64-bit IDs as strings, Unicode/escape round-trip and one-time JSON precedence");
+}
 int wmain(void){
     test_mode=TRUE;setvbuf(stdout,NULL,_IONBF,0);
     wchar_t temp[MAX_PATH],directory[MAX_PATH],database[MAX_PATH],backup[MAX_PATH];GetTempPathW(MAX_PATH,temp);
     swprintf(directory,MAX_PATH,L"%lsNovaStorage-%lu",temp,GetCurrentProcessId());assert(CreateDirectoryW(directory,NULL));
-    swprintf(config_path,MAX_PATH,L"%ls\\config.ini",directory);swprintf(database,MAX_PATH,L"%ls\\nova.sqlite",directory);swprintf(backup,MAX_PATH,L"%ls\\nova.backup.sqlite",directory);
+    swprintf(config_path,MAX_PATH,L"%ls\\config.ini",directory);swprintf(database,MAX_PATH,L"%ls\\nova.json",directory);swprintf(backup,MAX_PATH,L"%ls\\nova.backup.json",directory);
     HANDLE f=CreateFileW(config_path,GENERIC_WRITE,0,NULL,CREATE_NEW,0,NULL);assert(f!=INVALID_HANDLE_VALUE);WORD bom=0xfeff;DWORD bytes;WriteFile(f,&bom,2,&bytes,NULL);CloseHandle(f);
 #define LEGACY(section,key,value) assert(WritePrivateProfileStringW(section,key,value,config_path))
     LEGACY(L"Nova",L"WorkspaceCount",L"2");LEGACY(L"Nova",L"Active",L"1");LEGACY(L"Nova",L"AlwaysOnTop",L"1");
@@ -63,14 +127,24 @@ int wmain(void){
     assert(restored_commands.count==2&&restored_commands.default_index==1&&!wcscmp(restored_commands.items[1].command,L"git status"));
     assert(store_set_int(L"file_commands",L"Commands",L"Version",2));assert(!store_load_file_commands(&restored_commands));assert(store_int(L"file_commands",L"Commands",L"Version",0)==2);assert(store_save_file_commands(&commands));
     puts("PASS bounded command presets and default selection persist transactionally; newer data is preserved");
-    assert(store_backup());sqlite3 *reader=NULL;assert(sqlite3_open16(backup,&reader)==SQLITE_OK);sqlite3_stmt *q=NULL;
-    assert(sqlite3_prepare_v2(reader,"SELECT count(*) FROM items",-1,&q,NULL)==SQLITE_OK);assert(sqlite3_step(q)==SQLITE_ROW&&sqlite3_column_int(q,0)==2);sqlite3_finalize(q);sqlite3_close(reader);
-    printf("PASS stable IDs, cross-workspace transaction, unloaded-item preservation, rollback and SQLite backup; SQLite heap %lu bytes\n",(unsigned long)sqlite3_memory_used());
+    assert(store_backup());sqlite3 *reader=NULL;assert(sqlite3_open(":memory:",&reader)==SQLITE_OK);sqlite3_stmt *q=NULL;
+    BYTE *json=calloc(1,1024*1024);assert(json);DWORD json_length=read_file(backup,json,1024*1024-1);
+    assert(sqlite3_prepare_v2(reader,"SELECT json_array_length(?1,'$.items')",-1,&q,NULL)==SQLITE_OK);assert(sqlite3_bind_text(q,1,(char*)json,json_length,SQLITE_STATIC)==SQLITE_OK);assert(sqlite3_step(q)==SQLITE_ROW&&sqlite3_column_int(q,0)==2);sqlite3_finalize(q);sqlite3_close(reader);
+    HANDLE locked=CreateFileW(database,GENERIC_READ,FILE_SHARE_READ,NULL,OPEN_EXISTING,0,NULL);assert(locked!=INVALID_HANDLE_VALUE);
+    assert(!store_set_int(L"app",L"Nova",L"Active",7));assert(store_int(L"app",L"Nova",L"Active",-1)==1);CloseHandle(locked);
+    DWORD saved_length=read_file(database,json,1024*1024-1);assert(saved_length==json_length);free(json);
+    puts("PASS stable IDs, unloaded items, transaction rollback, atomic JSON backup and rollback when the destination is locked");
     /* A later launch must ignore stale INI data after successful migration. */
-    LEGACY(L"Workspace0",L"Name",L"过期 INI");store_close();load_config();assert(!storage_failed&&!wcscmp(spaces[0].name,L"目录"));
-    store_close();assert(sqlite3_open16(database,&reader)==SQLITE_OK);assert(sqlite3_exec(reader,"PRAGMA user_version=99",NULL,NULL,NULL)==SQLITE_OK);sqlite3_close(reader);
-    assert(!store_open(directory));assert(!store_ready());
-    assert(sqlite3_open16(database,&reader)==SQLITE_OK);assert(sqlite3_prepare_v2(reader,"PRAGMA user_version",-1,&q,NULL)==SQLITE_OK);assert(sqlite3_step(q)==SQLITE_ROW&&sqlite3_column_int(q,0)==99);sqlite3_finalize(q);sqlite3_close(reader);
-    puts("PASS one-time migration and refusal to overwrite newer schema");
+    LEGACY(L"Workspace0",L"Name",L"过期 INI");store_close();load_config();if(storage_failed)fwprintf(stderr,L"JSON reopen failed: %ls\n",store_error());assert(!storage_failed&&!wcscmp(spaces[0].name,L"目录"));
+    store_close();test_config_location(directory);test_usage_data(directory);test_json_migration(directory);
+    refused_json(directory,"{\"version\":99,\"application\":\"NOVA Desktop\",\"initialized\":true,\"settings\":[],\"workspaces\":[],\"items\":[]}");
+    refused_json(directory,"{\"version\":1,\"version\":1,\"application\":\"NOVA Desktop\",\"initialized\":true,\"settings\":[],\"workspaces\":[],\"items\":[]}");
+    refused_json(directory,"{\"version\":1,\"application\":\"NOVA Desktop\",\"initialized\":true,\"settings\":[],\"workspaces\":[{\"id\":\"9223372036854775808\",\"position\":0,\"name\":\"Files\"}],\"items\":[]}");
+    refused_json(directory,"{\"version\":1,\"application\":\"NOVA Desktop\",\"initialized\":true,\"settings\":[{\"scope\":\"app\",\"section\":\"Nova\",\"key\":\"Language\",\"value\":\"a\\u0000b\"}],\"workspaces\":[],\"items\":[]}");
+    refused_json(directory,"{\"version\":1,\"application\":\"NOVA Desktop\",\"initialized\":true,\"settings\":[],\"workspaces\":[],\"items\":[{\"id\":\"1\",\"workspace_id\":\"2\",\"position\":0,\"name\":\"missing workspace\",\"target\":\"C:\\\\fixture\"}]}");
+    refused_json(directory,"{ invalid JSON }");
+    refused_json(directory,"{\"version\":1,\"application\":\"NOVA Desktop\",\"initialized\":true,\"settings\":[{\"scope\":\"files\",\"section\":\"Pane0\",\"key\":\"Count\",\"value\":\"13\"}],\"workspaces\":[],\"items\":[]}");
+    refused_json(directory,"{\"version\":1,\"application\":\"NOVA Desktop\",\"initialized\":true,\"settings\":[],\"workspaces\":[{\"id\":\"1\",\"position\":0,\"name\":\"\\ud800\"}],\"items\":[]}");
+    puts("PASS malformed/newer JSON, duplicate keys, ID overflow, embedded NUL and orphan refusal without overwriting originals");
     DeleteFileW(database);DeleteFileW(backup);DeleteFileW(config_path);assert(RemoveDirectoryW(directory));return 0;
 }

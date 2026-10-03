@@ -3,3 +3,7 @@
 *.o
 *.obj
 *.res
+!/config/
+!/config/nova.json
+/config/nova.backup.json
+/config/.nova-*.tmp

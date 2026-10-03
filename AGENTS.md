@@ -23,7 +23,7 @@ about code that already exists.
 
 - `src/main.c`: application setup, main window, commands, and message loop.
 - `src/core/`: UI-independent workspace and launch-queue rules.
-- `src/platform/`: Windows/SQLite integration and resource ownership.
+- `src/platform/`: Windows/JSON integration, in-memory SQLite transactions and resource ownership.
 - `src/ui/`: file manager and reusable interaction logic.
 - `src/i18n.h`: Simplified Chinese / English string selection.
 - `tests/`: unit and Windows integration tests.
@@ -49,7 +49,7 @@ change, and update its README, source URL, hashes, and compatibility tests.
 - Prefer bounded state and explicit limits. Current limits are 8 workspaces,
   20 launch items per normal workspace, 4 file panes, 12 tabs per pane,
   32 favorites, and 24 in-memory history entries per tab.
-- Preserve transactional behavior for workspace changes and SQLite writes.
+- Preserve transactional behavior for workspace changes and JSON writes.
   Reject invalid, duplicate, over-capacity, newer-schema, or corrupt data
   without silently truncating or overwriting it.
 
@@ -67,8 +67,9 @@ change, and update its README, source URL, hashes, and compatibility tests.
   upload, or cloud synchronization without explicit requirements and review.
 - Do not construct shell command strings from user file paths. Keep executable,
   arguments, and working directory separate when launching programs.
-- Preserve the local data location `%APPDATA%\NOVA Desktop\nova.sqlite`, the
-  one-time INI migration, and backup behavior unless a migration is included.
+- Preserve `config/nova.json`, its one-time read-only migration from
+  `%APPDATA%\NOVA Desktop\nova.sqlite` / INI files, and JSON backup behavior
+  unless a migration is included. Keep the primary JSON available to Git.
 
 ## Localization
 
@@ -77,7 +78,7 @@ change, and update its README, source URL, hashes, and compatibility tests.
 - Include menus, tooltips, empty states, dialogs, status messages, accessible
   window names, and error paths in localization work.
 - Language changes must take effect immediately and persist through the
-  `app/Nova/Language` SQLite setting.
+  `app/Nova/Language` setting in JSON.
 - Do not translate user-created workspace or item names. The fixed first
   workspace may be displayed as `目录` / `Files` without changing its stored
   identity.

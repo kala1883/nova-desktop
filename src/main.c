@@ -77,6 +77,7 @@ static RECT floating_rect;
 static BOOL floating_was_zoomed;
 static LONG_PTR floating_style, floating_exstyle;
 static wchar_t config_path[MAX_PATH], notice[256]=L"拖入应用、快捷方式或文件夹，添加到当前工作区。";
+static wchar_t configuration_directory[MAX_PATH];
 static ULONGLONG prev_idle, prev_kernel, prev_user;
 static int system_cpu, memory_load;
 static const COLORREF BG=RGB(14,19,29), PANEL=RGB(22,29,42), TEXT=RGB(236,241,249), MUTED=RGB(167,181,202);
@@ -105,6 +106,7 @@ static void open_file_manager(void){
     end_name_edit(TRUE);
     wchar_t directory[MAX_PATH];lstrcpynW(directory,config_path,MAX_PATH);
     wchar_t *slash=wcsrchr(directory,L'\\');if(slash)*slash=0;
+    if(configuration_directory[0])lstrcpyW(directory,configuration_directory);
     files_view=file_manager_open(main_window,directory);
     if(!files_view){error_message(nova_text(L"无法打开文件管理页面。",L"Unable to open the file manager."));return;}
     files_page=TRUE;
@@ -162,7 +164,7 @@ static BOOL repair_loaded_names(void){
 static BOOL ensure_storage(void){
     wchar_t directory[MAX_PATH];lstrcpynW(directory,config_path,MAX_PATH);
     wchar_t *slash=wcsrchr(directory,L'\\');if(!slash)return FALSE;*slash=0;
-    if(!store_open(directory)){storage_failed=TRUE;set_notice(store_error());return FALSE;}return TRUE;
+    if(!store_open_from(configuration_directory[0]?configuration_directory:directory,directory)){storage_failed=TRUE;set_notice(store_error());return FALSE;}return TRUE;
 }
 static BOOL ensure_items(int index){
     if(index<0||index>=space_count)return FALSE;
@@ -170,11 +172,12 @@ static BOOL ensure_items(int index){
     if(!store_load_items(&spaces[index])){storage_failed=TRUE;set_notice(store_error());return FALSE;}return TRUE;
 }
 static BOOL save_config(void){
-    if(storage_failed||!ensure_storage())return FALSE;
+    if(storage_failed||!ensure_storage()||!store_begin())return FALSE;
     BOOL ok=store_save_workspaces(spaces,space_count,active_space,prefer_pin);
     if(ok)ok=store_set_int(L"app",L"Nova",L"DesktopMode",prefer_desktop);
     if(ok)ok=store_set_int(L"app",L"Nova",L"Language",nova_english?1:0);
     if(ok)ok=store_set_int(L"app",L"Nova",L"SidebarCollapsed",sidebar_collapsed?1:0);
+    ok=store_end(ok);
     if(!ok)set_notice(store_error());
     return ok;
 }
@@ -201,7 +204,7 @@ static void load_legacy_config(void) {
     }
     /* Older releases wrote ANSI INIs. Repair only recognizable placeholder names. */
     BOOL repaired=repair_loaded_names();
-    if(repaired)set_notice(nova_text(L"已在数据库迁移中修复旧版默认名称；原 INI 保留。",L"Legacy default names were repaired during database migration; the original INI was preserved."));
+    if(repaired)set_notice(nova_text(L"已在 JSON 迁移中修复旧版默认名称；原 INI 保留。",L"Legacy default names were repaired during JSON migration; the original INI was preserved."));
 }
 
 static void load_config(void){
@@ -215,7 +218,7 @@ static void load_config(void){
         if(storage_failed)return;
         for(int i=0;i<space_count;i++)spaces[i].items_loaded=1;
         if(!save_config()){storage_failed=TRUE;return;}
-        if(!store_backup())set_notice(nova_text(L"数据库已保存，但备份失败；原 INI 仍然保留。",L"The database was saved, but backup failed; the original INI is still preserved."));
+        if(!store_backup())set_notice(nova_text(L"JSON 配置已保存，但备份失败；原 INI 仍然保留。",L"JSON configuration was saved, but backup failed; the original INI is still preserved."));
         count=store_load_workspaces(spaces);
     }
     if(count<1){storage_failed=TRUE;return;}
@@ -799,15 +802,43 @@ static LRESULT CALLBACK window_proc(HWND hwnd,UINT msg,WPARAM wp,LPARAM lp){
     }return DefWindowProcW(hwnd,msg,wp,lp);
 }
 
+static BOOL resolve_config_directory(const wchar_t *executable,wchar_t *directory){
+    if(!executable||wcslen(executable)>=MAX_PATH)return FALSE;
+    wchar_t ancestor[MAX_PATH],local[MAX_PATH];lstrcpyW(ancestor,executable);
+    wchar_t *slash=wcsrchr(ancestor,L'\\');if(!slash)return FALSE;*slash=0;
+    if(wcslen(ancestor)>MAX_PATH-80)return FALSE;
+    swprintf(local,MAX_PATH,L"%ls\\config",ancestor);
+    while(ancestor[0]){
+        wchar_t marker[MAX_PATH],json[MAX_PATH];swprintf(marker,MAX_PATH,L"%ls\\.git",ancestor);swprintf(json,MAX_PATH,L"%ls\\config\\nova.json",ancestor);
+        if(GetFileAttributesW(marker)!=INVALID_FILE_ATTRIBUTES&&GetFileAttributesW(json)!=INVALID_FILE_ATTRIBUTES){swprintf(directory,MAX_PATH,L"%ls\\config",ancestor);return TRUE;}
+        slash=wcsrchr(ancestor,L'\\');if(!slash||slash<=ancestor+2)break;*slash=0;
+    }
+    lstrcpyW(directory,local);return TRUE;
+}
 int WINAPI wWinMain(HINSTANCE instance,HINSTANCE previous,PWSTR command,int show){
     (void)previous;SetProcessDPIAware();OleInitialize(NULL);
+    BOOL migrate_only=command&&!wcscmp(command,L"--migrate-data");
     HDC screen=GetDC(NULL);dpi=GetDeviceCaps(screen,LOGPIXELSX);ReleaseDC(NULL,screen);
     HANDLE mutex=CreateMutexW(NULL,FALSE,L"NOVA_DESKTOP_SINGLE_INSTANCE");
-    if(GetLastError()==ERROR_ALREADY_EXISTS){HWND existing=FindWindowW(APP_CLASS,NULL);if(existing){PostMessageW(existing,WM_RESTORE_NOVA,0,0);if(command&&wcsstr(command,L"--files"))PostMessageW(existing,WM_COMMAND,ID_FILES,0);}CloseHandle(mutex);OleUninitialize();return 0;}
+    if(GetLastError()==ERROR_ALREADY_EXISTS){
+        if(migrate_only){MessageBoxW(NULL,nova_text(L"请先关闭 NOVA，再迁移使用数据。",L"Close NOVA before migrating usage data."),APP_NAME,MB_OK|MB_ICONWARNING);CloseHandle(mutex);OleUninitialize();return 5;}
+        HWND existing=FindWindowW(APP_CLASS,NULL);if(existing){PostMessageW(existing,WM_RESTORE_NOVA,0,0);if(command&&wcsstr(command,L"--files"))PostMessageW(existing,WM_COMMAND,ID_FILES,0);}CloseHandle(mutex);OleUninitialize();return 0;
+    }
     wchar_t dir[MAX_PATH];if(FAILED(SHGetFolderPathW(NULL,CSIDL_APPDATA,NULL,SHGFP_TYPE_CURRENT,dir))||wcslen(dir)>MAX_PATH-40)return 1;
-    wcscat(dir,L"\\NOVA Desktop");CreateDirectoryW(dir,NULL);swprintf(config_path,MAX_PATH,L"%ls\\config.ini",dir);load_config();
+    wcscat(dir,L"\\NOVA Desktop");swprintf(config_path,MAX_PATH,L"%ls\\config.ini",dir);
+    wchar_t executable[MAX_PATH];DWORD length=GetModuleFileNameW(NULL,executable,MAX_PATH);
+    if(!length||length>=MAX_PATH||!resolve_config_directory(executable,configuration_directory)){
+        MessageBoxW(NULL,nova_text(L"无法定位 JSON 配置目录，请将程序放在较短的路径下。",L"Unable to locate the JSON configuration folder. Use a shorter executable path."),APP_NAME,MB_OK|MB_ICONERROR);CloseHandle(mutex);OleUninitialize();return 4;
+    }
+    if(!CreateDirectoryW(configuration_directory,NULL)&&GetLastError()!=ERROR_ALREADY_EXISTS){
+        MessageBoxW(NULL,nova_text(L"无法创建 JSON 配置目录，请检查目录权限。",L"Unable to create the JSON configuration folder. Check folder permissions."),APP_NAME,MB_OK|MB_ICONERROR);CloseHandle(mutex);OleUninitialize();return 4;
+    }
+    load_config();
+    if(!storage_failed&&!file_manager_migrate_settings(dir)){storage_failed=TRUE;set_notice(store_error());}
     if(storage_failed){MessageBoxW(NULL,notice,APP_NAME,MB_OK|MB_ICONERROR);store_close();CloseHandle(mutex);OleUninitialize();return 4;}
-    if(!store_backup())set_notice(nova_text(L"无法更新数据库备份，请检查数据目录权限。",L"Unable to update the database backup. Check permissions for the data folder."));
+    BOOL backed_up=store_backup();
+    if(migrate_only){store_close();CloseHandle(mutex);OleUninitialize();return backed_up?0:6;}
+    if(!backed_up)set_notice(nova_text(L"无法更新 JSON 配置备份，请检查配置目录权限。",L"Unable to update the JSON configuration backup. Check permissions for the configuration folder."));
     INITCOMMONCONTROLSEX ic={sizeof(ic),ICC_LISTVIEW_CLASSES|ICC_STANDARD_CLASSES};InitCommonControlsEx(&ic);
     background=CreateSolidBrush(BG);panel_brush=CreateSolidBrush(PANEL);taskbar_message=RegisterWindowMessageW(L"TaskbarCreated");
     WNDCLASSEXW wc={0};wc.cbSize=sizeof(wc);wc.hInstance=instance;wc.lpfnWndProc=window_proc;wc.lpszClassName=APP_CLASS;wc.hCursor=LoadCursorW(NULL,IDC_ARROW);

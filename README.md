@@ -32,8 +32,9 @@ required.
 - **Saved batch tasks** — up to 16 named tasks, each with up to 24 subtasks with
   individually editable working folders and commands, and sequential or parallel execution. Launch a selected
   task from **Settings → Batch tasks**.
-- **Local session restore** — workspaces, tabs, layout, navigation-tree state,
-  and favorites are stored in an embedded SQLite database.
+- **JSON configuration** — workspaces, launch items, tasks, commands, tabs,
+  layout, navigation-tree state, favorites and preferences are saved together
+  in `config/nova.json`, which is available for Git version control.
 - **Window modes** — normal, always on top, and desktop-fence mode, plus tray
   behavior and optional startup with Windows.
 - **Simplified Chinese and English UI** — switch instantly from
@@ -46,7 +47,8 @@ required.
 - PowerShell for the build and test scripts
 
 SQLite 3.53.4 is vendored in `third_party/sqlite` and linked statically. After
-the first build, no network access is needed.
+the first build, no network access is needed. It provides in-memory transactions,
+JSON parsing and migration of older databases; new configuration is stored as JSON.
 
 ## Build and run
 
@@ -67,6 +69,10 @@ to the repository (or an absolute path), useful when the normal exe is running:
 .\deployment\test-files.bat
 ```
 
+Every successful build also updates `build/packages/nova-desktop.exe` and
+`build/packages/config/nova.json`. The fixed executable replaces the previous
+copy; failed builds preserve it. If this copy is running, close it before building.
+
 For a local commit, push, build, and portable package, run:
 
 ```powershell
@@ -77,7 +83,8 @@ The message is optional; the default includes a timestamp. The script stages
 **all non-ignored changes**, commits when needed, pushes the current branch to
 its configured upstream (or `origin` with the same branch name), then builds
 the exe and ZIP under `build/packages/`. Each package has a unique directory,
-the source commit ID, both READMEs, the license, and both notice files. Binaries
+the source commit ID, both READMEs, the license, both notice files and a
+`config/nova.json` copy. Binaries
 remain local and ignored by Git; the script does not publish a release.
 It stops on any failure. A build failure after pushing leaves the source commit
 on the remote; rerunning can build it without creating an empty commit. It never
@@ -92,14 +99,33 @@ Open directly in file-manager mode:
 .\build\nova-desktop.exe --files
 ```
 
-The application stores its data in:
+When run inside this repository, the application reads and writes:
 
 ```text
-%APPDATA%\NOVA Desktop\nova.sqlite
+config\nova.json
 ```
 
-Existing `config.ini` and `file-manager.ini` data is migrated once and left in
-place. A valid database is backed up as `nova.backup.sqlite` during startup.
+Outside the repository it uses `config/nova.json` beside the executable.
+An absent JSON file or an empty `initialized: false` file imports existing configuration from
+`%APPDATA%\NOVA Desktop\nova.sqlite`, or from the legacy `config.ini` and
+`file-manager.ini`, on first launch; original files and their backups stay intact.
+Without older data it creates the default configuration. Subsequent launches
+use JSON only. All paths, names, commands and stable IDs survive migration.
+
+JSON is UTF-8 with a versioned format. IDs are decimal strings to preserve all
+64 bits. Saves atomically replace the file; invalid, duplicate, over-capacity or
+newer-format data is rejected without being overwritten. Startup creates
+`config/nova.backup.json`. Close NOVA before editing or restoring the JSON file.
+The primary JSON is not Git-ignored; backups and temporary files are ignored.
+Configuration includes user paths and command text, so review its Git diff when
+committing or deploying. See [configuration format](config/README.md).
+
+The same file contains saved usage data: tasks and subtask folders/commands,
+workspace launch items and task shortcuts, command presets, folder tabs and
+favorites. These are saved when you use NOVA, not just copied from a template.
+To migrate existing usage data before opening the UI, close NOVA and run
+`build/packages/nova-desktop.exe --migrate-data`. This only migrates/saves data
+and updates its backup; it does not run tasks or open launch items.
 
 ## Using workspaces
 
@@ -148,7 +174,7 @@ command mode.
 Each pane also has a command split button after the file-operation controls.
 Click its main area to run the default preset, or click the arrow to run a
 different preset, choose the default, or open **Manage commands…**. Preset
-names and commands are stored locally in SQLite. NOVA starts with a `cmd.exe`
+names and commands are stored in the JSON configuration. NOVA starts with a `cmd.exe`
 preset (`cd .`), which opens a command prompt in the current folder without
 changing its contents.
 
@@ -204,7 +230,7 @@ Commands use Windows cmd syntax, up to 2047 characters; for example
 `git pull origin main`, `npm run build`, or `git status && git log -1`.
 The existing single-task configuration becomes the first saved task. Existing
 task collections upgrade transactionally, retaining their IDs and commands.
-Tasks persist in local SQLite; folder paths are passed separately as working
+Tasks persist in the JSON configuration; folder paths are passed separately as working
 directories to system `cmd.exe /d /s /c`.
 
 The title bar places **Settings** first, followed by desktop fence, pin, and

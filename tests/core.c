@@ -368,6 +368,6 @@ int wmain(int argc,wchar_t **argv) {
         file_manager_close();DestroyWindow(window);DeleteFileW(fm_settings);OleUninitialize();puts("PASS window control integration");
     }
     store_close();DeleteFileW(path);DeleteFileW(config_path);
-    wchar_t db_file[MAX_PATH];swprintf(db_file,MAX_PATH,L"%ls\\nova.sqlite",dir);DeleteFileW(db_file);swprintf(db_file,MAX_PATH,L"%ls\\nova.backup.sqlite",dir);DeleteFileW(db_file);RemoveDirectoryW(dir);
+    wchar_t db_file[MAX_PATH];swprintf(db_file,MAX_PATH,L"%ls\\nova.json",dir);DeleteFileW(db_file);swprintf(db_file,MAX_PATH,L"%ls\\nova.backup.json",dir);DeleteFileW(db_file);assert(RemoveDirectoryW(dir));
     return 0;
 }

@@ -23,8 +23,8 @@ NOVA Desktop 是一个使用纯 C 和原生 Win32 API 编写的轻量 Windows �
   搜索、一次性启动整个工作区，或把侧边栏折叠成紧凑导航轨。
 - **多条批量任务**：在**设置 → 批量任务**中保存最多 16 条命名任务，每条包含
   最多 24 个可独立编辑工作目录和命令的子任务，并支持顺序/同时执行。
-- **本地会话恢复**：工作区、标签、布局、目录树开关和收藏保存在内嵌 SQLite
-  数据库中。
+- **JSON 配置**：工作区、启动项、任务、命令、标签、布局、目录树开关、收藏和
+  界面偏好统一保存在 `config/nova.json`，可以纳入 Git 版本管理。
 - **多种窗口形态**：普通窗口、置顶、桌面围栏、托盘，以及可选的开机启动。
 - **简体中文与英文界面**：在**设置 → 语言**中即时切换，下次启动自动恢复。
 
@@ -35,7 +35,7 @@ NOVA Desktop 是一个使用纯 C 和原生 Win32 API 编写的轻量 Windows �
 - 构建与测试脚本需要 PowerShell
 
 项目已在 `third_party/sqlite` 中固定 SQLite 3.53.4 并静态链接。首次构建完成后
-无需联网。
+无需联网。SQLite 用作内存事务、JSON 解析和旧数据库迁移；新配置以 JSON 保存。
 
 ## 构建与运行
 
@@ -55,6 +55,10 @@ NOVA Desktop 是一个使用纯 C 和原生 Win32 API 编写的轻量 Windows �
 .\deployment\test-files.bat
 ```
 
+每次成功编译还会更新 `build/packages/nova-desktop.exe` 和
+`build/packages/config/nova.json`。固定 exe 覆盖之前的副本，编译失败时保留旧副本。
+如果正在运行这份 exe，请先关闭再编译。
+
 按顺序提交、推送、编译并打包本地便携版：
 
 ```powershell
@@ -64,7 +68,7 @@ NOVA Desktop 是一个使用纯 C 和原生 Win32 API 编写的轻量 Windows �
 提交说明可省略，默认包含时间戳。脚本会暂存**所有未被忽略的改动**，有变化时提交，
 将当前分支推送到配置的上游（未配置时使用 `origin` 同名分支），然后将 exe 和 ZIP
 生成到 `build/packages/`。每次打包使用独立目录，包含源码提交号、两份 README、
-许可证及两份 NOTICE。二进制仅保存在本地并被 Git 忽略，不会发布 Release。
+许可证、两份 NOTICE 及 `config/nova.json` 配置副本。二进制仅保存在本地并被 Git 忽略，不会发布 Release。
 任一步失败都会停止；推送后若编译失败，远程源码提交仍保留，重新运行即可重试构建，
 不会创建空提交。脚本不会关闭正在运行的 NOVA。部署前请先运行相关测试。
 
@@ -76,14 +80,29 @@ NOVA Desktop 是一个使用纯 C 和原生 Win32 API 编写的轻量 Windows �
 .\build\nova-desktop.exe --files
 ```
 
-应用数据保存在：
+在仓库内运行程序时，配置直接读写：
 
 ```text
-%APPDATA%\NOVA Desktop\nova.sqlite
+config\nova.json
 ```
 
-旧版 `config.ini` 和 `file-manager.ini` 会在首次使用时迁移，原文件仍保留。
-数据库有效时，启动阶段会更新 `nova.backup.sqlite` 备份。
+在仓库外运行发布包时，读写 exe 旁边的 `config/nova.json`。
+JSON 文件不存在，或提供空的 `initialized: false` 初始配置时，首次启动会导入
+`%APPDATA%\NOVA Desktop\nova.sqlite`，或旧版 `config.ini`、`file-manager.ini`；
+原文件及其备份保留。没有旧数据时生成默认配置，此后只使用 JSON。
+迁移保留所有路径、名称、命令和稳定 ID。
+
+JSON 使用 UTF-8 和版本号，64 位 ID 保存为十进制字符串。保存使用原子替换，
+无效、重复、超容量或更新版本的数据会拒绝加载，避免覆盖原文件。
+启动时更新 `config/nova.backup.json`；手动编辑或恢复 JSON 前请关闭 NOVA。
+主配置不会被 Git 忽略，备份和临时文件仍忽略。配置包含用户路径与命令，提交或
+部署时请查看其 Git 差异。详见[配置格式](config/README.md)。
+
+同一文件也保存实际使用数据：任务及子任务目录/命令、工作区启动项和任务入口、
+命令预设、目录标签和收藏。使用程序时会直接保存这些数据，并非只保存配置模板。
+如需在打开界面前迁移现有数据，关闭 NOVA 后运行
+`build/packages/nova-desktop.exe --migrate-data`。此模式只迁移、保存数据并更新备份，
+不会执行任务或打开启动项。
 
 ## 使用工作区
 
@@ -124,7 +143,7 @@ NOVA Desktop 是一个使用纯 C 和原生 Win32 API 编写的轻量 Windows �
 
 每个窗格在文件操作按钮之后还有一个命令分裂按钮。单击主体可执行默认预设；单击
 箭头可执行其他预设、选择默认命令或打开“管理命令…”。预设名称和命令保存在本地
-SQLite 中。NOVA 初始提供 `cmd.exe` 预设（`cd .`），可在当前目录打开命令提示符，
+JSON 配置中。NOVA 初始提供 `cmd.exe` 预设（`cd .`），可在当前目录打开命令提示符，
 不会修改目录内容。
 
 ## 批量任务
@@ -166,7 +185,7 @@ SQLite 中。NOVA 初始提供 `cmd.exe` 预设（`cd .`），可在当前目录
 命令使用 Windows cmd 语法，最多 2047 个字符，例如 `git pull origin main`、
 `npm run build`、`git status && git log -1`。原有单条配置会迁移为第一条任务；
 已有任务集合通过事务升级，保留原任务 ID 和命令。
-任务保存在本地 SQLite；目录作为工作目录单独传给系统 `cmd.exe /d /s /c`。
+任务保存在 JSON 配置中；目录作为工作目录单独传给系统 `cmd.exe /d /s /c`。
 
 标题栏从左到右依次为**设置**、桌面围栏、置顶和标准窗口按钮。点击最大化/还原按钮
 从最大化还原时，窗口会回到当前显示器工作区中央的适中尺寸（最多 1100 × 760 逻辑像素）。

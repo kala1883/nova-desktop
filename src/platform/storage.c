@@ -1,18 +1,21 @@
 #include "storage.h"
+#include "config_json.h"
 #include "../i18n.h"
 #include "../../third_party/sqlite/sqlite3.h"
 #include <stdio.h>
 #include <wchar.h>
 #include <stdlib.h>
 #include <string.h>
+#include <errno.h>
 
 static sqlite3 *db;
-static wchar_t root[MAX_PATH],error_text[320];
+static wchar_t root[MAX_PATH],legacy_root[MAX_PATH],error_text[320];
+static BOOL opening,open_changed;
 static BOOL transaction_failed;
 static BOOL check(int rc){
     if(rc==SQLITE_OK||rc==SQLITE_DONE||rc==SQLITE_ROW)return TRUE;
     transaction_failed=TRUE;
-    swprintf(error_text,320,nova_text(L"本地数据库操作失败（%d）：%ls",L"Local database operation failed (%d): %ls"),rc,db?(const wchar_t*)sqlite3_errmsg16(db):nova_text(L"无法打开数据库",L"unable to open database"));return FALSE;
+    swprintf(error_text,320,nova_text(L"配置事务失败（%d）：%ls",L"Configuration transaction failed (%d): %ls"),rc,db?(const wchar_t*)sqlite3_errmsg16(db):nova_text(L"无法初始化配置事务",L"unable to initialize configuration transactions"));return FALSE;
 }
 static BOOL execute(const char *sql){return check(sqlite3_exec(db,sql,NULL,NULL,NULL));}
 static sqlite3_stmt *prepare(const char *sql){sqlite3_stmt *s=NULL;if(!db||!check(sqlite3_prepare_v2(db,sql,-1,&s,NULL)))return NULL;return s;}
@@ -25,42 +28,75 @@ BOOL store_begin(void){if(!db)return FALSE;transaction_failed=FALSE;return execu
 BOOL store_end(BOOL success){
     if(!db)return FALSE;
     if(!success||transaction_failed){sqlite3_exec(db,"ROLLBACK",NULL,NULL,NULL);return FALSE;}
-    if(execute("COMMIT"))return TRUE;
+    if(opening){if(execute("COMMIT")){open_changed=TRUE;return TRUE;}}
+    else if(config_json_commit(db,root,error_text))return TRUE;
     sqlite3_exec(db,"ROLLBACK",NULL,NULL,NULL);return FALSE;
 }
-void store_close(void){if(db){sqlite3_close_v2(db);db=NULL;}root[0]=0;}
-BOOL store_open(const wchar_t *directory){
+void store_close(void){if(db){sqlite3_close_v2(db);db=NULL;}root[0]=legacy_root[0]=0;opening=open_changed=FALSE;}
+const wchar_t *store_directory(void){return root;}
+const wchar_t *store_legacy_directory(void){return legacy_root;}
+static BOOL validate_number(const wchar_t *scope,const wchar_t *section,const wchar_t *key,int minimum,int maximum){
+    sqlite3_stmt *s=prepare("SELECT value FROM settings WHERE scope=? AND section=? AND key=?");if(!s)return FALSE;
+    bind_text(s,1,scope);bind_text(s,2,section);bind_text(s,3,key);int rc=sqlite3_step(s);BOOL ok=rc==SQLITE_DONE;
+    if(rc==SQLITE_ROW){
+        const wchar_t *text=sqlite3_column_text16(s,0);int bytes=sqlite3_column_bytes16(s,0);wchar_t *end=NULL;
+        errno=0;long value=text?wcstol(text,&end,10):0;
+        ok=text&&text[0]&&end!=text&&!*end&&errno!=ERANGE&&bytes<64*(int)sizeof(wchar_t)&&value>=minimum&&value<=maximum;
+    }
+    sqlite3_finalize(s);return ok;
+}
+static BOOL validate_preferences(void){
+    const wchar_t *flags[]={L"AlwaysOnTop",L"DesktopMode",L"Language",L"SidebarCollapsed"};
+    for(unsigned i=0;i<sizeof(flags)/sizeof(flags[0]);i++)if(!validate_number(L"app",L"Nova",flags[i],0,1))return FALSE;
+    if(!validate_number(L"app",L"Nova",L"Active",0,MAX_WORKSPACES-1))return FALSE;
+    if(!validate_number(L"files",L"Manager",L"Layout",0,11)||!validate_number(L"files",L"Manager",L"NavigationTree",0,1)||
+       !validate_number(L"files",L"Manager",L"Migrated",0,1)||!validate_number(L"files",L"Manager",L"FavoriteCount",0,32))return FALSE;
+    for(int i=0;i<4;i++){
+        wchar_t section[32];swprintf(section,32,L"Pane%d",i);
+        if(!validate_number(L"files",section,L"Count",1,12)||!validate_number(L"files",section,L"Selected",0,11)||
+           store_int(L"files",section,L"Selected",0)>=store_int(L"files",section,L"Count",1))return FALSE;
+    }
+    sqlite3_stmt *s=prepare("SELECT value FROM settings WHERE scope='files'");if(!s)return FALSE;
+    int rc;BOOL ok=TRUE;
+    while((rc=sqlite3_step(s))==SQLITE_ROW)if(sqlite3_column_bytes16(s,0)>=2048*(int)sizeof(wchar_t))ok=FALSE;
+    sqlite3_finalize(s);return ok&&rc==SQLITE_DONE;
+}
+BOOL store_open(const wchar_t *directory){return store_open_from(directory,directory);}
+BOOL store_open_from(const wchar_t *directory,const wchar_t *legacy){
+    if(!directory||!legacy||wcslen(directory)>MAX_PATH-80||wcslen(legacy)>MAX_PATH-32)return FALSE;
     if(db){if(!lstrcmpiW(directory,root))return TRUE;lstrcpyW(error_text,nova_text(L"已有其他数据目录打开。",L"Another data folder is already open."));return FALSE;}
-    wchar_t path[MAX_PATH];if(wcslen(directory)>MAX_PATH-32){lstrcpyW(error_text,nova_text(L"数据目录路径太长。",L"The data folder path is too long."));return FALSE;}
-    swprintf(path,MAX_PATH,L"%ls\\nova.sqlite",directory);
-    if(!check(sqlite3_open16(path,&db))){store_close();return FALSE;}
-    lstrcpynW(root,directory,MAX_PATH);sqlite3_busy_timeout(db,500);
-    sqlite3_limit(db,SQLITE_LIMIT_LENGTH,1024*1024);
-    sqlite3_limit(db,SQLITE_LIMIT_SQL_LENGTH,65536);
-    sqlite3_stmt *s=prepare("PRAGMA user_version");
-    if(!s){store_close();return FALSE;}
-    int rc=sqlite3_step(s),version=rc==SQLITE_ROW?sqlite3_column_int(s,0):-1;sqlite3_finalize(s);
-    if(version<0||version>1){lstrcpyW(error_text,nova_text(L"数据库损坏或由更新版本创建，原数据未修改。",L"The database is damaged or was created by a newer version. The original data was not changed."));store_close();return FALSE;}
-    s=prepare("PRAGMA application_id");if(!s){store_close();return FALSE;}
-    rc=sqlite3_step(s);int app=rc==SQLITE_ROW?sqlite3_column_int(s,0):-1;sqlite3_finalize(s);
-    if((version==1&&app!=0x4e4f5641)||(version==0&&app!=0&&app!=0x4e4f5641)){lstrcpyW(error_text,nova_text(L"数据文件不是 NOVA 数据库，未修改原文件。",L"The data file is not a NOVA database. The original file was not changed."));store_close();return FALSE;}
-    if(version==0){
-        s=prepare("SELECT count(*) FROM sqlite_schema WHERE name NOT LIKE 'sqlite_%'");if(!s){store_close();return FALSE;}
-        rc=sqlite3_step(s);BOOL empty=rc==SQLITE_ROW&&sqlite3_column_int(s,0)==0;sqlite3_finalize(s);
-        if(!empty){lstrcpyW(error_text,nova_text(L"未识别的数据文件，已停止迁移并保留原文件。",L"The data file is not recognized. Migration stopped and the original file was preserved."));store_close();return FALSE;}
+    error_text[0]=0;open_changed=FALSE;
+    if(!check(sqlite3_open(":memory:",&db))){store_close();return FALSE;}
+    lstrcpyW(root,directory);lstrcpyW(legacy_root,legacy);opening=TRUE;
+    sqlite3_limit(db,SQLITE_LIMIT_LENGTH,16*1024*1024);sqlite3_limit(db,SQLITE_LIMIT_SQL_LENGTH,65536);
+    BOOL ok=execute("PRAGMA foreign_keys=ON; PRAGMA trusted_schema=OFF;"
+        "CREATE TABLE settings(scope TEXT NOT NULL,section TEXT NOT NULL,key TEXT NOT NULL,value TEXT NOT NULL,PRIMARY KEY(scope,section,key)) WITHOUT ROWID;"
+        "CREATE TABLE workspaces(id INTEGER PRIMARY KEY,position INTEGER NOT NULL,name TEXT NOT NULL);"
+        "CREATE TABLE items(id INTEGER PRIMARY KEY,workspace_id INTEGER NOT NULL REFERENCES workspaces(id) ON DELETE CASCADE,position INTEGER NOT NULL,name TEXT NOT NULL,target TEXT NOT NULL);"
+        "CREATE INDEX items_workspace ON items(workspace_id,position); PRAGMA application_id=1313822273; PRAGMA user_version=1;");
+    BOOL initialized=FALSE,imported=FALSE;
+    if(ok)ok=config_json_load(db,root,&initialized,error_text);
+    if(ok&&!initialized)ok=config_json_legacy(db,legacy,&imported,error_text);
+    if(ok)ok=execute("PRAGMA foreign_keys=ON");
+    if(ok)ok=validate_preferences();
+    if(ok){
+        sqlite3_stmt *s=prepare("SELECT NOT EXISTS (SELECT 1 FROM pragma_foreign_key_check) AND NOT EXISTS (SELECT 1 FROM workspaces GROUP BY position HAVING count(*)>1) AND NOT EXISTS (SELECT 1 FROM items GROUP BY workspace_id,position HAVING count(*)>1 OR count(*)>20)");
+        ok=s&&sqlite3_step(s)==SQLITE_ROW&&sqlite3_column_int(s,0)==1;sqlite3_finalize(s);
     }
-    if(!execute("PRAGMA foreign_keys=ON; PRAGMA cache_size=-512; PRAGMA mmap_size=0; PRAGMA journal_mode=DELETE; PRAGMA synchronous=FULL; PRAGMA temp_store=FILE; PRAGMA trusted_schema=OFF;")){store_close();return FALSE;}
-    if(version==0){
-        if(!store_begin()){store_close();return FALSE;}
-        BOOL ok=execute("CREATE TABLE IF NOT EXISTS settings(scope TEXT NOT NULL,section TEXT NOT NULL,key TEXT NOT NULL,value TEXT NOT NULL,PRIMARY KEY(scope,section,key)) WITHOUT ROWID;"
-            "CREATE TABLE IF NOT EXISTS workspaces(id INTEGER PRIMARY KEY,position INTEGER NOT NULL,name TEXT NOT NULL);"
-            "CREATE TABLE IF NOT EXISTS items(id INTEGER PRIMARY KEY,workspace_id INTEGER NOT NULL REFERENCES workspaces(id) ON DELETE CASCADE,position INTEGER NOT NULL,name TEXT NOT NULL,target TEXT NOT NULL);"
-            "CREATE INDEX IF NOT EXISTS items_workspace ON items(workspace_id,position); PRAGMA application_id=1313822273; PRAGMA user_version=1;");
-        if(!store_end(ok)){store_close();return FALSE;}
+    if(ok){
+        Workspace *values=calloc(MAX_WORKSPACES,sizeof(*values));int count=values?store_load_workspaces(values):-1;ok=count>=0;
+        for(int i=0;i<count&&ok;i++)ok=store_load_items(&values[i]);
+        free(values);
     }
-    s=prepare("PRAGMA quick_check");if(!s){store_close();return FALSE;}
-    rc=sqlite3_step(s);BOOL healthy=rc==SQLITE_ROW&&!strcmp((const char*)sqlite3_column_text(s,0),"ok");sqlite3_finalize(s);
-    if(!healthy){lstrcpyW(error_text,nova_text(L"数据库完整性检查失败，原文件保留，请从备份恢复。",L"The database integrity check failed. The original file was preserved; restore from the backup."));store_close();return FALSE;}
+    if(ok){
+        sqlite3_stmt *s=prepare("SELECT EXISTS(SELECT 1 FROM settings WHERE scope='batch_tasks' OR scope='batch_git_pull_main'),EXISTS(SELECT 1 FROM settings WHERE scope='file_commands')");
+        ok=s&&sqlite3_step(s)==SQLITE_ROW;int batch=ok?sqlite3_column_int(s,0):0,commands=ok?sqlite3_column_int(s,1):0;sqlite3_finalize(s);
+        if(ok&&batch){BatchTaskList *tasks=calloc(1,sizeof(*tasks));ok=tasks&&store_load_batch_tasks(tasks);free(tasks);}
+        if(ok&&commands){FileCommandList presets;ok=store_load_file_commands(&presets);}
+    }
+    opening=FALSE;
+    if(ok&&(imported||open_changed))ok=store_begin()&&store_end(TRUE);
+    if(!ok){if(!error_text[0])lstrcpyW(error_text,nova_text(L"配置无效，原文件未修改。",L"Invalid configuration. The original file was not changed."));store_close();return FALSE;}
     return TRUE;
 }
 BOOL store_get(const wchar_t *scope,const wchar_t *section,const wchar_t *key,const wchar_t *fallback,wchar_t *value,int capacity){
@@ -73,16 +109,27 @@ int store_int(const wchar_t *scope,const wchar_t *section,const wchar_t *key,int
     long n=wcstol(value,&end,10);return *end?fallback:(int)n;
 }
 BOOL store_set(const wchar_t *scope,const wchar_t *section,const wchar_t *key,const wchar_t *value){
-    sqlite3_stmt *s=prepare("INSERT INTO settings VALUES(?,?,?,?) ON CONFLICT(scope,section,key) DO UPDATE SET value=excluded.value WHERE value<>excluded.value");if(!s)return FALSE;
-    bind_text(s,1,scope);bind_text(s,2,section);bind_text(s,3,key);bind_text(s,4,value);return finish(s);
+    if(!db)return FALSE;
+    BOOL own=sqlite3_get_autocommit(db);if(own&&!store_begin())return FALSE;
+    sqlite3_stmt *s=prepare("INSERT INTO settings VALUES(?,?,?,?) ON CONFLICT(scope,section,key) DO UPDATE SET value=excluded.value WHERE value<>excluded.value");
+    BOOL ok=s&&bind_text(s,1,scope)&&bind_text(s,2,section)&&bind_text(s,3,key)&&bind_text(s,4,value);
+    if(ok)ok=finish(s);else if(s)sqlite3_finalize(s);
+    return own?store_end(ok):ok;
 }
 BOOL store_set_int(const wchar_t *scope,const wchar_t *section,const wchar_t *key,int value){wchar_t text[24];swprintf(text,24,L"%d",value);return store_set(scope,section,key,text);}
-BOOL store_clear(const wchar_t *scope){sqlite3_stmt *s=prepare("DELETE FROM settings WHERE scope=?");if(!s)return FALSE;bind_text(s,1,scope);return finish(s);}
+BOOL store_clear(const wchar_t *scope){
+    if(!db)return FALSE;
+    BOOL own=sqlite3_get_autocommit(db);if(own&&!store_begin())return FALSE;
+    sqlite3_stmt *s=prepare("DELETE FROM settings WHERE scope=?");BOOL ok=s&&bind_text(s,1,scope);
+    if(ok)ok=finish(s);else if(s)sqlite3_finalize(s);
+    return own?store_end(ok):ok;
+}
 long long store_new_id(void){sqlite3_int64 id;do{sqlite3_randomness(sizeof(id),&id);id&=0x7fffffffffffffffLL;}while(!id);return id;}
 int store_load_workspaces(Workspace *spaces){
     sqlite3_stmt *s=prepare("SELECT w.id,w.name,(SELECT count(*) FROM items WHERE workspace_id=w.id) FROM workspaces w ORDER BY position,id");if(!s)return -1;
     int n=0,rc;while((rc=sqlite3_step(s))==SQLITE_ROW){
         if(n==MAX_WORKSPACES||sqlite3_column_int(s,2)>MAX_APPS){lstrcpyW(error_text,nova_text(L"数据库项目数量超过本版本容量，未截断或覆盖数据。",L"The database contains more items than this version supports. No data was truncated or overwritten."));sqlite3_finalize(s);return -1;}
+        if(sqlite3_column_int64(s,0)<=0||sqlite3_column_bytes16(s,1)>=40*(int)sizeof(wchar_t)||sqlite3_column_bytes16(s,1)==0){sqlite3_finalize(s);return -1;}
         Workspace *w=&spaces[n++];ZeroMemory(w,sizeof(*w));w->id=sqlite3_column_int64(s,0);read_text(s,1,w->name,40);w->app_count=sqlite3_column_int(s,2);
     }
     BOOL ok=check(rc);sqlite3_finalize(s);return ok?n:-1;
@@ -91,11 +138,16 @@ BOOL store_load_items(Workspace *w){
     if(w->items_loaded)return TRUE;
     sqlite3_stmt *s=prepare("SELECT id,name,target FROM items WHERE workspace_id=? ORDER BY position,id");if(!s)return FALSE;
     sqlite3_bind_int64(s,1,w->id);int n=0,rc;
-    while((rc=sqlite3_step(s))==SQLITE_ROW&&n<MAX_APPS){AppItem *a=&w->apps[n++];a->id=sqlite3_column_int64(s,0);read_text(s,1,a->name,64);read_text(s,2,a->target,NOVA_PATH_CAP);}
+    while((rc=sqlite3_step(s))==SQLITE_ROW&&n<MAX_APPS){
+        if(sqlite3_column_int64(s,0)<=0||sqlite3_column_bytes16(s,1)>=64*(int)sizeof(wchar_t)||sqlite3_column_bytes16(s,2)>=NOVA_PATH_CAP*(int)sizeof(wchar_t)){sqlite3_finalize(s);return FALSE;}
+        AppItem *a=&w->apps[n++];a->id=sqlite3_column_int64(s,0);read_text(s,1,a->name,64);read_text(s,2,a->target,NOVA_PATH_CAP);
+        for(int i=0;i<n-1;i++)if(!lstrcmpiW(w->apps[i].target,a->target)){sqlite3_finalize(s);return FALSE;}
+    }
     BOOL ok=check(rc)&&rc==SQLITE_DONE;sqlite3_finalize(s);if(ok){w->app_count=n;w->items_loaded=1;}return ok;
 }
 BOOL store_save_workspaces(Workspace *spaces,int count,int active,BOOL pinned){
-    if(count<1||count>MAX_WORKSPACES||!store_begin())return FALSE;
+    if(count<1||count>MAX_WORKSPACES||!db)return FALSE;
+    BOOL own=sqlite3_get_autocommit(db);if(own&&!store_begin())return FALSE;
     BOOL ok=TRUE;sqlite3_stmt *s;
     /* IDs survive reorder, rename and cross-workspace moves. New IDs are independent of transaction rollback. */
     for(int i=0;i<count&&ok;i++){
@@ -125,7 +177,7 @@ BOOL store_save_workspaces(Workspace *spaces,int count,int active,BOOL pinned){
         }
     }
     ok=store_set_int(L"app",L"Nova",L"Active",active)&&ok;ok=store_set_int(L"app",L"Nova",L"AlwaysOnTop",pinned)&&ok;
-    return store_end(ok);
+    return own?store_end(ok):ok;
 }
 BOOL store_load_batch_task(BatchTask *task){
     if(!task)return FALSE;
@@ -308,11 +360,4 @@ BOOL store_load_file_commands(FileCommandList *commands){
     return ok;
 }
 
-BOOL store_backup(void){
-    if(!db)return FALSE;
-    wchar_t path[MAX_PATH],temp[MAX_PATH];swprintf(path,MAX_PATH,L"%ls\\nova.backup.sqlite",root);swprintf(temp,MAX_PATH,L"%ls\\nova.backup.tmp",root);
-    sqlite3 *dest=NULL;if(sqlite3_open16(temp,&dest)!=SQLITE_OK){if(dest)sqlite3_close(dest);return FALSE;}
-    sqlite3_backup *b=sqlite3_backup_init(dest,"main",db,"main");BOOL ok=FALSE;
-    if(b){int rc=sqlite3_backup_step(b,-1);ok=sqlite3_backup_finish(b)==SQLITE_OK&&rc==SQLITE_DONE;}
-    sqlite3_close(dest);return ok&&MoveFileExW(temp,path,MOVEFILE_REPLACE_EXISTING|MOVEFILE_WRITE_THROUGH);
-}
+BOOL store_backup(void){return db&&config_json_backup(root,error_text);}

@@ -65,7 +65,7 @@ int wmain(void){
     pump(500);assert(session_int(L"Manager",L"Split0_0",-1)==resized_split);
     divider.x=split_pixel(0,0,manager_rect.right);SendMessageW(fm.window,WM_LBUTTONDOWN,0,MAKELPARAM(divider.x,divider.y));assert(fm.splitter_dragging);
     SendMessageW(fm.window,WM_MOUSEMOVE,MK_LBUTTON,MAKELPARAM(divider.x-scale(40),divider.y));SendMessageW(fm.window,WM_CANCELMODE,0,0);assert(!fm.splitter_dragging&&fm.splits[0][0]==resized_split);
-    puts("PASS pane dividers resize, cancel safely, debounce to SQLite, and directory tabs use a clear owner-drawn selection state");
+    puts("PASS pane dividers resize, cancel safely, debounce to JSON, and directory tabs use a clear owner-drawn selection state");
     Pane *p=&fm.panes[0];Tab *t=current(p);
     assert(wait_location(t,root));assert_view_fills_host(t);
     /* Reproduce the stale 100x100 browser rectangle without resizing the pane. */
@@ -146,5 +146,5 @@ int wmain(void){
     puts("PASS 48 restored tabs create only 1/4 visible views; idle eviction to zero; history restored; debounced save flushed on close");
     OleSetClipboard(old_clipboard);if(old_clipboard){OleFlushClipboard();IDataObject_Release(old_clipboard);}
     DeleteFileW(copy);DeleteFileW(file);RemoveDirectoryW(created);RemoveDirectoryW(a);RemoveDirectoryW(b);
-    store_close();wchar_t settings[MAX_PATH];swprintf(settings,MAX_PATH,L"%ls\\file-manager.ini",root);DeleteFileW(settings);swprintf(settings,MAX_PATH,L"%ls\\nova.sqlite",root);DeleteFileW(settings);assert(RemoveDirectoryW(root));DestroyWindow(host);OleUninitialize();return 0;
+    store_close();wchar_t settings[MAX_PATH];swprintf(settings,MAX_PATH,L"%ls\\file-manager.ini",root);DeleteFileW(settings);swprintf(settings,MAX_PATH,L"%ls\\nova.json",root);DeleteFileW(settings);assert(RemoveDirectoryW(root));DestroyWindow(host);OleUninitialize();return 0;
 }
