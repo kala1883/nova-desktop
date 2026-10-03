@@ -337,13 +337,13 @@
       "scope": "files",
       "section": "Pane2",
       "key": "Count",
-      "value": "2"
+      "value": "3"
     },
     {
       "scope": "files",
       "section": "Pane2",
       "key": "Selected",
-      "value": "0"
+      "value": "2"
     },
     {
       "scope": "files",
@@ -356,6 +356,12 @@
       "section": "Pane2",
       "key": "Tab1",
       "value": "D:\\MyProjects\\MyApps\\LocalWebGPT"
+    },
+    {
+      "scope": "files",
+      "section": "Pane2",
+      "key": "Tab2",
+      "value": "D:\\MyProjects\\MyApps"
     },
     {
       "scope": "files",
