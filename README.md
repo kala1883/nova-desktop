@@ -165,8 +165,16 @@ Legacy rows without their own command continue to inherit the default command.
 Use **Run selected** above the subtask list to execute only the selected row,
 including pending edits. Its status and captured output appear on that row;
 double-click any completed row to view output, including successful commands.
-Other rows keep their results. While running, another single-row run is disabled;
-**Cancel task** stops the active command and clears queued tasks.
+Other rows keep their results. While a single row runs, you can run, edit or
+delete other idle rows, or add subtasks. Single-row runs start independently,
+even in sequential mode; an active row cannot be edited, deleted or started
+again. The task's name, default command, execution mode and task switching stay
+locked until all active rows finish. Select a separately started running row and
+choose **Cancel selected** to stop only that command and its child processes;
+other rows and queued tasks continue. The row shows **Cancelling…** until it
+finishes, then becomes editable and runnable again. **Cancel all** stops all
+active commands
+and clears queued tasks. Whole-task runs keep editing and single-row runs locked.
 Select a saved task and choose **Run task**. Saving, switching rows or tasks,
 running, and closing the window also save pending edits; invalid edits must be corrected.
 Each task keeps its own execution mode:
@@ -185,7 +193,7 @@ launcher workspace. Double-click the shortcut, press Enter, or use the
 workspace's **Launch all** button. If several task shortcuts are launched,
 their configurations are snapshotted and queued in order; each task retains
 its own sequential/parallel folder mode. Repeated launches of an active or
-queued task are ignored. Cancel task also clears queued tasks.
+queued task are ignored. Cancel all also clears queued tasks.
 
 Task shortcuts follow the saved task by a stable ID, including after rename
 or reorder. Removing a shortcut does not delete the task. Deleting a task

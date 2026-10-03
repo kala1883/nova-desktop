@@ -54,6 +54,15 @@ static void wait_batch_idle(void){
     while(batch_tasks_busy()&&GetTickCount64()<deadline){MSG event;while(PeekMessageW(&event,NULL,0,0,PM_REMOVE)){TranslateMessage(&event);DispatchMessageW(&event);}Sleep(1);}
     assert(!batch_tasks_busy());
 }
+static void wait_batch_row(HWND steps,int row,const wchar_t *expected){
+    ULONGLONG deadline=GetTickCount64()+10000;wchar_t status[1200];
+    do{
+        MSG event;while(PeekMessageW(&event,NULL,0,0,PM_REMOVE)){TranslateMessage(&event);DispatchMessageW(&event);}
+        ListView_GetItemText(steps,row,2,status,1200);if(wcsstr(status,expected))return;
+        Sleep(1);
+    }while(GetTickCount64()<deadline);
+    assert(!"Timed out waiting for subtask status");
+}
 
 int wmain(int argc,wchar_t **argv) {
     wchar_t tempdir[MAX_PATH],dir[MAX_PATH],path[MAX_PATH],command[MAX_PATH+40];
@@ -185,6 +194,7 @@ int wmain(int argc,wchar_t **argv) {
         SendMessageW(GetDlgItem(batch_window,2110),LB_SETCURSEL,0,0);SendMessageW(batch_window,WM_COMMAND,MAKEWPARAM(2110,LBN_SELCHANGE),0);
         wchar_t selected_command[BATCH_COMMAND_CAP];GetWindowTextW(GetDlgItem(batch_window,2106),selected_command,BATCH_COMMAND_CAP);assert(!wcscmp(selected_command,L"git pull origin main"));assert(SendMessageW(GetDlgItem(batch_window,2112),CB_GETCURSEL,0,0)==BATCH_SEQUENTIAL);
         HWND steps=GetDlgItem(batch_window,2101);
+        assert(!IsWindowEnabled(GetDlgItem(batch_window,2120)));SendMessageW(batch_window,WM_COMMAND,2120,0);assert(!batch_tasks_busy());
         assert(!IsWindowEnabled(GetDlgItem(batch_window,2119)));SendMessageW(batch_window,WM_COMMAND,2119,0);assert(!batch_tasks_busy());
         ListView_SetItemState(steps,1,LVIS_SELECTED|LVIS_FOCUSED,LVIS_SELECTED|LVIS_FOCUSED);
         assert(IsWindowEnabled(GetDlgItem(batch_window,2119)));
@@ -204,11 +214,82 @@ int wmain(int argc,wchar_t **argv) {
         SetWindowTextW(GetDlgItem(batch_window,2118),L"ping -n 30 127.0.0.1 >nul");SendMessageW(batch_window,WM_COMMAND,2119,0);
         ULONGLONG single_deadline=GetTickCount64()+5000;
         do{MSG event;while(PeekMessageW(&event,NULL,0,0,PM_REMOVE)){TranslateMessage(&event);DispatchMessageW(&event);}ListView_GetItemText(steps,1,2,row_status,1200);if(!wcscmp(row_status,nova_text(L"执行中",L"Running")))break;Sleep(1);}while(GetTickCount64()<single_deadline);
-        assert(!wcscmp(row_status,nova_text(L"执行中",L"Running")));SendMessageW(batch_window,WM_COMMAND,2104,0);wait_batch_idle();
+        assert(!wcscmp(row_status,nova_text(L"执行中",L"Running")));
+        assert(!IsWindowEnabled(GetDlgItem(batch_window,2118)));assert(!IsWindowEnabled(GetDlgItem(batch_window,2103)));
+        ListView_SetItemState(steps,0,LVIS_SELECTED|LVIS_FOCUSED,LVIS_SELECTED|LVIS_FOCUSED);
+        assert(IsWindowEnabled(GetDlgItem(batch_window,2119))&&IsWindowEnabled(GetDlgItem(batch_window,2118))&&IsWindowEnabled(GetDlgItem(batch_window,2103)));
+        if(GetEnvironmentVariableW(L"NOVA_TEST_CAPTURE",NULL,0)){
+            capture_batch(batch_window,L"build\\batch-subtasks-running-zh.bmp");nova_english=TRUE;batch_tasks_language_changed();capture_batch(batch_window,L"build\\batch-subtasks-running-en.bmp");nova_english=FALSE;batch_tasks_language_changed();
+        }
+        SetWindowTextW(GetDlgItem(batch_window,2118),L"echo concurrent row output & exit /b 0");SendMessageW(batch_window,WM_COMMAND,2119,0);
+        SendMessageW(batch_window,WM_COMMAND,2119,0); /* Duplicate while its slot is reserved. */
+        wait_batch_row(steps,0,L"concurrent row output");assert(batch_tasks_busy());
+        ListView_GetItemText(steps,1,2,row_status,1200);assert(!wcscmp(row_status,nova_text(L"执行中",L"Running")));
+        /* A completed row becomes editable again without waiting for the long row. */
+        ULONGLONG editor_deadline=GetTickCount64()+5000;
+        while(!IsWindowEnabled(GetDlgItem(batch_window,2118))&&GetTickCount64()<editor_deadline){MSG event;while(PeekMessageW(&event,NULL,0,0,PM_REMOVE)){TranslateMessage(&event);DispatchMessageW(&event);}Sleep(1);}
+        assert(IsWindowEnabled(GetDlgItem(batch_window,2118)));
+        SetWindowTextW(GetDlgItem(batch_window,2118),L"ping -n 30 127.0.0.1 >nul");SendMessageW(batch_window,WM_COMMAND,2119,0);
+        wait_batch_row(steps,0,nova_text(L"执行中",L"Running"));
+        assert(batch_tasks_launch(window,second_task_id)); /* Queued whole task cannot replace active row state. */
+        SendMessageW(batch_window,WM_COMMAND,2104,0);assert(!IsWindowEnabled(GetDlgItem(batch_window,2119)));wait_batch_idle();
         ListView_GetItemText(steps,1,2,row_status,1200);assert(!wcscmp(row_status,nova_text(L"已取消",L"Cancelled")));
-        ListView_GetItemText(steps,0,2,row_status,1200);assert(!wcscmp(row_status,nova_text(L"等待",L"Waiting")));
+        ListView_GetItemText(steps,0,2,row_status,1200);assert(!wcscmp(row_status,nova_text(L"已取消",L"Cancelled")));
         assert(IsWindowEnabled(GetDlgItem(batch_window,2119)));
         puts("PASS selected non-first subtask runs alone, saves edits, maps success/failure output, ignores duplicates and cancels");
+        puts("PASS long-running subtask permits independent editing, concurrent execution, rerun and cancellation of all active rows and queue");
+        SetWindowTextW(GetDlgItem(batch_window,2118),L"ping -n 30 127.0.0.1 >nul");SendMessageW(batch_window,WM_COMMAND,2119,0);
+        assert(IsWindowEnabled(GetDlgItem(batch_window,2120)));
+        ListView_SetItemState(steps,1,LVIS_SELECTED|LVIS_FOCUSED,LVIS_SELECTED|LVIS_FOCUSED);
+        assert(!IsWindowEnabled(GetDlgItem(batch_window,2120)));SendMessageW(batch_window,WM_COMMAND,2120,0); /* Idle row cannot cancel another row. */
+        SetWindowTextW(GetDlgItem(batch_window,2118),L"ping -n 30 127.0.0.1 >nul");SendMessageW(batch_window,WM_COMMAND,2119,0);
+        assert(batch_tasks_launch(window,second_task_id));
+        ListView_SetItemState(steps,0,LVIS_SELECTED|LVIS_FOCUSED,LVIS_SELECTED|LVIS_FOCUSED);
+        SendMessageW(batch_window,WM_COMMAND,2120,0);assert(!IsWindowEnabled(GetDlgItem(batch_window,2120)));
+        ListView_GetItemText(steps,0,2,row_status,1200);assert(!wcscmp(row_status,nova_text(L"正在取消…",L"Cancelling…")));
+        SendMessageW(batch_window,WM_COMMAND,2120,0); /* A repeated cancellation is harmless. */
+        wait_batch_row(steps,0,nova_text(L"已取消",L"Cancelled"));assert(batch_tasks_busy());
+        ListView_GetItemText(steps,1,2,row_status,1200);assert(!wcscmp(row_status,nova_text(L"执行中",L"Running")));
+        editor_deadline=GetTickCount64()+5000;
+        while(!IsWindowEnabled(GetDlgItem(batch_window,2118))&&GetTickCount64()<editor_deadline){MSG event;while(PeekMessageW(&event,NULL,0,0,PM_REMOVE)){TranslateMessage(&event);DispatchMessageW(&event);}Sleep(1);}
+        assert(IsWindowEnabled(GetDlgItem(batch_window,2118))&&!IsWindowEnabled(GetDlgItem(batch_window,2120)));
+        SetWindowTextW(GetDlgItem(batch_window,2118),L"echo rerun after individual cancel & exit /b 0");SendMessageW(batch_window,WM_COMMAND,2119,0);
+        wait_batch_row(steps,0,L"rerun after individual cancel");
+        ListView_SetItemState(steps,1,LVIS_SELECTED|LVIS_FOCUSED,LVIS_SELECTED|LVIS_FOCUSED);
+        assert(IsWindowEnabled(GetDlgItem(batch_window,2120))&&!IsWindowEnabled(GetDlgItem(batch_window,2119)));
+        if(GetEnvironmentVariableW(L"NOVA_TEST_CAPTURE",NULL,0)){
+            SetWindowPos(batch_window,NULL,0,0,px(1000),px(720),SWP_NOMOVE|SWP_NOZORDER);
+            capture_batch(batch_window,L"build\\batch-subtask-actions-zh.bmp");nova_english=TRUE;batch_tasks_language_changed();capture_batch(batch_window,L"build\\batch-subtask-actions-en.bmp");nova_english=FALSE;batch_tasks_language_changed();
+        }
+        SendMessageW(batch_window,WM_COMMAND,2120,0);wait_batch_idle();
+        GetWindowTextW(GetDlgItem(batch_window,2106),selected_command,BATCH_COMMAND_CAP);assert(!wcscmp(selected_command,L"exit /b 0")); /* Individual cancel preserves the queued task. */
+        SendMessageW(GetDlgItem(batch_window,2110),LB_SETCURSEL,0,0);SendMessageW(batch_window,WM_COMMAND,MAKEWPARAM(2110,LBN_SELCHANGE),0);
+        puts("PASS individual cancellation leaves other rows running and queue intact; cancelled rows can be edited and rerun");
+        ListView_SetItemState(steps,1,LVIS_SELECTED|LVIS_FOCUSED,LVIS_SELECTED|LVIS_FOCUSED);
+        SetWindowTextW(GetDlgItem(batch_window,2118),L"ping -n 3 127.0.0.1 >nul & echo delayed completion");SendMessageW(batch_window,WM_COMMAND,2119,0);
+        ListView_SetItemState(steps,0,LVIS_SELECTED|LVIS_FOCUSED,LVIS_SELECTED|LVIS_FOCUSED);
+        assert(batch_tasks_launch(window,second_task_id));
+        SetWindowTextW(GetDlgItem(batch_window,2118),L""); /* Invalid pending edit must hold the queue. */
+        wait_batch_row(steps,1,L"delayed completion");
+        ULONGLONG queue_deadline=GetTickCount64()+5000;
+        while(!IsWindowEnabled(GetDlgItem(batch_window,2110))&&GetTickCount64()<queue_deadline){MSG event;while(PeekMessageW(&event,NULL,0,0,PM_REMOVE)){TranslateMessage(&event);DispatchMessageW(&event);}Sleep(1);}
+        assert(IsWindowEnabled(GetDlgItem(batch_window,2110))&&batch_tasks_busy());
+        GetWindowTextW(GetDlgItem(batch_window,2118),selected_command,BATCH_COMMAND_CAP);assert(!selected_command[0]);
+        SetWindowTextW(GetDlgItem(batch_window,2118),L"echo preserved pending edit & exit /b 0");SendMessageW(batch_window,WM_COMMAND,2115,0);wait_batch_idle();
+        saved_tasks=calloc(1,sizeof(*saved_tasks));assert(saved_tasks&&store_load_batch_tasks(saved_tasks));
+        assert(!wcscmp(saved_tasks->tasks[0].commands[0],L"echo preserved pending edit & exit /b 0"));free(saved_tasks);
+        SendMessageW(GetDlgItem(batch_window,2110),LB_SETCURSEL,0,0);SendMessageW(batch_window,WM_COMMAND,MAKEWPARAM(2110,LBN_SELCHANGE),0);
+        puts("PASS completion preserves idle-row edits; invalid edits pause whole-task queue until corrected and saved");
+        ListView_SetItemState(steps,1,LVIS_SELECTED|LVIS_FOCUSED,LVIS_SELECTED|LVIS_FOCUSED);
+        SetWindowTextW(GetDlgItem(batch_window,2118),L"ping -n 30 127.0.0.1 >nul");SendMessageW(batch_window,WM_COMMAND,2119,0);
+        ListView_SetItemState(steps,0,LVIS_SELECTED|LVIS_FOCUSED,LVIS_SELECTED|LVIS_FOCUSED);
+        SetWindowTextW(GetDlgItem(batch_window,2118),L"");SendMessageW(batch_window,WM_COMMAND,2104,0);
+        SendMessageW(batch_window,WM_CLOSE,0,0);assert(batch_tasks_window()==batch_window); /* Invalid edit does not prevent cancellation or disappear on close. */
+        SetWindowTextW(GetDlgItem(batch_window,2118),L"echo saved during cancellation & exit /b 0");SendMessageW(batch_window,WM_CLOSE,0,0);
+        assert(!batch_tasks_window());wait_batch_idle();assert(batch_tasks_open(window));batch_window=batch_tasks_window();steps=GetDlgItem(batch_window,2101);
+        saved_tasks=calloc(1,sizeof(*saved_tasks));assert(saved_tasks&&store_load_batch_tasks(saved_tasks));
+        assert(!wcscmp(saved_tasks->tasks[0].commands[0],L"echo saved during cancellation & exit /b 0"));free(saved_tasks);
+        puts("PASS cancellation accepts invalid pending edits; closing still validates and preserves corrected edits");
         SetWindowTextW(GetDlgItem(batch_window,2106),L"git pull origin main");
         ListView_SetItemState(steps,0,LVIS_SELECTED|LVIS_FOCUSED,LVIS_SELECTED|LVIS_FOCUSED);
         SetWindowTextW(GetDlgItem(batch_window,2117),L"C:\\NOVA test metadata only");
@@ -219,7 +300,18 @@ int wmain(int argc,wchar_t **argv) {
         if(GetEnvironmentVariableW(L"NOVA_TEST_CAPTURE",NULL,0)){
             capture_batch(batch_window,L"build\\batch-tasks-zh.bmp");nova_english=TRUE;batch_tasks_language_changed();SetWindowPos(batch_window,NULL,0,0,px(1000),px(720),SWP_NOMOVE|SWP_NOZORDER);capture_batch(batch_window,L"build\\batch-tasks-en.bmp");nova_english=FALSE;batch_tasks_language_changed();
         }
+        ListView_SetItemState(steps,1,LVIS_SELECTED|LVIS_FOCUSED,LVIS_SELECTED|LVIS_FOCUSED);
+        SetWindowTextW(GetDlgItem(batch_window,2118),L"ping -n 30 127.0.0.1 >nul");
+        SendMessageW(batch_window,WM_COMMAND,2119,0);assert(batch_tasks_busy());
+        ListView_SetItemState(steps,0,LVIS_SELECTED|LVIS_FOCUSED,LVIS_SELECTED|LVIS_FOCUSED);
         SendMessageW(batch_window,WM_COMMAND,2103,0);assert(ListView_GetItemCount(steps)==1);
+        SendMessageW(batch_window,WM_CLOSE,0,0);assert(!batch_tasks_window()&&batch_tasks_busy());
+        assert(batch_tasks_open(window));batch_window=batch_tasks_window();steps=GetDlgItem(batch_window,2101);
+        ListView_SetItemState(steps,0,LVIS_SELECTED|LVIS_FOCUSED,LVIS_SELECTED|LVIS_FOCUSED);
+        assert(!IsWindowEnabled(GetDlgItem(batch_window,2119)));
+        SendMessageW(batch_window,WM_COMMAND,2104,0);wait_batch_idle();
+        ListView_GetItemText(steps,0,2,row_status,1200);assert(!wcscmp(row_status,nova_text(L"已取消",L"Cancelled")));
+        puts("PASS deleting an idle row preserves active result mapping across manager close/reopen");
         SendMessageW(batch_window,WM_CLOSE,0,0);assert(!batch_tasks_window());
         assert(RemoveDirectoryW(single_directory));
         puts("PASS independent named tasks, command editing, mode selection and task switching through native controls");
