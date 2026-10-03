@@ -25,7 +25,7 @@
       "scope": "app",
       "section": "Nova",
       "key": "Language",
-      "value": "0"
+      "value": "1"
     },
     {
       "scope": "app",
@@ -37,7 +37,7 @@
       "scope": "batch_tasks",
       "section": "Collection",
       "key": "Count",
-      "value": "1"
+      "value": "2"
     },
     {
       "scope": "batch_tasks",
@@ -54,14 +54,26 @@
     {
       "scope": "batch_tasks",
       "section": "Task0",
+      "key": "Directory0",
+      "value": "D:\\MyProjects\\MyApps\\mylocalllm"
+    },
+    {
+      "scope": "batch_tasks",
+      "section": "Task0",
+      "key": "Directory1",
+      "value": "D:\\MyProjects\\MyApps\\LocalWebGPT"
+    },
+    {
+      "scope": "batch_tasks",
+      "section": "Task0",
       "key": "DirectoryCount",
-      "value": "0"
+      "value": "2"
     },
     {
       "scope": "batch_tasks",
       "section": "Task0",
       "key": "Id",
-      "value": "4871059821973365515"
+      "value": "7987518378906657662"
     },
     {
       "scope": "batch_tasks",
@@ -72,6 +84,48 @@
     {
       "scope": "batch_tasks",
       "section": "Task0",
+      "key": "Name",
+      "value": "启动项目"
+    },
+    {
+      "scope": "batch_tasks",
+      "section": "Task0",
+      "key": "StepCommand0",
+      "value": ".\\Start-LocalLLM.cmd"
+    },
+    {
+      "scope": "batch_tasks",
+      "section": "Task0",
+      "key": "StepCommand1",
+      "value": "Start-LocalWebGPT.cmd"
+    },
+    {
+      "scope": "batch_tasks",
+      "section": "Task1",
+      "key": "Command",
+      "value": "git pull origin main"
+    },
+    {
+      "scope": "batch_tasks",
+      "section": "Task1",
+      "key": "DirectoryCount",
+      "value": "0"
+    },
+    {
+      "scope": "batch_tasks",
+      "section": "Task1",
+      "key": "Id",
+      "value": "4871059821973365515"
+    },
+    {
+      "scope": "batch_tasks",
+      "section": "Task1",
+      "key": "Mode",
+      "value": "0"
+    },
+    {
+      "scope": "batch_tasks",
+      "section": "Task1",
       "key": "Name",
       "value": "任务 1"
     },
@@ -89,15 +143,27 @@
     },
     {
       "scope": "file_commands",
+      "section": "Command1",
+      "key": "Command",
+      "value": "pwsh"
+    },
+    {
+      "scope": "file_commands",
+      "section": "Command1",
+      "key": "Name",
+      "value": "pwsh"
+    },
+    {
+      "scope": "file_commands",
       "section": "Commands",
       "key": "Count",
-      "value": "1"
+      "value": "2"
     },
     {
       "scope": "file_commands",
       "section": "Commands",
       "key": "Default",
-      "value": "0"
+      "value": "1"
     },
     {
       "scope": "file_commands",
@@ -301,19 +367,31 @@
       "scope": "files",
       "section": "Pane2",
       "key": "Count",
-      "value": "1"
+      "value": "3"
     },
     {
       "scope": "files",
       "section": "Pane2",
       "key": "Selected",
-      "value": "0"
+      "value": "2"
     },
     {
       "scope": "files",
       "section": "Pane2",
       "key": "Tab0",
-      "value": "::{20D04FE0-3AEA-1069-A2D8-08002B30309D}"
+      "value": "D:\\MyProjects\\MyApps\\mydesktop"
+    },
+    {
+      "scope": "files",
+      "section": "Pane2",
+      "key": "Tab1",
+      "value": "D:\\MyProjects\\MyApps\\LocalWebGPT"
+    },
+    {
+      "scope": "files",
+      "section": "Pane2",
+      "key": "Tab2",
+      "value": "D:\\MyProjects\\MyApps"
     },
     {
       "scope": "files",
@@ -386,25 +464,11 @@
       "target": "explorer.exe"
     },
     {
-      "id": "846657980680281799",
+      "id": "3422488426898350198",
       "workspace_id": "6969818039083397288",
       "position": 0,
-      "name": "终端",
-      "target": "wt.exe"
-    },
-    {
-      "id": "4871963116899052790",
-      "workspace_id": "6969818039083397288",
-      "position": 1,
-      "name": "PowerShell",
-      "target": "powershell.exe"
-    },
-    {
-      "id": "7736834750687038093",
-      "workspace_id": "6969818039083397288",
-      "position": 2,
-      "name": "项目目录",
-      "target": "."
+      "name": "启动项目",
+      "target": "nova-batch:7987518378906657662"
     }
   ]
 }

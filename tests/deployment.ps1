@@ -106,6 +106,32 @@ int main(int argc,char **argv){
     Check ((PackageCount) -eq 3) 'Retry did not recover'
     & (Join-Path $fixtureRepo 'deployment\build.bat') $latestExe
     Check ($LASTEXITCODE -eq 0) 'Direct latest executable build did not recover after unlock'
+    # Configuration-only edits must reach the commit, latest copy, ZIP and a
+    # second clone. Use synthetic records, never the user's real config.
+    $previousRevision = Invoke-FixtureGit -gitArgs @('-C',$fixtureRepo,'rev-parse','HEAD')
+    $usageJson = '{"version":1,"application":"NOVA Desktop","initialized":true,"settings":[{"scope":"batch_tasks","section":"Collection","key":"Version","value":"3"},{"scope":"batch_tasks","section":"Collection","key":"Count","value":"1"},{"scope":"batch_tasks","section":"Task0","key":"Id","value":"2"},{"scope":"batch_tasks","section":"Task0","key":"Name","value":"fixture task"},{"scope":"batch_tasks","section":"Task0","key":"Command","value":"echo fixture"},{"scope":"batch_tasks","section":"Task0","key":"Mode","value":"0"},{"scope":"batch_tasks","section":"Task0","key":"DirectoryCount","value":"0"},{"scope":"files","section":"Pane2","key":"Count","value":"2"},{"scope":"files","section":"Pane2","key":"Selected","value":"1"},{"scope":"files","section":"Pane2","key":"Tab0","value":"shell:Desktop"},{"scope":"files","section":"Pane2","key":"Tab1","value":"shell:Desktop"}],"workspaces":[{"id":"1","position":0,"name":"Files"}],"items":[]}'
+    [IO.File]::WriteAllText((Join-Path $fixtureConfig 'nova.json'), $usageJson, [Text.UTF8Encoding]::new($false))
+    Deploy 'test: configuration data only' $true
+    Check ((PackageCount) -eq 4) 'Configuration-only deployment missing archive'
+    Check ((Invoke-FixtureGit -gitArgs @('-C',$fixtureRepo,'rev-parse','HEAD')) -ne $previousRevision) 'Configuration changes were not committed'
+    . (Join-Path $fixtureRepo 'deployment\configuration_info.ps1')
+    $sourceInfo = Get-NovaConfigurationInfo -Path (Join-Path $fixtureConfig 'nova.json')
+    $latestInfo = Get-NovaConfigurationInfo -Path (Join-Path $fixtureRepo 'build\packages\config\nova.json')
+    Check ($sourceInfo.Tasks -eq 1 -and $sourceInfo.PaneTabs[2] -eq '2' -and $sourceInfo.Hash -eq $latestInfo.Hash) 'Latest copy lost usage data'
+    $clone = Join-Path $fixtureRoot 'second computer'
+    Invoke-FixtureGit -gitArgs @('clone','--quiet','--branch','main',$fixtureRemote,$clone)
+    $cloneInfo = Get-NovaConfigurationInfo -Path (Join-Path $clone 'config\nova.json')
+    Check ($cloneInfo.Hash -eq $sourceInfo.Hash -and $cloneInfo.Tasks -eq 1 -and $cloneInfo.PaneTabs[2] -eq '2') 'Second clone did not receive tasks and pane data'
+    $latestZip = Get-ChildItem -LiteralPath (Join-Path $fixtureRepo 'build\packages') -Filter '*.zip' | Sort-Object LastWriteTime -Descending | Select-Object -First 1
+    $archive = [IO.Compression.ZipFile]::OpenRead($latestZip.FullName)
+    try {
+        $entry = $archive.GetEntry('config/nova.json')
+        $stream = [IO.StreamReader]::new($entry.Open())
+        try { Check ($stream.ReadToEnd() -eq $usageJson) 'Archive lost configuration data' }
+        finally { $stream.Dispose() }
+    }
+    finally { $archive.Dispose() }
+    Write-Host 'PASS configuration-only commit/push, exact latest/ZIP data copy, second-computer clone and task/tab diagnostics'
     Write-Host 'PASS deployment: external cwd with spaces, commit/push, clean rerun, archive, rejected push and failed build'
 }
 finally {

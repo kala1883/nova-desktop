@@ -8,6 +8,7 @@ $ErrorActionPreference = 'Stop'
 Set-StrictMode -Version Latest
 $repoRoot = Split-Path -Parent $PSScriptRoot
 $pushed = $false
+. (Join-Path $PSScriptRoot 'configuration_info.ps1')
 
 function Invoke-Git {
     param([string[]]$Arguments)
@@ -38,6 +39,11 @@ try {
     Invoke-Git -Arguments @('remote', 'get-url', $remote) | Out-Null
     & git check-ignore --quiet build/.nova-deploy-check
     if ($LASTEXITCODE -ne 0) { throw 'build must be ignored by Git / build 目录必须被 Git 忽略。' }
+
+    $configPath = Join-Path $repoRoot 'config\nova.json'
+    $configInfo = Get-NovaConfigurationInfo -Path $configPath
+    Write-Host '[data] Configuration included in this deployment / 本次部署携带的使用数据'
+    Show-NovaConfigurationInfo -Info $configInfo
 
     Write-Host '[1/4] Commit source changes / 提交源码改动'
     Invoke-Git -Arguments @('add', '--all')
@@ -73,7 +79,9 @@ try {
     }
     New-Item -ItemType Directory -Path (Join-Path $packageDir 'config') -Force | Out-Null
     Copy-Item -LiteralPath (Join-Path $repoRoot 'config\nova.json') -Destination (Join-Path $packageDir 'config\nova.json')
-    @("Commit: $revision", "Built (UTC): $([DateTime]::UtcNow.ToString('o'))") |
+    $packagedConfig = Get-NovaConfigurationInfo -Path (Join-Path $packageDir 'config\nova.json')
+    if ($packagedConfig.Hash -ne $configInfo.Hash) { throw 'Configuration changed during deployment / 部署期间配置数据发生变化，请关闭 NOVA 后重试。' }
+    @("Commit: $revision", "Config SHA256: $($configInfo.Hash)", "Built (UTC): $([DateTime]::UtcNow.ToString('o'))") |
         Set-Content -LiteralPath (Join-Path $packageDir 'revision.txt') -Encoding UTF8
     $zip = "$packageDir.zip"
     $packageFiles = @(Get-ChildItem -LiteralPath $packageDir | ForEach-Object { $_.FullName })
@@ -81,6 +89,8 @@ try {
     Write-Host "EXE: $exe"
     Write-Host "Latest EXE: $(Join-Path $repoRoot 'build\packages\nova-desktop.exe')"
     Write-Host "ZIP: $zip"
+    Write-Host "Config JSON: $configPath"
+    Write-Host 'For another computer: close NOVA, pull the source computer''s configuration commit, then build. Deploy does not pull remote data / 在另一台电脑：先关闭 NOVA，拉取源电脑提交的配置，再编译。部署脚本不会拉取远程数据。'
     exit 0
 }
 catch {
