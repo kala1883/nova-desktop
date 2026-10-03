@@ -37,7 +37,7 @@
       "scope": "batch_tasks",
       "section": "Collection",
       "key": "Count",
-      "value": "1"
+      "value": "2"
     },
     {
       "scope": "batch_tasks",
@@ -98,6 +98,120 @@
       "section": "Task0",
       "key": "StepCommand1",
       "value": "Start-LocalWebGPT.cmd"
+    },
+    {
+      "scope": "batch_tasks",
+      "section": "Task1",
+      "key": "Command",
+      "value": "git pull origin main"
+    },
+    {
+      "scope": "batch_tasks",
+      "section": "Task1",
+      "key": "Directory0",
+      "value": "D:\\MyProjects\\MyApps\\transportandai"
+    },
+    {
+      "scope": "batch_tasks",
+      "section": "Task1",
+      "key": "Directory1",
+      "value": "D:\\MyProjects\\MyApps\\sleeping"
+    },
+    {
+      "scope": "batch_tasks",
+      "section": "Task1",
+      "key": "Directory2",
+      "value": "D:\\MyProjects\\MyApps\\LearningApp"
+    },
+    {
+      "scope": "batch_tasks",
+      "section": "Task1",
+      "key": "Directory3",
+      "value": "D:\\MyProjects\\MyApps\\mygomuku"
+    },
+    {
+      "scope": "batch_tasks",
+      "section": "Task1",
+      "key": "Directory4",
+      "value": "D:\\MyProjects\\MyApps\\mylocalllm"
+    },
+    {
+      "scope": "batch_tasks",
+      "section": "Task1",
+      "key": "Directory5",
+      "value": "D:\\MyProjects\\MyApps\\LocalWebGPT"
+    },
+    {
+      "scope": "batch_tasks",
+      "section": "Task1",
+      "key": "Directory6",
+      "value": "D:\\MyProjects\\MyApps\\mydesktop"
+    },
+    {
+      "scope": "batch_tasks",
+      "section": "Task1",
+      "key": "DirectoryCount",
+      "value": "7"
+    },
+    {
+      "scope": "batch_tasks",
+      "section": "Task1",
+      "key": "Id",
+      "value": "1425054857605011418"
+    },
+    {
+      "scope": "batch_tasks",
+      "section": "Task1",
+      "key": "Mode",
+      "value": "0"
+    },
+    {
+      "scope": "batch_tasks",
+      "section": "Task1",
+      "key": "Name",
+      "value": "同步项目"
+    },
+    {
+      "scope": "batch_tasks",
+      "section": "Task1",
+      "key": "StepCommand0",
+      "value": "git pull origin main"
+    },
+    {
+      "scope": "batch_tasks",
+      "section": "Task1",
+      "key": "StepCommand1",
+      "value": "git pull origin main"
+    },
+    {
+      "scope": "batch_tasks",
+      "section": "Task1",
+      "key": "StepCommand2",
+      "value": "git pull origin main"
+    },
+    {
+      "scope": "batch_tasks",
+      "section": "Task1",
+      "key": "StepCommand3",
+      "value": "git pull origin main"
+    },
+    {
+      "scope": "batch_tasks",
+      "section": "Task1",
+      "key": "StepCommand4",
+      "value": "git pull origin main"
+    },
+    {
+      "scope": "batch_tasks",
+      "section": "Task1",
+      "key": "StepCommand5",
+      "value": "git pull origin main"
+    },
+    {
+      "scope": "batch_tasks",
+      "section": "Task1",
+      "key": "StepCommand6",
+      "value": "git pull origin main"
     },
     {
       "scope": "file_commands",
@@ -343,7 +457,7 @@
       "scope": "files",
       "section": "Pane2",
       "key": "Selected",
-      "value": "2"
+      "value": "0"
     },
     {
       "scope": "files",
@@ -434,9 +548,23 @@
       "target": "explorer.exe"
     },
     {
-      "id": "3422488426898350198",
+      "id": "7060625964254634364",
       "workspace_id": "6969818039083397288",
       "position": 0,
+      "name": "FlClash",
+      "target": "C:\\ProgramData\\Microsoft\\Windows\\Start Menu\\Programs\\FlClash.lnk"
+    },
+    {
+      "id": "8734710034902879919",
+      "workspace_id": "6969818039083397288",
+      "position": 1,
+      "name": "同步项目",
+      "target": "nova-batch:1425054857605011418"
+    },
+    {
+      "id": "3422488426898350198",
+      "workspace_id": "6969818039083397288",
+      "position": 2,
       "name": "启动项目",
       "target": "nova-batch:7987518378906657662"
     }
