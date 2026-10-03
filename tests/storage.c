@@ -12,6 +12,28 @@ static void write_text_file(const wchar_t *path,const char *text){
     HANDLE file=CreateFileW(path,GENERIC_WRITE,0,NULL,CREATE_ALWAYS,0,NULL);assert(file!=INVALID_HANDLE_VALUE);
     DWORD written,length=(DWORD)strlen(text);assert(WriteFile(file,text,length,&written,NULL)&&written==length);CloseHandle(file);
 }
+static void remove_local_files(const wchar_t *directory){
+    wchar_t path[MAX_PATH];swprintf(path,MAX_PATH,L"%ls\\local.json",directory);DeleteFileW(path);swprintf(path,MAX_PATH,L"%ls\\local.backup.json",directory);DeleteFileW(path);
+}
+static void test_local_state(const wchar_t *parent){
+    wchar_t directory[MAX_PATH],shared_path[MAX_PATH],local_path[MAX_PATH];swprintf(directory,MAX_PATH,L"%ls\\local-state",parent);assert(CreateDirectoryW(directory,NULL));
+    swprintf(shared_path,MAX_PATH,L"%ls\\nova.json",directory);swprintf(local_path,MAX_PATH,L"%ls\\local.json",directory);assert(store_open(directory));
+    assert(store_set_int(L"app",L"Nova",L"Language",1));assert(store_set_int(L"files",L"Pane0",L"Count",2));
+    BYTE before[8192],after[8192],local_before[8192];DWORD length=read_file(shared_path,before,sizeof(before));WIN32_FILE_ATTRIBUTE_DATA attributes,updated;
+    assert(GetFileAttributesExW(shared_path,GetFileExInfoStandard,&attributes));
+    assert(store_begin());assert(store_set_int(L"app",L"Nova",L"Active",1)&&store_set_int(L"files",L"Pane0",L"Selected",1));assert(store_end(TRUE));
+    assert(read_file(shared_path,after,sizeof(after))==length&&!memcmp(before,after,length));assert(GetFileAttributesExW(shared_path,GetFileExInfoStandard,&updated));assert(!CompareFileTime(&attributes.ftLastWriteTime,&updated.ftLastWriteTime));
+    DWORD local_length=read_file(local_path,local_before,sizeof(local_before));
+    HANDLE lock=CreateFileW(shared_path,GENERIC_READ,FILE_SHARE_READ,NULL,OPEN_EXISTING,0,NULL);assert(lock!=INVALID_HANDLE_VALUE);
+    assert(store_begin());assert(store_set_int(L"app",L"Nova",L"Active",2)&&store_set_int(L"app",L"Fixture",L"Shared",7));assert(!store_end(TRUE));CloseHandle(lock);
+    assert(store_int(L"app",L"Nova",L"Active",-1)==1&&store_int(L"app",L"Fixture",L"Shared",-1)==-1);
+    assert(read_file(local_path,after,sizeof(after))==local_length&&!memcmp(local_before,after,local_length));
+    assert(store_set_int(L"files",L"Pane0",L"Count",1));store_close();assert(store_open(directory));assert(store_int(L"files",L"Pane0",L"Selected",-1)==0&&store_int(L"app",L"Nova",L"Language",0)==1);store_close();
+    write_text_file(local_path,"{\"version\":1,\"application\":\"NOVA Desktop\",\"initialized\":true,\"settings\":[{\"scope\":\"batch_tasks\",\"section\":\"Collection\",\"key\":\"Count\",\"value\":\"0\"}],\"workspaces\":[],\"items\":[]}");
+    assert(!store_open(directory));assert(read_file(shared_path,after,sizeof(after))>0);
+    DeleteFileW(shared_path);remove_local_files(directory);assert(RemoveDirectoryW(directory));
+    puts("PASS local-only state leaves shared JSON and its timestamp unchanged; two-file rollback, stale selection reset and local scope refusal");
+}
 static void refused_json(const wchar_t *directory,const char *text){
     wchar_t path[MAX_PATH];swprintf(path,MAX_PATH,L"%ls\\nova.json",directory);write_text_file(path,text);
     assert(!store_open(directory)&&!store_ready());BYTE bytes[4096];DWORD length=read_file(path,bytes,sizeof(bytes));assert(length==strlen(text)&&!memcmp(bytes,text,length));
@@ -44,7 +66,7 @@ static void test_usage_data(const wchar_t *parent){
     assert(!wcscmp(restored->tasks[0].commands[0],L"echo first")&&!wcscmp(restored->tasks[0].commands[1],L"echo second"));assert(store_load_workspaces(values)==2&&store_load_items(&values[1]));
     assert(batch_task_target_id(values[1].apps[0].target)==task_id&&store_load_file_commands(&presets)&&presets.default_index==1);
     wchar_t location[MAX_PATH];assert(store_get(L"files",L"Pane0",L"Tab1",L"",location,MAX_PATH)&&!wcscmp(location,second));assert(store_int(L"files",L"Pane0",L"Selected",0)==1&&store_int(L"files",L"Manager",L"FavoriteCount",0)==1);
-    swprintf(path,MAX_PATH,L"%ls\\nova.sqlite",directory);assert(GetFileAttributesW(path)==INVALID_FILE_ATTRIBUTES);store_close();swprintf(path,MAX_PATH,L"%ls\\nova.json",directory);DeleteFileW(path);assert(RemoveDirectoryW(directory));free(values);free(tasks);free(restored);
+    swprintf(path,MAX_PATH,L"%ls\\nova.sqlite",directory);assert(GetFileAttributesW(path)==INVALID_FILE_ATTRIBUTES);store_close();swprintf(path,MAX_PATH,L"%ls\\nova.json",directory);DeleteFileW(path);swprintf(path,MAX_PATH,L"%ls\\local.json",directory);DeleteFileW(path);assert(RemoveDirectoryW(directory));free(values);free(tasks);free(restored);
     puts("PASS tasks, independent subtask commands, shortcuts, presets, tabs and favorites reload from config JSON without a disk database");
 }
 static void test_json_migration(const wchar_t *parent){
@@ -69,7 +91,7 @@ static void test_json_migration(const wchar_t *parent){
     assert(store_open_from(target,legacy));store_close(); /* JSON wins after the one-time migration. */
     DeleteFileW(json_path);length=read_file(database,before,1024*1024);assert(!store_open_from(target,legacy));
     assert(read_file(database,after,1024*1024)==length&&!memcmp(before,after,length));free(before);free(after);
-    DeleteFileW(database);assert(RemoveDirectoryW(legacy)&&RemoveDirectoryW(target));
+    DeleteFileW(database);swprintf(json_path,MAX_PATH,L"%ls\\local.json",target);DeleteFileW(json_path);assert(RemoveDirectoryW(legacy)&&RemoveDirectoryW(target));
     puts("PASS read-only SQLite migration, exact 64-bit IDs as strings, Unicode/escape round-trip and one-time JSON precedence");
 }
 int wmain(void){
@@ -131,12 +153,12 @@ int wmain(void){
     BYTE *json=calloc(1,1024*1024);assert(json);DWORD json_length=read_file(backup,json,1024*1024-1);
     assert(sqlite3_prepare_v2(reader,"SELECT json_array_length(?1,'$.items')",-1,&q,NULL)==SQLITE_OK);assert(sqlite3_bind_text(q,1,(char*)json,json_length,SQLITE_STATIC)==SQLITE_OK);assert(sqlite3_step(q)==SQLITE_ROW&&sqlite3_column_int(q,0)==2);sqlite3_finalize(q);sqlite3_close(reader);
     HANDLE locked=CreateFileW(database,GENERIC_READ,FILE_SHARE_READ,NULL,OPEN_EXISTING,0,NULL);assert(locked!=INVALID_HANDLE_VALUE);
-    assert(!store_set_int(L"app",L"Nova",L"Active",7));assert(store_int(L"app",L"Nova",L"Active",-1)==1);CloseHandle(locked);
+    assert(!store_set_int(L"app",L"Fixture",L"SharedWrite",7));assert(store_int(L"app",L"Fixture",L"SharedWrite",-1)==-1);CloseHandle(locked);
     DWORD saved_length=read_file(database,json,1024*1024-1);assert(saved_length==json_length);free(json);
     puts("PASS stable IDs, unloaded items, transaction rollback, atomic JSON backup and rollback when the destination is locked");
     /* A later launch must ignore stale INI data after successful migration. */
     LEGACY(L"Workspace0",L"Name",L"过期 INI");store_close();load_config();if(storage_failed)fwprintf(stderr,L"JSON reopen failed: %ls\n",store_error());assert(!storage_failed&&!wcscmp(spaces[0].name,L"目录"));
-    store_close();test_config_location(directory);test_usage_data(directory);test_json_migration(directory);
+    store_close();test_config_location(directory);test_usage_data(directory);test_json_migration(directory);test_local_state(directory);
     refused_json(directory,"{\"version\":99,\"application\":\"NOVA Desktop\",\"initialized\":true,\"settings\":[],\"workspaces\":[],\"items\":[]}");
     refused_json(directory,"{\"version\":1,\"version\":1,\"application\":\"NOVA Desktop\",\"initialized\":true,\"settings\":[],\"workspaces\":[],\"items\":[]}");
     refused_json(directory,"{\"version\":1,\"application\":\"NOVA Desktop\",\"initialized\":true,\"settings\":[],\"workspaces\":[{\"id\":\"9223372036854775808\",\"position\":0,\"name\":\"Files\"}],\"items\":[]}");
@@ -146,5 +168,5 @@ int wmain(void){
     refused_json(directory,"{\"version\":1,\"application\":\"NOVA Desktop\",\"initialized\":true,\"settings\":[{\"scope\":\"files\",\"section\":\"Pane0\",\"key\":\"Count\",\"value\":\"13\"}],\"workspaces\":[],\"items\":[]}");
     refused_json(directory,"{\"version\":1,\"application\":\"NOVA Desktop\",\"initialized\":true,\"settings\":[],\"workspaces\":[{\"id\":\"1\",\"position\":0,\"name\":\"\\ud800\"}],\"items\":[]}");
     puts("PASS malformed/newer JSON, duplicate keys, ID overflow, embedded NUL and orphan refusal without overwriting originals");
-    DeleteFileW(database);DeleteFileW(backup);DeleteFileW(config_path);assert(RemoveDirectoryW(directory));return 0;
+    DeleteFileW(database);DeleteFileW(backup);DeleteFileW(config_path);swprintf(database,MAX_PATH,L"%ls\\local.json",directory);DeleteFileW(database);swprintf(database,MAX_PATH,L"%ls\\local.backup.json",directory);DeleteFileW(database);assert(RemoveDirectoryW(directory));return 0;
 }

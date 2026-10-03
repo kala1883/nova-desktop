@@ -1,4 +1,6 @@
 ﻿# Read-only diagnostics: never print saved names, commands or working folders.
+[CmdletBinding()]
+param([Alias('Path')][string]$ConfigurationPath = '')
 function Get-NovaConfigurationInfo {
     param([Parameter(Mandatory = $true)][string]$Path)
     $resolved = [IO.Path]::GetFullPath($Path)
@@ -33,4 +35,11 @@ function Show-NovaConfigurationInfo {
     Write-Host "JSON: $($Info.Path)"
     Write-Host "SHA256: $($Info.Hash)"
     Write-Host "Initialized / 已初始化：$($Info.Initialized); Tasks / 任务：$($Info.Tasks); Pane tabs / 窗格标签：$($Info.PaneTabs -join ', ')"
+}
+
+# Dot-sourcing loads reusable functions; direct execution displays diagnostics.
+if ($MyInvocation.InvocationName -ne '.') {
+    $ErrorActionPreference = 'Stop'
+    if ([string]::IsNullOrWhiteSpace($ConfigurationPath)) { $ConfigurationPath = Join-Path (Split-Path -Parent $PSScriptRoot) 'config\nova.json' }
+    Show-NovaConfigurationInfo -Info (Get-NovaConfigurationInfo -Path $ConfigurationPath)
 }

@@ -103,7 +103,12 @@ JSON 文件不存在，或提供空的 `initialized: false` 初始配置时，�
 JSON 使用 UTF-8 和版本号，64 位 ID 保存为十进制字符串。保存使用原子替换，
 无效、重复、超容量或更新版本的数据会拒绝加载，避免覆盖原文件。
 启动时更新 `config/nova.backup.json`；手动编辑或恢复 JSON 前请关闭 NOVA。
-主配置不会被 Git 忽略，备份和临时文件仍忽略。配置包含用户路径与命令，提交或
+主配置不会被 Git 忽略，备份和临时文件仍忽略。
+频繁变化的状态另外保存在被 Git 忽略的 `config/local.json`：活动工作区、当前选中
+标签、窗口模式、侧边栏状态、窗格布局、目录树开关和分隔线位置。任务、启动项、
+命令预设、已保存标签目录、收藏和语言继续保存在共享的 `nova.json`。
+旧的合并配置首次启动时自动拆分，本机状态优先。启动分别备份两份文件。
+配置包含用户路径与命令，提交或
 部署时请查看其 Git 差异。详见[配置格式](config/README.md)。
 
 同一文件也保存实际使用数据：任务及子任务目录/命令、工作区启动项和任务入口、
@@ -234,3 +239,18 @@ JSON 配置中。NOVA 初始提供 `cmd.exe` 预设（`cd .`），可在当前�
 NOVA Desktop 使用 [MIT License](LICENSE)。SQLite 属于公有领域软件，来源信息见
 [`third_party/sqlite/README.md`](third_party/sqlite/README.md)。兼容性或比较说明中
 提及的产品名称均归各自权利人所有。
+
+## 配置合并冲突
+
+如果拉取被未提交的 `config/nova.json` 阻止，先关闭 NOVA，再运行
+`git stash push -m "nova config before pull" -- config/nova.json` 保留本机修改。
+源电脑发布更新后拉取，再用 `git stash apply 'stash@{0}'` 恢复修改并保留 stash。
+恢复出现冲突时，按下方语义合并流程处理后再编译、启动；验证合并数据前保留 stash。
+直接执行 `deployment/configuration_info.ps1` 现在会显示诊断，点加载仅导入函数。
+
+先关闭 NOVA，运行 `deployment/resolve_config.bat`，会备份 Git 的公共祖先、本机、
+远端三份数据，并在被忽略的 `build/config-merge/` 下生成合并预览。
+`deployment/resolve_config.bat -Apply` 应用无冲突结果并暂存，之后提交合并再推送。
+两台电脑即使都新增为 Task1，也会按稳定 ID 保留双方新增任务及任务入口。
+同一任务被同时编辑、删除与编辑冲突或超容量时需要人工确认，不强行选一边或截断数据。
+运行状态 `local.json` 不参与同步。

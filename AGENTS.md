@@ -69,7 +69,8 @@ change, and update its README, source URL, hashes, and compatibility tests.
   arguments, and working directory separate when launching programs.
 - Preserve `config/nova.json`, its one-time read-only migration from
   `%APPDATA%\NOVA Desktop\nova.sqlite` / INI files, and JSON backup behavior
-  unless a migration is included. Keep the primary JSON available to Git.
+  unless a migration is included. Keep the shared JSON available to Git;
+  transient state belongs in Git-ignored `config/local.json`.
 
 ## Localization
 

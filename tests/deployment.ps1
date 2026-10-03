@@ -132,6 +132,33 @@ int main(int argc,char **argv){
     }
     finally { $archive.Dispose() }
     Write-Host 'PASS configuration-only commit/push, exact latest/ZIP data copy, second-computer clone and task/tab diagnostics'
+    $infoOutput = & powershell.exe -NoLogo -NoProfile -ExecutionPolicy Bypass -File (Join-Path $fixtureRepo 'deployment\configuration_info.ps1')
+    Check ($LASTEXITCODE -eq 0 -and ($infoOutput -join "`n") -match 'SHA256:') 'Direct configuration diagnostics produced no output'
+    # Preserve a second machine's uncommitted state before updating the same JSON.
+    $cloneConfig = Join-Path $clone 'config\nova.json'
+    $localJson = $usageJson.Replace('"key":"Selected","value":"1"','"key":"Selected","value":"0"')
+    [IO.File]::WriteAllText($cloneConfig,$localJson,[Text.UTF8Encoding]::new($false))
+    $remoteJson = $usageJson.Replace('echo fixture','echo newer fixture')
+    [IO.File]::WriteAllText((Join-Path $fixtureConfig 'nova.json'),$remoteJson,[Text.UTF8Encoding]::new($false))
+    Invoke-FixtureGit -gitArgs @('-C',$fixtureRepo,'add','--','config/nova.json')
+    Invoke-FixtureGit -gitArgs @('-C',$fixtureRepo,'commit','-m','test: remote data update')
+    Invoke-FixtureGit -gitArgs @('-C',$fixtureRepo,'push','origin','main')
+    & git -C $clone pull --ff-only
+    Check ($LASTEXITCODE -ne 0 -and [IO.File]::ReadAllText($cloneConfig) -eq $localJson) 'Blocked pull overwrote local usage data'
+    Invoke-FixtureGit -gitArgs @('-C',$clone,'stash','push','-m','test: preserve local data','--','config/nova.json')
+    Invoke-FixtureGit -gitArgs @('-C',$clone,'pull','--ff-only')
+    & git -C $clone stash apply 'stash@{0}'
+    Check ($LASTEXITCODE -ne 0) 'One-line fixture should produce a stash apply conflict'
+    . (Join-Path $fixtureRepo 'deployment\configuration_merge.ps1')
+    $baseData = (Invoke-FixtureGit -gitArgs @('-C',$clone,'show',':1:config/nova.json')) | ConvertFrom-Json
+    $localData = (Invoke-FixtureGit -gitArgs @('-C',$clone,'show',':2:config/nova.json')) | ConvertFrom-Json
+    $remoteData = (Invoke-FixtureGit -gitArgs @('-C',$clone,'show',':3:config/nova.json')) | ConvertFrom-Json
+    $resolved = Get-NovaMergedConfiguration $baseData $localData $remoteData
+    Check (-not $resolved.Conflicts.Count) 'Independent edits after stash apply did not merge'
+    Check (@($resolved.Data.settings | Where-Object {$_.key -eq 'Command'})[0].value -eq 'echo newer fixture') 'Remote task update was lost'
+    Check (@($resolved.Data.settings | Where-Object {$_.key -eq 'Selected'})[0].value -eq '0') 'Stashed local selection was lost'
+    Check (@(Invoke-FixtureGit -gitArgs @('-C',$clone,'stash','list')).Count -eq 1) 'Safety stash was removed'
+    Write-Host 'PASS direct diagnostics, blocked pull preservation, scoped stash/pull/apply and semantic restoration of both sides'
     Write-Host 'PASS deployment: external cwd with spaces, commit/push, clean rerun, archive, rejected push and failed build'
 }
 finally {

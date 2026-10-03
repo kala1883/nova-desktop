@@ -74,6 +74,8 @@ function Get-NovaTasksMap {
         for ($step = 0; $step -lt $directories; $step++) {
             if (-not $task.ContainsKey("Directory$step") -or -not $task.ContainsKey("StepCommand$step")) { throw 'Missing subtask / 子任务数据缺失。' }
         }
+        if ($task.Count -ne 5+2*$directories) { throw 'Unknown task fields require review / 未识别的任务字段需要人工确认。' }
+        if ($task['Name'].Length -gt 63 -or $task['Command'].Length -gt 2047) { throw 'Task exceeds string limits / 任务字符串超过容量。' }
         $map.Add($id,$task)
     }
     return ,$map
@@ -90,6 +92,9 @@ function Get-NovaEntityMap {
 }
 function Get-NovaMergedConfiguration {
     param($Base,$Local,$Remote)
+    $Base = ConvertFrom-Json (ConvertTo-Json -InputObject $Base -Depth 100)
+    $Local = ConvertFrom-Json (ConvertTo-Json -InputObject $Local -Depth 100)
+    $Remote = ConvertFrom-Json (ConvertTo-Json -InputObject $Remote -Depth 100)
     foreach ($data in @($Base,$Local,$Remote)) {
         if ($data.version -ne 1 -or $data.application -ne 'NOVA Desktop') { throw 'Unsupported JSON version / JSON 版本不受支持。' }
     }

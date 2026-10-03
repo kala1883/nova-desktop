@@ -128,6 +128,13 @@ JSON is UTF-8 with a versioned format. IDs are decimal strings to preserve all
 newer-format data is rejected without being overwritten. Startup creates
 `config/nova.backup.json`. Close NOVA before editing or restoring the JSON file.
 The primary JSON is not Git-ignored; backups and temporary files are ignored.
+Frequently changing state is stored separately in Git-ignored `config/local.json`:
+active workspace, selected tabs, window modes, sidebar state, pane layout,
+navigation-tree visibility and divider positions. Tasks, launch items, presets,
+saved tab folders, favorites and language remain in the shared `nova.json`.
+Older combined files are split automatically on first startup. Local values take
+precedence for transient state. Startup backs up both files separately.
+
 Configuration includes user paths and command text, so review its Git diff when
 committing or deploying. See [configuration format](config/README.md).
 
@@ -291,3 +298,22 @@ NOVA Desktop is available under the [MIT License](LICENSE). SQLite is public
 domain software; see [`third_party/sqlite/README.md`](third_party/sqlite/README.md)
 for provenance. Product names mentioned for compatibility or comparison belong
 to their respective owners.
+
+## Configuration merge conflicts
+
+If pull is blocked by uncommitted `config/nova.json`, first close NOVA, then save
+that file with `git stash push -m "nova config before pull" -- config/nova.json`.
+Pull after the source computer has published its changes, then use
+`git stash apply 'stash@{0}'` to retain the stash while restoring local edits.
+If apply conflicts, use the semantic merge tool below before building or running
+NOVA. Keep the stash until the merged data has been verified. Directly running
+`deployment/configuration_info.ps1` now prints diagnostics; dot-sourcing it only
+loads its reusable functions.
+
+Close NOVA, then run `deployment/resolve_config.bat` to back up Git's base/local/
+remote versions and generate a merged preview under ignored `build/config-merge/`.
+`deployment/resolve_config.bat -Apply` applies and stages a conflict-free result;
+commit the merge before pushing. It merges independently added tasks by stable ID,
+even when both computers used the same Task1 index, and preserves task shortcuts.
+Conflicting edits/deletion of the same task or over-capacity data require review;
+it never forces a side or truncates entries. Runtime `local.json` is not synchronized.

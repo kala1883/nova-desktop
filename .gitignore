@@ -6,4 +6,6 @@
 !/config/
 !/config/nova.json
 /config/nova.backup.json
+/config/local.json
+/config/local.backup.json
 /config/.nova-*.tmp

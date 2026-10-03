@@ -57,9 +57,13 @@ UI 依赖 controller 与 core 的只读视图；controller 依赖 core 和平台
 
 ## 状态与资源所有权
 
+- 共享与本机状态分层：任务/子任务、工作区/启动项、命令预设、标签目录和收藏及语言写入 nova.json；Active、窗口模式/侧边栏、Pane.Selected、Manager.Layout/NavigationTree/Split 写入被忽略的 local.json。打开时先读共享文件，再叠加仅允许临时状态字段的本机文件。旧共享文件中的临时状态迁移到本机文件；旧选择索引因共享标签删除而失效时复位到 0，损坏值仍拒绝加载。
+- 一次配置事务分别生成两份快照，先准备并 flush 两个临时文件，使用回滚副本发布；任一文件发布失败则恢复已发布文件及内存事务。与原文件字节相同时不替换，所以本机会话变化不会改动共享 JSON 或其时间戳。两份文件分别备份，部署只打包共享文件。
+- PowerShell 语义合并工具按稳定任务 ID 和工作区/启动项 ID 对三份 Git 版本合并；任务顺序索引冲突不丢弃独立新增任务。相同实体的不同修改、删改或容量冲突停止并保留备份，用户确认后再继续，不自动 commit/push。
+
 - `--migrate-data` 在单实例锁保护下执行相同数据初始化、使用数据迁移及 JSON 备份，然后退出，不创建应用窗口、不派发启动项或任务。可在初次运行界面前将实际保存数据填入 config/nova.json；已初始化的 JSON 保持优先，不以旧数据覆盖。
 
-- 磁盘配置统一为 UTF-8 `config/nova.json`，根版本为 1；settings、workspaces、items 保留原 scope/section/key 与稳定 ID，所有 64 位 ID 以字符串表示。仓库内运行时向上定位含 `.git` 和 `config/nova.json` 的根目录，直接读写该文件；脱离仓库时使用 exe 旁的 config 目录。初始文件 `initialized=false` 只允许空数组，首次从 `%APPDATA%\NOVA Desktop` 只读迁移旧 SQLite 或 INI，无旧数据则初始化默认值，此后不再读取旧配置。
+- 共享磁盘配置为 UTF-8 `config/nova.json`，根版本为 1；settings、workspaces、items 保留原 scope/section/key 与稳定 ID，所有 64 位 ID 以字符串表示。仓库内运行时向上定位含 `.git` 和 `config/nova.json` 的根目录，直接读写该文件；脱离仓库时使用 exe 旁的 config 目录。初始文件 `initialized=false` 只允许空数组，首次从 `%APPDATA%\NOVA Desktop` 只读迁移旧 SQLite 或 INI，无旧数据则初始化默认值，此后不再读取旧配置。
 - SQLite 仅作为单 UI 线程的内存关系与事务引擎，不创建新的磁盘数据库。JSON 加载限制 16 MiB、4096 条 setting、8 个工作区及 160 个启动项；校验字段类型、未知版本、重复键、字符串边界、容量和外键后才安装。任务及命令预设继续使用其独立版本校验。工作区启动项仍按需装载到 UI；完整内存关系表保留未加载项，保存不会丢失它们。
 - 配置事务在同目录唯一临时文件生成完整 JSON、检查写入长度并 FlushFileBuffers，再用 ReplaceFileW 原子替换，同时保留临时回滚副本；内存 COMMIT 失败时恢复原文件，发布失败时回滚内存。语言、窗口模式及工作区变化在同一事务提交。文件窗格仍去抖 400 ms，并在关闭时刷新。启动更新 `nova.backup.json`；无效数据拒绝打开，不自动覆盖，备份可由用户手动恢复。
 - `config/nova.json` 纳入 Git；备份、临时文件和 build 产物忽略。每次成功编译更新 `build/packages/nova-desktop.exe` 与配置副本，旧命名包和 ZIP 保留；替换固定 exe 时先复制到同目录临时文件，失败保留原副本且不终止运行实例。部署包包含 config/nova.json。

@@ -82,3 +82,32 @@ not using a Git checkout. Stored absolute folder paths must exist on that comput
 再拉取并编译；仅在目标电脑编译或部署，无法取得源电脑未提交的数据。
 编译、部署会显示配置路径、任务/标签数量和 SHA256。使用独立程序包时，复制整个包，
 包括 config 文件夹；已保存的绝对目录路径需要在该电脑存在。
+
+## Shared data and local state / 共享数据与本机状态
+
+`nova.json` remains tracked and contains tasks, subtasks, workspaces, launch items,
+command presets, saved folder tabs, favorites and language. `local.json` is ignored
+by Git and contains active workspace, selected tab indices, window modes, sidebar,
+pane layout/navigation-tree state and splitter positions. Existing combined JSON
+is migrated automatically, preserving the current machine's state; existing local
+values override imported transient values. A synchronized tab deletion resets an
+out-of-range cached selection to zero. Local-only changes do not rewrite shared
+JSON. Transactions restore both files if publication fails. Each file has its own
+ignored startup backup (`nova.backup.json`, `local.backup.json`). Packages include
+shared data only, so the destination machine keeps its own local state.
+
+`nova.json` 继续纳入 Git，保存任务、子任务、工作区、启动项、命令预设、保存的目录
+标签、收藏和语言。`local.json` 被 Git 忽略，保存活动工作区、选中标签索引、窗口模式、
+侧边栏、窗格布局/目录树状态和分隔线位置。旧文件自动迁移并保留本机状态；已有本机
+值优先于旧共享文件中的临时状态。同步删除标签后，失效的本机选中索引重置为 0。
+仅改变本机状态不会重写共享 JSON，发布失败时事务恢复两份文件。
+两份文件分别备份为被忽略的 `nova.backup.json`、`local.backup.json`。
+发布包只携带共享数据，目标电脑保留自己的本机状态。
+
+For a Git conflict, close NOVA and run `deployment/resolve_config.bat` for a backed-up
+preview. `-Apply` applies/stages a clean semantic merge. Review conflicts reported
+for the same entity; do not use `git push --force` or blindly choose a full file.
+
+Git 冲突时，关闭 NOVA 后运行 `deployment/resolve_config.bat` 生成带备份的预览；
+加 `-Apply` 应用、暂存无冲突的语义合并。同一条数据的冲突需要核对，避免强制推送
+或直接选择整份文件覆盖另一边。

@@ -74,9 +74,10 @@ BOOL store_open_from(const wchar_t *directory,const wchar_t *legacy){
         "CREATE TABLE workspaces(id INTEGER PRIMARY KEY,position INTEGER NOT NULL,name TEXT NOT NULL);"
         "CREATE TABLE items(id INTEGER PRIMARY KEY,workspace_id INTEGER NOT NULL REFERENCES workspaces(id) ON DELETE CASCADE,position INTEGER NOT NULL,name TEXT NOT NULL,target TEXT NOT NULL);"
         "CREATE INDEX items_workspace ON items(workspace_id,position); PRAGMA application_id=1313822273; PRAGMA user_version=1;");
-    BOOL initialized=FALSE,imported=FALSE;
+    BOOL initialized=FALSE,imported=FALSE,split_needed=FALSE;
     if(ok)ok=config_json_load(db,root,&initialized,error_text);
     if(ok&&!initialized)ok=config_json_legacy(db,legacy,&imported,error_text);
+    if(ok)ok=config_json_load_local(db,root,&split_needed,error_text);
     if(ok)ok=execute("PRAGMA foreign_keys=ON");
     if(ok)ok=validate_preferences();
     if(ok){
@@ -95,7 +96,7 @@ BOOL store_open_from(const wchar_t *directory,const wchar_t *legacy){
         if(ok&&commands){FileCommandList presets;ok=store_load_file_commands(&presets);}
     }
     opening=FALSE;
-    if(ok&&(imported||open_changed))ok=store_begin()&&store_end(TRUE);
+    if(ok&&(imported||open_changed||split_needed))ok=store_begin()&&store_end(TRUE);
     if(!ok){if(!error_text[0])lstrcpyW(error_text,nova_text(L"配置无效，原文件未修改。",L"Invalid configuration. The original file was not changed."));store_close();return FALSE;}
     return TRUE;
 }

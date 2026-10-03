@@ -36,3 +36,5 @@ The primary JSON is available to Git; reviewing or publishing it may disclose
 saved names, paths and command text. NOVA itself does not upload this data.
 
 For the Chinese version, see [NOTICE.zh-CN.md](NOTICE.zh-CN.md).
+
+Transient UI state is stored separately in Git-ignored config/local.json.

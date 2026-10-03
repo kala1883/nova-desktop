@@ -28,3 +28,5 @@ NOVA Desktop 在本地 `config/nova.json` 保存偏好、已保存任务、工�
 NOVA 本身不上传这些数据。
 
 英文版本见 [NOTICE.md](NOTICE.md)。
+
+临时界面状态另外保存在被 Git 忽略的 config/local.json。

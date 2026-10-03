@@ -4,6 +4,9 @@ $ErrorActionPreference = 'Stop'
 Set-StrictMode -Version Latest
 . (Join-Path $PSScriptRoot 'configuration_merge.ps1')
 $repoRoot = Split-Path -Parent $PSScriptRoot
+$unmerged = @(& git -C $repoRoot ls-files -u -- config/nova.json)
+if ($LASTEXITCODE) { throw 'Cannot inspect Git conflict state / 无法检查 Git 冲突状态。' }
+if (-not $unmerged.Count) { Write-Host 'No unresolved config conflict; nothing changed / 当前配置没有未解决冲突，未修改文件。'; exit 0 }
 function Read-GitConfigStage([int]$Stage) {
     $start = [Diagnostics.ProcessStartInfo]::new('git',('-C "' + $repoRoot + '" show :' + $Stage + ':config/nova.json'))
     $start.UseShellExecute=$false; $start.RedirectStandardOutput=$true; $start.RedirectStandardError=$true; $start.CreateNoWindow=$true

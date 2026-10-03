@@ -146,5 +146,5 @@ int wmain(void){
     puts("PASS 48 restored tabs create only 1/4 visible views; idle eviction to zero; history restored; debounced save flushed on close");
     OleSetClipboard(old_clipboard);if(old_clipboard){OleFlushClipboard();IDataObject_Release(old_clipboard);}
     DeleteFileW(copy);DeleteFileW(file);RemoveDirectoryW(created);RemoveDirectoryW(a);RemoveDirectoryW(b);
-    store_close();wchar_t settings[MAX_PATH];swprintf(settings,MAX_PATH,L"%ls\\file-manager.ini",root);DeleteFileW(settings);swprintf(settings,MAX_PATH,L"%ls\\nova.json",root);DeleteFileW(settings);assert(RemoveDirectoryW(root));DestroyWindow(host);OleUninitialize();return 0;
+    store_close();wchar_t settings[MAX_PATH];swprintf(settings,MAX_PATH,L"%ls\\file-manager.ini",root);DeleteFileW(settings);swprintf(settings,MAX_PATH,L"%ls\\nova.json",root);DeleteFileW(settings);swprintf(settings,MAX_PATH,L"%ls\\local.json",root);DeleteFileW(settings);assert(RemoveDirectoryW(root));DestroyWindow(host);OleUninitialize();return 0;
 }
