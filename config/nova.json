@@ -301,7 +301,7 @@
       "scope": "files",
       "section": "Pane2",
       "key": "Count",
-      "value": "4"
+      "value": "5"
     },
     {
       "scope": "files",
@@ -326,6 +326,12 @@
       "section": "Pane2",
       "key": "Tab3",
       "value": "D:\\MyProjects\\MyApps\\mylocalllm"
+    },
+    {
+      "scope": "files",
+      "section": "Pane2",
+      "key": "Tab4",
+      "value": "D:\\MyProjects\\MyApps\\LearningApp"
     },
     {
       "scope": "files",
