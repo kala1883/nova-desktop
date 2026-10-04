@@ -242,6 +242,15 @@ NOVA Desktop 使用 [MIT License](LICENSE)。SQLite 属于公有领域软件，�
 
 ## 配置合并冲突
 
+在 `main` 分支日常更新时，先关闭 NOVA，再运行 `deployment/sync_config.bat`。
+它拉取 `origin/main`，将公共祖先、本机及远端 JSON 备份到被忽略的
+`build/config-sync/`，随后快进更新并合并未提交配置。独立增删可自动合并；
+启动项重新编号及已关闭标签残留字段不算编辑。真正的双方修改冲突会在改变
+工作文件前停止。`-Preview` 只获取远端并生成带备份的预览。命令不提交、推送，
+也不操作已有 stash；发布前核对并提交保留下来的本机修改。已暂存的配置、未完成的
+Git 操作或分叉提交需要另行处理。任务、保存目录等共享数据的修改仍会阻塞普通
+`git pull`；本机状态拆分只能避免临时界面状态造成这种阻塞。
+
 如果拉取被未提交的 `config/nova.json` 阻止，先关闭 NOVA，再运行
 `git stash push -m "nova config before pull" -- config/nova.json` 保留本机修改。
 源电脑发布更新后拉取，再用 `git stash apply 'stash@{0}'` 恢复修改并保留 stash。

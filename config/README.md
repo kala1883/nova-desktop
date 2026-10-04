@@ -111,3 +111,15 @@ for the same entity; do not use `git push --force` or blindly choose a full file
 Git 冲突时，关闭 NOVA 后运行 `deployment/resolve_config.bat` 生成带备份的预览；
 加 `-Apply` 应用、暂存无冲突的语义合并。同一条数据的冲突需要核对，避免强制推送
 或直接选择整份文件覆盖另一边。
+
+For routine updates with uncommitted configuration on `main`, close NOVA and run
+`deployment/sync_config.bat` (`-Preview` for a read-only working-file preview).
+It backs up all three JSON versions, fast-forwards from `origin/main`, and merges
+local changes without using stashes or committing. Real conflicts stop before
+working files change. Item position compaction and closed-tab residue are ignored
+during semantic comparison; incompatible relative reorderings require review.
+
+`main` 分支有未提交配置时，关闭 NOVA 后运行 `deployment/sync_config.bat`；
+`-Preview` 只获取远端并生成预览，不修改工作文件。它备份三份 JSON，快进更新
+`origin/main` 并合并本机修改，不操作 stash 或提交。真正冲突会在工作文件修改前停止。
+语义比较忽略启动项编号压缩和关闭标签残留；不兼容的相对顺序调整仍需人工核对。

@@ -37,6 +37,12 @@ function Get-NovaSettingsMap {
     $map = New-NovaMergeMap
     foreach ($row in $Data.settings) {
         if ($row.scope -eq 'batch_tasks') { continue }
+        # Closed tabs can leave old keys behind; they are not saved tabs.
+        if ($row.scope -eq 'files' -and $row.section -cmatch '^Pane[0-3]$' -and $row.key -cmatch '^Tab([0-9]+)$') {
+            $tabIndex = [int]$Matches[1]
+            $count = @($Data.settings | Where-Object { $_.scope -eq 'files' -and $_.section -ceq $row.section -and $_.key -ceq 'Count' })
+            if ($count.Count -eq 1 -and $tabIndex -ge [int]$count[0].value) { continue }
+        }
         $key = ConvertTo-Json -InputObject @($row.scope,$row.section,$row.key) -Compress
         if ($map.ContainsKey($key)) { throw 'Duplicate settings key / 设置键重复。' }
         $map.Add($key,$row)
@@ -90,6 +96,50 @@ function Get-NovaEntityMap {
     }
     return ,$map
 }
+function Get-NovaContentMap {
+    param($Rows)
+    $copy = ConvertFrom-Json (ConvertTo-Json -InputObject @($Rows) -Depth 100)
+    $map = Get-NovaEntityMap $copy
+    foreach ($row in $map.Values) { $row.PSObject.Properties.Remove('position') }
+    return ,$map
+}
+function Merge-NovaOrder {
+    param($BaseRows,$LocalRows,$RemoteRows,$Entities,[string]$Label,$Conflicts)
+    $orders = @(foreach ($rows in @($BaseRows,$LocalRows,$RemoteRows)) {
+        $order = New-NovaMergeMap; $index = 0
+        foreach ($row in @($rows | Sort-Object position,id)) { $order[[string]$row.id] = $index; $index++ }
+        ,$order
+    })
+    $ids = @(); foreach ($order in $orders[1],$orders[2],$orders[0]) {
+        foreach ($id in $order.Keys) { if ($Entities.ContainsKey($id) -and $id -notin $ids) { $ids += $id } }
+    }
+    $edges = New-NovaMergeMap; $degrees = New-NovaMergeMap
+    foreach ($id in $ids) { $edges[$id] = [Collections.Generic.List[string]]::new(); $degrees[$id] = 0 }
+    for ($i = 0; $i -lt $ids.Count; $i++) { for ($j = $i+1; $j -lt $ids.Count; $j++) {
+        $a = $ids[$i]; $b = $ids[$j]
+        $states = @(foreach ($order in $orders) {
+            if ($order.ContainsKey($a) -and $order.ContainsKey($b)) { if ($order[$a] -lt $order[$b]) { 1 } else { -1 } } else { 0 }
+        })
+        $chosen = 0
+        if ($states[1] -eq $states[2]) { $chosen = $states[1] }
+        elseif ($states[1] -eq 0 -or $states[1] -eq $states[0]) { $chosen = $states[2] }
+        elseif ($states[2] -eq 0 -or $states[2] -eq $states[0]) { $chosen = $states[1] }
+        else { $Conflicts.Add("$Label/order"); return @() }
+        if ($chosen -ne 0) {
+            $from = $a; $to = $b; if ($chosen -lt 0) { $from = $b; $to = $a }
+            $edges[$from].Add($to); $degrees[$to]++
+        }
+    } }
+    $result = @(); $remaining = @($ids)
+    while ($remaining.Count) {
+        $ready = @($remaining | Where-Object { $degrees[$_] -eq 0 })
+        if (-not $ready.Count) { $Conflicts.Add("$Label/order"); return @() }
+        $id = $ready[0]; $result += $Entities[$id]
+        $remaining = @($remaining | Where-Object { $_ -cne $id })
+        foreach ($to in $edges[$id]) { $degrees[$to]-- }
+    }
+    return $result
+}
 function Get-NovaMergedConfiguration {
     param($Base,$Local,$Remote)
     $Base = ConvertFrom-Json (ConvertTo-Json -InputObject $Base -Depth 100)
@@ -101,8 +151,10 @@ function Get-NovaMergedConfiguration {
     $conflicts = [Collections.Generic.List[string]]::new()
     $settings = Merge-NovaMap (Get-NovaSettingsMap $Base) (Get-NovaSettingsMap $Local) (Get-NovaSettingsMap $Remote) 'settings' $conflicts
     $tasks = Merge-NovaMap (Get-NovaTasksMap $Base) (Get-NovaTasksMap $Local) (Get-NovaTasksMap $Remote) 'tasks' $conflicts
-    $spaces = Merge-NovaMap (Get-NovaEntityMap $Base.workspaces) (Get-NovaEntityMap $Local.workspaces) (Get-NovaEntityMap $Remote.workspaces) 'workspaces' $conflicts
-    $items = Merge-NovaMap (Get-NovaEntityMap $Base.items) (Get-NovaEntityMap $Local.items) (Get-NovaEntityMap $Remote.items) 'items' $conflicts
+    # Numeric positions shift after deletion and are not content edits.
+    # Keep the original rows for a separate three-way relative-order merge.
+    $spaces = Merge-NovaMap (Get-NovaContentMap $Base.workspaces) (Get-NovaContentMap $Local.workspaces) (Get-NovaContentMap $Remote.workspaces) 'workspaces' $conflicts
+    $items = Merge-NovaMap (Get-NovaContentMap $Base.items) (Get-NovaContentMap $Local.items) (Get-NovaContentMap $Remote.items) 'items' $conflicts
     if ($tasks.Count -gt 16 -or $spaces.Count -gt 8) { $conflicts.Add('capacity / 超过容量') }
     foreach ($space in $spaces.Values) {
         if (@($items.Values | Where-Object { $_.workspace_id -eq $space.id }).Count -gt 20) { $conflicts.Add("items/$($space.id)/capacity") }
@@ -118,9 +170,19 @@ function Get-NovaMergedConfiguration {
             foreach ($key in $tasks[$order[$index]].Keys) { $settingsRows += [pscustomobject]@{ scope='batch_tasks'; section="Task$index"; key=$key; value=$tasks[$order[$index]][$key] } }
         }
     }
-    $spaceRows = @($spaces.Values | Sort-Object position,id); $position = 0
-    foreach ($space in $spaceRows) { $space.position = $position; $position++ }
-    $itemRows = @($items.Values | Sort-Object workspace_id,position,id); $positions = @{}
-    foreach ($item in $itemRows) { $id = [string]$item.workspace_id; if (-not $positions.ContainsKey($id)) { $positions[$id]=0 }; $item.position=$positions[$id]; $positions[$id]++ }
+    $spaceRows = @(Merge-NovaOrder $Base.workspaces $Local.workspaces $Remote.workspaces $spaces 'workspaces' $conflicts); $position = 0
+    foreach ($space in $spaceRows) { $space | Add-Member -NotePropertyName position -NotePropertyValue $position; $position++ }
+    $itemRows = @()
+    foreach ($space in $spaceRows) {
+        $group = New-NovaMergeMap
+        foreach ($item in $items.Values) { if ($item.workspace_id -eq $space.id) { $group[[string]$item.id] = $item } }
+        $baseGroup = @($Base.items | Where-Object { $_.workspace_id -eq $space.id })
+        $localGroup = @($Local.items | Where-Object { $_.workspace_id -eq $space.id })
+        $remoteGroup = @($Remote.items | Where-Object { $_.workspace_id -eq $space.id })
+        $ordered = @(Merge-NovaOrder $baseGroup $localGroup $remoteGroup $group "items/$($space.id)" $conflicts); $position = 0
+        foreach ($item in $ordered) { $item | Add-Member -NotePropertyName position -NotePropertyValue $position; $position++ }
+        $itemRows += $ordered
+    }
+    if ($conflicts.Count) { return [pscustomobject]@{ Data = $null; Conflicts = @($conflicts.ToArray()) } }
     [pscustomobject]@{ Data = [ordered]@{version=1;application='NOVA Desktop';initialized=($Local.initialized -or $Remote.initialized);settings=@($settingsRows | Sort-Object scope,section,key);workspaces=$spaceRows;items=$itemRows}; Conflicts=@() }
 }

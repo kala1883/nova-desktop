@@ -301,6 +301,18 @@ to their respective owners.
 
 ## Configuration merge conflicts
 
+For routine updates on `main`, close NOVA and run
+`deployment/sync_config.bat`. It fetches `origin/main`, backs up the base, local
+and remote JSON under ignored `build/config-sync/`, then fast-forwards and merges
+uncommitted configuration changes. Independent additions and deletions merge;
+renumbering item positions and leftover closed-tab keys do not count as edits.
+Real conflicting edits stop before changing working files. `-Preview` only fetches
+and creates a backed-up preview. The command does not commit, push, or touch
+existing stashes; review and commit retained local changes before publishing.
+Staged configuration, unfinished Git operations and diverged commits require
+separate handling. Shared task or folder edits can still block ordinary `git pull`;
+the local-state split only prevents transient UI state from doing so.
+
 If pull is blocked by uncommitted `config/nova.json`, first close NOVA, then save
 that file with `git stash push -m "nova config before pull" -- config/nova.json`.
 Pull after the source computer has published its changes, then use
