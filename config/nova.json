@@ -306,14 +306,8 @@
     {
       "scope": "files",
       "section": "Pane2",
-      "key": "Selected",
-      "value": "0"
-    },
-    {
-      "scope": "files",
-      "section": "Pane2",
       "key": "Tab0",
-      "value": "D:\\MyProjects\\MyApps\\mydesktop"
+      "value": "D:\\MyProjects\\MyApps\\nova-desktop"
     },
     {
       "scope": "files",
@@ -445,48 +439,6 @@
       "position": 6,
       "name": "有道云笔记",
       "target": "C:\\ProgramData\\Microsoft\\Windows\\Start Menu\\Programs\\有道云笔记.lnk"
-    },
-    {
-      "id": "1634282352145994725",
-      "workspace_id": "6969818039083397288",
-      "position": 7,
-      "name": "Docker Desktop",
-      "target": "C:\\Users\\mj\\AppData\\Roaming\\Microsoft\\Windows\\Start Menu\\Programs\\Docker Desktop.lnk"
-    },
-    {
-      "id": "4232691905880602217",
-      "workspace_id": "6969818039083397288",
-      "position": 8,
-      "name": "Figma",
-      "target": "C:\\Users\\mj\\AppData\\Roaming\\Microsoft\\Windows\\Start Menu\\Programs\\Figma.lnk"
-    },
-    {
-      "id": "8732338915691513421",
-      "workspace_id": "6969818039083397288",
-      "position": 9,
-      "name": "Anki",
-      "target": "C:\\Users\\mj\\AppData\\Roaming\\Microsoft\\Windows\\Start Menu\\Programs\\Anki.lnk"
-    },
-    {
-      "id": "1863690977325746377",
-      "workspace_id": "6969818039083397288",
-      "position": 10,
-      "name": "Visual Studio Code",
-      "target": "C:\\Users\\mj\\AppData\\Roaming\\Microsoft\\Windows\\Start Menu\\Programs\\Visual Studio Code.lnk"
-    },
-    {
-      "id": "5046342418588025916",
-      "workspace_id": "6969818039083397288",
-      "position": 11,
-      "name": "WorkBuddy",
-      "target": "C:\\Users\\mj\\AppData\\Roaming\\Microsoft\\Windows\\Start Menu\\Programs\\WorkBuddy.lnk"
-    },
-    {
-      "id": "6097196717330717947",
-      "workspace_id": "6969818039083397288",
-      "position": 12,
-      "name": "ChatGPT - 快捷方式",
-      "target": "D:\\programfiles3\\ChatGPT - 快捷方式.lnk"
     }
   ]
 }
