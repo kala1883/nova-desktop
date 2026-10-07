@@ -289,19 +289,25 @@
       "scope": "files",
       "section": "Pane1",
       "key": "Count",
-      "value": "1"
+      "value": "2"
     },
     {
       "scope": "files",
       "section": "Pane1",
       "key": "Tab0",
-      "value": "D:\\"
+      "value": "D:\\MyWork\\haikoumaas\\.agents\\skills"
+    },
+    {
+      "scope": "files",
+      "section": "Pane1",
+      "key": "Tab1",
+      "value": "D:\\MyWork\\nanjingtransportmonitoringsys\\签合同"
     },
     {
       "scope": "files",
       "section": "Pane2",
       "key": "Count",
-      "value": "5"
+      "value": "6"
     },
     {
       "scope": "files",
@@ -335,9 +341,15 @@
     },
     {
       "scope": "files",
+      "section": "Pane2",
+      "key": "Tab5",
+      "value": "D:\\MyProjects\\MyApps\\sleeping"
+    },
+    {
+      "scope": "files",
       "section": "Pane3",
       "key": "Count",
-      "value": "3"
+      "value": "4"
     },
     {
       "scope": "files",
@@ -356,6 +368,12 @@
       "section": "Pane3",
       "key": "Tab2",
       "value": "D:\\MyProjects\\icanmakeameaningfulcareer\\mystudyandexam"
+    },
+    {
+      "scope": "files",
+      "section": "Pane3",
+      "key": "Tab3",
+      "value": "D:\\MyProjects\\icanbeanaiexpert\\AIUsing\\myagentteams\\doc_agent\\.agents"
     }
   ],
   "workspaces": [
@@ -438,32 +456,39 @@
       "target": "D:\\programfiles3\\ChatGPT.lnk"
     },
     {
-      "id": "6580304493495951618",
+      "id": "6914680770371065798",
       "workspace_id": "6969818039083397288",
       "position": 4,
+      "name": "有道云笔记",
+      "target": "C:\\ProgramData\\Microsoft\\Windows\\Start Menu\\Programs\\有道云笔记.lnk"
+    },
+    {
+      "id": "6580304493495951618",
+      "workspace_id": "6969818039083397288",
+      "position": 5,
       "name": "Google Chrome",
       "target": "C:\\ProgramData\\Microsoft\\Windows\\Start Menu\\Programs\\Google Chrome.lnk"
     },
     {
       "id": "3569885870074066773",
       "workspace_id": "6969818039083397288",
-      "position": 5,
+      "position": 6,
       "name": "PowerPoint",
       "target": "C:\\ProgramData\\Microsoft\\Windows\\Start Menu\\Programs\\PowerPoint.lnk"
     },
     {
       "id": "5550529118529490085",
       "workspace_id": "6969818039083397288",
-      "position": 6,
+      "position": 7,
       "name": "Word",
       "target": "C:\\ProgramData\\Microsoft\\Windows\\Start Menu\\Programs\\Word.lnk"
     },
     {
-      "id": "6914680770371065798",
+      "id": "4302892563378620187",
       "workspace_id": "6969818039083397288",
-      "position": 7,
-      "name": "有道云笔记",
-      "target": "C:\\ProgramData\\Microsoft\\Windows\\Start Menu\\Programs\\有道云笔记.lnk"
+      "position": 8,
+      "name": "LocalSend",
+      "target": "C:\\ProgramData\\Microsoft\\Windows\\Start Menu\\Programs\\LocalSend.lnk"
     }
   ]
 }
