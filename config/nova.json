@@ -277,31 +277,85 @@
       "scope": "files",
       "section": "Pane0",
       "key": "Count",
-      "value": "1"
+      "value": "6"
     },
     {
       "scope": "files",
       "section": "Pane0",
       "key": "Tab0",
-      "value": "::{20D04FE0-3AEA-1069-A2D8-08002B30309D}"
+      "value": "D:\\MyWork\\YanchengUrbanOperationCockpit\\@项目管理\\@运维\\20261008域名ssl证书续费"
+    },
+    {
+      "scope": "files",
+      "section": "Pane0",
+      "key": "Tab1",
+      "value": "D:\\MyWork\\others\\工资奖金\\@报销\\1未报销\\2026.10.09-AI token"
+    },
+    {
+      "scope": "files",
+      "section": "Pane0",
+      "key": "Tab2",
+      "value": "D:\\MyWork\\YanchengUrbanOperationCockpit\\@项目管理\\合同&采购&请款付款\\请款\\02-初验款\\电信"
+    },
+    {
+      "scope": "files",
+      "section": "Pane0",
+      "key": "Tab3",
+      "value": "D:\\MyWork\\YanchengUrbanOperationCockpit\\@项目管理\\@外审\\20260731外审意见整改\\附件\\4数据保密协议"
+    },
+    {
+      "scope": "files",
+      "section": "Pane0",
+      "key": "Tab4",
+      "value": "D:\\MyWork\\YanchengUrbanOperationCockpit\\@项目管理\\@外审\\20260731外审意见整改\\附件\\运维巡检2604-10"
+    },
+    {
+      "scope": "files",
+      "section": "Pane0",
+      "key": "Tab5",
+      "value": "D:\\MyWork\\haikoumaas\\1MaaS初设"
     },
     {
       "scope": "files",
       "section": "Pane1",
       "key": "Count",
-      "value": "2"
+      "value": "6"
     },
     {
       "scope": "files",
       "section": "Pane1",
       "key": "Tab0",
-      "value": "D:\\MyWork\\haikoumaas\\.agents\\skills"
+      "value": "D:\\MyWork\\haikoumaas\\3项目交付管理\\20260929海口投标"
     },
     {
       "scope": "files",
       "section": "Pane1",
       "key": "Tab1",
+      "value": "D:\\MyWork\\haikoumaas\\3项目交付管理\\20260923功能设计深化和确认"
+    },
+    {
+      "scope": "files",
+      "section": "Pane1",
+      "key": "Tab2",
       "value": "D:\\MyWork\\nanjingtransportmonitoringsys\\签合同"
+    },
+    {
+      "scope": "files",
+      "section": "Pane1",
+      "key": "Tab3",
+      "value": "D:\\MyWork\\xuzhoumtroline6passengervolumes\\@手机信令"
+    },
+    {
+      "scope": "files",
+      "section": "Pane1",
+      "key": "Tab4",
+      "value": "D:\\MyProjects\\MyApps\\TransportDataAgent"
+    },
+    {
+      "scope": "files",
+      "section": "Pane1",
+      "key": "Tab5",
+      "value": "D:\\MyProjects\\MyApps\\maas\\business_service"
     },
     {
       "scope": "files",
@@ -347,15 +401,21 @@
     },
     {
       "scope": "files",
+      "section": "Pane2",
+      "key": "Tab6",
+      "value": "D:\\MyProjects\\MyApps\\maas\\tOCS"
+    },
+    {
+      "scope": "files",
       "section": "Pane3",
       "key": "Count",
-      "value": "4"
+      "value": "3"
     },
     {
       "scope": "files",
       "section": "Pane3",
       "key": "Tab0",
-      "value": "D:\\MyLife\\myhealth"
+      "value": "D:\\MyLife\\myhealth\\我"
     },
     {
       "scope": "files",
@@ -373,7 +433,7 @@
       "scope": "files",
       "section": "Pane3",
       "key": "Tab3",
-      "value": "D:\\MyProjects\\icanbeanaiexpert\\AIUsing\\myagentteams\\doc_agent\\.agents"
+      "value": "D:\\MyProjects\\icanbeanaiexpert\\AIUsing\\myagentteams"
     }
   ],
   "workspaces": [
@@ -449,46 +509,88 @@
       "target": "nova-batch:7987518378906657662"
     },
     {
-      "id": "1116558357515455817",
+      "id": "6255728511945100573",
       "workspace_id": "6969818039083397288",
       "position": 3,
+      "name": "微信",
+      "target": "C:\\ProgramData\\Microsoft\\Windows\\Start Menu\\Programs\\微信\\微信.lnk"
+    },
+    {
+      "id": "5741496140277305786",
+      "workspace_id": "6969818039083397288",
+      "position": 4,
+      "name": "云之家",
+      "target": "C:\\Users\\mj\\AppData\\Roaming\\Microsoft\\Windows\\Start Menu\\Programs\\云之家\\云之家.lnk"
+    },
+    {
+      "id": "2527702173819322240",
+      "workspace_id": "6969818039083397288",
+      "position": 5,
+      "name": "钉钉",
+      "target": "C:\\ProgramData\\Microsoft\\Windows\\Start Menu\\Programs\\钉钉\\钉钉.lnk"
+    },
+    {
+      "id": "1449645203546609090",
+      "workspace_id": "6969818039083397288",
+      "position": 6,
+      "name": "Telegram",
+      "target": "C:\\Users\\mj\\AppData\\Roaming\\Microsoft\\Windows\\Start Menu\\Programs\\Telegram Desktop\\Telegram.lnk"
+    },
+    {
+      "id": "1116558357515455817",
+      "workspace_id": "6969818039083397288",
+      "position": 7,
       "name": "ChatGPT",
       "target": "D:\\programfiles3\\ChatGPT.lnk"
     },
     {
-      "id": "6914680770371065798",
-      "workspace_id": "6969818039083397288",
-      "position": 4,
-      "name": "有道云笔记",
-      "target": "C:\\ProgramData\\Microsoft\\Windows\\Start Menu\\Programs\\有道云笔记.lnk"
-    },
-    {
       "id": "6580304493495951618",
       "workspace_id": "6969818039083397288",
-      "position": 5,
+      "position": 8,
       "name": "Google Chrome",
       "target": "C:\\ProgramData\\Microsoft\\Windows\\Start Menu\\Programs\\Google Chrome.lnk"
     },
     {
+      "id": "6914680770371065798",
+      "workspace_id": "6969818039083397288",
+      "position": 9,
+      "name": "有道云笔记",
+      "target": "C:\\ProgramData\\Microsoft\\Windows\\Start Menu\\Programs\\有道云笔记.lnk"
+    },
+    {
+      "id": "4302892563378620187",
+      "workspace_id": "6969818039083397288",
+      "position": 10,
+      "name": "LocalSend",
+      "target": "C:\\ProgramData\\Microsoft\\Windows\\Start Menu\\Programs\\LocalSend.lnk"
+    },
+    {
       "id": "3569885870074066773",
       "workspace_id": "6969818039083397288",
-      "position": 6,
+      "position": 11,
       "name": "PowerPoint",
       "target": "C:\\ProgramData\\Microsoft\\Windows\\Start Menu\\Programs\\PowerPoint.lnk"
     },
     {
       "id": "5550529118529490085",
       "workspace_id": "6969818039083397288",
-      "position": 7,
+      "position": 12,
       "name": "Word",
       "target": "C:\\ProgramData\\Microsoft\\Windows\\Start Menu\\Programs\\Word.lnk"
     },
     {
-      "id": "4302892563378620187",
+      "id": "225502693743477985",
       "workspace_id": "6969818039083397288",
-      "position": 8,
-      "name": "LocalSend",
-      "target": "C:\\ProgramData\\Microsoft\\Windows\\Start Menu\\Programs\\LocalSend.lnk"
+      "position": 13,
+      "name": "Docker Desktop",
+      "target": "C:\\Users\\mj\\AppData\\Roaming\\Microsoft\\Windows\\Start Menu\\Programs\\Docker Desktop.lnk"
+    },
+    {
+      "id": "3630829652492954164",
+      "workspace_id": "6969818039083397288",
+      "position": 14,
+      "name": "ToDesk",
+      "target": "C:\\ProgramData\\Microsoft\\Windows\\Start Menu\\Programs\\ToDesk\\ToDesk.lnk"
     }
   ]
 }
