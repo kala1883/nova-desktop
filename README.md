@@ -206,6 +206,11 @@ Select a row and use **Edit** (or double-click), change its folder or command
 in the editor below, then choose **Apply changes**. **Delete** removes that
 subtask's configuration only. Working folders within a task must remain unique.
 Legacy rows without their own command continue to inherit the default command.
+Hold the left mouse button on a subtask for 350 ms, then drag up or down to
+reorder it. The insertion line shows its new position; the list scrolls at its
+edges. Release to save the order, or press Esc / release outside the list to
+cancel. Folders, commands and results move together; sequential execution follows
+the saved order. Reordering is disabled while any subtask is running.
 Use **Run selected** above the subtask list to execute only the selected row,
 including pending edits. Its status and captured output appear on that row;
 double-click any completed row to view output, including successful commands.

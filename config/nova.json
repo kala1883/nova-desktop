@@ -85,49 +85,61 @@
       "scope": "batch_tasks",
       "section": "Task1",
       "key": "Directory0",
-      "value": "D:\\MyProjects\\MyApps\\transportandai"
-    },
-    {
-      "scope": "batch_tasks",
-      "section": "Task1",
-      "key": "Directory1",
-      "value": "D:\\MyProjects\\MyApps\\sleeping"
-    },
-    {
-      "scope": "batch_tasks",
-      "section": "Task1",
-      "key": "Directory2",
-      "value": "D:\\MyProjects\\MyApps\\LearningApp"
-    },
-    {
-      "scope": "batch_tasks",
-      "section": "Task1",
-      "key": "Directory3",
-      "value": "D:\\MyProjects\\MyApps\\mygomuku"
-    },
-    {
-      "scope": "batch_tasks",
-      "section": "Task1",
-      "key": "Directory4",
-      "value": "D:\\MyProjects\\MyApps\\mylocalllm"
-    },
-    {
-      "scope": "batch_tasks",
-      "section": "Task1",
-      "key": "Directory5",
-      "value": "D:\\MyProjects\\MyApps\\LocalWebGPT"
-    },
-    {
-      "scope": "batch_tasks",
-      "section": "Task1",
-      "key": "Directory6",
       "value": "D:\\MyProjects\\MyApps\\mydesktop"
     },
     {
       "scope": "batch_tasks",
       "section": "Task1",
+      "key": "Directory1",
+      "value": "D:\\MyProjects\\MyApps\\transportandai"
+    },
+    {
+      "scope": "batch_tasks",
+      "section": "Task1",
+      "key": "Directory2",
+      "value": "D:\\MyProjects\\MyApps\\sleeping"
+    },
+    {
+      "scope": "batch_tasks",
+      "section": "Task1",
+      "key": "Directory3",
+      "value": "D:\\MyProjects\\MyApps\\LearningApp"
+    },
+    {
+      "scope": "batch_tasks",
+      "section": "Task1",
+      "key": "Directory4",
+      "value": "D:\\MyProjects\\MyApps\\TransportDataAgent"
+    },
+    {
+      "scope": "batch_tasks",
+      "section": "Task1",
+      "key": "Directory5",
+      "value": "D:\\MyProjects\\MyApps\\TransportModelingAgent"
+    },
+    {
+      "scope": "batch_tasks",
+      "section": "Task1",
+      "key": "Directory6",
+      "value": "D:\\MyProjects\\MyApps\\mygomuku"
+    },
+    {
+      "scope": "batch_tasks",
+      "section": "Task1",
+      "key": "Directory7",
+      "value": "D:\\MyProjects\\MyApps\\mylocalllm"
+    },
+    {
+      "scope": "batch_tasks",
+      "section": "Task1",
+      "key": "Directory8",
+      "value": "D:\\MyProjects\\MyApps\\LocalWebGPT"
+    },
+    {
+      "scope": "batch_tasks",
+      "section": "Task1",
       "key": "DirectoryCount",
-      "value": "7"
+      "value": "9"
     },
     {
       "scope": "batch_tasks",
@@ -187,6 +199,18 @@
       "scope": "batch_tasks",
       "section": "Task1",
       "key": "StepCommand6",
+      "value": "git pull origin main"
+    },
+    {
+      "scope": "batch_tasks",
+      "section": "Task1",
+      "key": "StepCommand7",
+      "value": "git pull origin main"
+    },
+    {
+      "scope": "batch_tasks",
+      "section": "Task1",
+      "key": "StepCommand8",
       "value": "git pull origin main"
     },
     {
@@ -283,7 +307,7 @@
       "scope": "files",
       "section": "Pane0",
       "key": "Tab0",
-      "value": "::{20D04FE0-3AEA-1069-A2D8-08002B30309D}"
+      "value": "D:\\programfiles1"
     },
     {
       "scope": "files",
@@ -301,7 +325,7 @@
       "scope": "files",
       "section": "Pane2",
       "key": "Count",
-      "value": "4"
+      "value": "8"
     },
     {
       "scope": "files",
@@ -319,13 +343,37 @@
       "scope": "files",
       "section": "Pane2",
       "key": "Tab2",
-      "value": "D:\\MyProjects\\MyApps\\transportandai"
+      "value": "D:\\MyProjects\\MyApps\\mylocalllm"
     },
     {
       "scope": "files",
       "section": "Pane2",
       "key": "Tab3",
-      "value": "D:\\MyProjects\\MyApps"
+      "value": "D:\\MyProjects\\MyApps\\LocalWebGPT"
+    },
+    {
+      "scope": "files",
+      "section": "Pane2",
+      "key": "Tab4",
+      "value": "D:\\MyProjects\\MyApps\\LearningApp"
+    },
+    {
+      "scope": "files",
+      "section": "Pane2",
+      "key": "Tab5",
+      "value": "D:\\MyProjects\\MyApps\\sleeping"
+    },
+    {
+      "scope": "files",
+      "section": "Pane2",
+      "key": "Tab6",
+      "value": "D:\\MyProjects\\MyApps\\TransportDataAgent"
+    },
+    {
+      "scope": "files",
+      "section": "Pane2",
+      "key": "Tab7",
+      "value": "D:\\MyProjects\\MyApps\\TransportModelingAgent"
     },
     {
       "scope": "files",
@@ -337,7 +385,7 @@
       "scope": "files",
       "section": "Pane3",
       "key": "Tab0",
-      "value": "::{20D04FE0-3AEA-1069-A2D8-08002B30309D}"
+      "value": "D:\\MyProjects"
     }
   ],
   "workspaces": [
@@ -413,30 +461,37 @@
       "target": "nova-batch:7987518378906657662"
     },
     {
-      "id": "6580304493495951618",
+      "id": "7092089952097978101",
       "workspace_id": "6969818039083397288",
       "position": 3,
+      "name": "ChatGPT",
+      "target": "D:\\programfiles3\\ChatGPT.lnk"
+    },
+    {
+      "id": "6580304493495951618",
+      "workspace_id": "6969818039083397288",
+      "position": 4,
       "name": "Google Chrome",
       "target": "C:\\ProgramData\\Microsoft\\Windows\\Start Menu\\Programs\\Google Chrome.lnk"
     },
     {
       "id": "3569885870074066773",
       "workspace_id": "6969818039083397288",
-      "position": 4,
+      "position": 5,
       "name": "PowerPoint",
       "target": "C:\\ProgramData\\Microsoft\\Windows\\Start Menu\\Programs\\PowerPoint.lnk"
     },
     {
       "id": "5550529118529490085",
       "workspace_id": "6969818039083397288",
-      "position": 5,
+      "position": 6,
       "name": "Word",
       "target": "C:\\ProgramData\\Microsoft\\Windows\\Start Menu\\Programs\\Word.lnk"
     },
     {
       "id": "6914680770371065798",
       "workspace_id": "6969818039083397288",
-      "position": 6,
+      "position": 7,
       "name": "有道云笔记",
       "target": "C:\\ProgramData\\Microsoft\\Windows\\Start Menu\\Programs\\有道云笔记.lnk"
     }
