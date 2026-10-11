@@ -325,7 +325,7 @@
       "scope": "files",
       "section": "Pane2",
       "key": "Count",
-      "value": "8"
+      "value": "7"
     },
     {
       "scope": "files",
@@ -343,49 +343,73 @@
       "scope": "files",
       "section": "Pane2",
       "key": "Tab2",
-      "value": "D:\\MyProjects\\MyApps\\mylocalllm"
-    },
-    {
-      "scope": "files",
-      "section": "Pane2",
-      "key": "Tab3",
-      "value": "D:\\MyProjects\\MyApps\\LocalWebGPT"
-    },
-    {
-      "scope": "files",
-      "section": "Pane2",
-      "key": "Tab4",
       "value": "D:\\MyProjects\\MyApps\\LearningApp"
     },
     {
       "scope": "files",
       "section": "Pane2",
-      "key": "Tab5",
+      "key": "Tab3",
       "value": "D:\\MyProjects\\MyApps\\sleeping"
     },
     {
       "scope": "files",
       "section": "Pane2",
-      "key": "Tab6",
+      "key": "Tab4",
+      "value": "D:\\MyProjects\\MyApps\\TransportModelingAgent"
+    },
+    {
+      "scope": "files",
+      "section": "Pane2",
+      "key": "Tab5",
       "value": "D:\\MyProjects\\MyApps\\TransportDataAgent"
     },
     {
       "scope": "files",
       "section": "Pane2",
+      "key": "Tab6",
+      "value": "D:\\MyProjects\\MyApps\\body_3d"
+    },
+    {
+      "scope": "files",
+      "section": "Pane2",
       "key": "Tab7",
-      "value": "D:\\MyProjects\\MyApps\\TransportModelingAgent"
+      "value": "D:\\MyProjects\\MyApps\\body_3d"
+    },
+    {
+      "scope": "files",
+      "section": "Pane2",
+      "key": "Tab8",
+      "value": "D:\\MyProjects\\MyApps\\body_3d"
     },
     {
       "scope": "files",
       "section": "Pane3",
       "key": "Count",
-      "value": "1"
+      "value": "3"
     },
     {
       "scope": "files",
       "section": "Pane3",
       "key": "Tab0",
-      "value": "D:\\MyProjects"
+      "value": "D:\\MyLife\\myhealth"
+    },
+    {
+      "scope": "files",
+      "section": "Pane3",
+      "key": "Tab1",
+      "value": "D:\\MyLife\\selfimproving"
+    },
+    {
+      "scope": "files",
+      "section": "Pane3",
+      "key": "Tab2",
+      "value": "D:\\MyProjects\\icanmakeameaningfulcareer"
+    },
+    {
+      "scope": "files",
+      "section": "Pane3",
+      "key": "Tab3",
+      "value": "D:\\MyProjects\\MyApps"
     }
   ],
   "workspaces": [
@@ -494,6 +518,20 @@
       "position": 7,
       "name": "有道云笔记",
       "target": "C:\\ProgramData\\Microsoft\\Windows\\Start Menu\\Programs\\有道云笔记.lnk"
+    },
+    {
+      "id": "1249931362877143957",
+      "workspace_id": "6969818039083397288",
+      "position": 8,
+      "name": "ToDesk",
+      "target": "C:\\ProgramData\\Microsoft\\Windows\\Start Menu\\Programs\\ToDesk\\ToDesk.lnk"
+    },
+    {
+      "id": "1993484412399703598",
+      "workspace_id": "6969818039083397288",
+      "position": 9,
+      "name": "QQ音乐",
+      "target": "C:\\ProgramData\\Microsoft\\Windows\\Start Menu\\Programs\\腾讯软件\\QQ音乐\\QQ音乐.lnk"
     }
   ]
 }
