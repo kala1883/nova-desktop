@@ -85,49 +85,61 @@
       "scope": "batch_tasks",
       "section": "Task1",
       "key": "Directory0",
-      "value": "D:\\MyProjects\\MyApps\\transportandai"
-    },
-    {
-      "scope": "batch_tasks",
-      "section": "Task1",
-      "key": "Directory1",
-      "value": "D:\\MyProjects\\MyApps\\sleeping"
-    },
-    {
-      "scope": "batch_tasks",
-      "section": "Task1",
-      "key": "Directory2",
-      "value": "D:\\MyProjects\\MyApps\\LearningApp"
-    },
-    {
-      "scope": "batch_tasks",
-      "section": "Task1",
-      "key": "Directory3",
-      "value": "D:\\MyProjects\\MyApps\\mygomuku"
-    },
-    {
-      "scope": "batch_tasks",
-      "section": "Task1",
-      "key": "Directory4",
-      "value": "D:\\MyProjects\\MyApps\\mylocalllm"
-    },
-    {
-      "scope": "batch_tasks",
-      "section": "Task1",
-      "key": "Directory5",
-      "value": "D:\\MyProjects\\MyApps\\LocalWebGPT"
-    },
-    {
-      "scope": "batch_tasks",
-      "section": "Task1",
-      "key": "Directory6",
       "value": "D:\\MyProjects\\MyApps\\mydesktop"
     },
     {
       "scope": "batch_tasks",
       "section": "Task1",
+      "key": "Directory1",
+      "value": "D:\\MyProjects\\MyApps\\transportandai"
+    },
+    {
+      "scope": "batch_tasks",
+      "section": "Task1",
+      "key": "Directory2",
+      "value": "D:\\MyProjects\\MyApps\\sleeping"
+    },
+    {
+      "scope": "batch_tasks",
+      "section": "Task1",
+      "key": "Directory3",
+      "value": "D:\\MyProjects\\MyApps\\LearningApp"
+    },
+    {
+      "scope": "batch_tasks",
+      "section": "Task1",
+      "key": "Directory4",
+      "value": "D:\\MyProjects\\MyApps\\TransportDataAgent"
+    },
+    {
+      "scope": "batch_tasks",
+      "section": "Task1",
+      "key": "Directory5",
+      "value": "D:\\MyProjects\\MyApps\\TransportModelingAgent"
+    },
+    {
+      "scope": "batch_tasks",
+      "section": "Task1",
+      "key": "Directory6",
+      "value": "D:\\MyProjects\\MyApps\\mygomuku"
+    },
+    {
+      "scope": "batch_tasks",
+      "section": "Task1",
+      "key": "Directory7",
+      "value": "D:\\MyProjects\\MyApps\\mylocalllm"
+    },
+    {
+      "scope": "batch_tasks",
+      "section": "Task1",
+      "key": "Directory8",
+      "value": "D:\\MyProjects\\MyApps\\LocalWebGPT"
+    },
+    {
+      "scope": "batch_tasks",
+      "section": "Task1",
       "key": "DirectoryCount",
-      "value": "7"
+      "value": "9"
     },
     {
       "scope": "batch_tasks",
@@ -187,6 +199,18 @@
       "scope": "batch_tasks",
       "section": "Task1",
       "key": "StepCommand6",
+      "value": "git pull origin main"
+    },
+    {
+      "scope": "batch_tasks",
+      "section": "Task1",
+      "key": "StepCommand7",
+      "value": "git pull origin main"
+    },
+    {
+      "scope": "batch_tasks",
+      "section": "Task1",
+      "key": "StepCommand8",
       "value": "git pull origin main"
     },
     {
@@ -277,7 +301,7 @@
       "scope": "files",
       "section": "Pane0",
       "key": "Count",
-      "value": "5"
+      "value": "6"
     },
     {
       "scope": "files",
@@ -386,11 +410,13 @@
       "section": "Pane2",
       "key": "Tab2",
       "value": "D:\\MyProjects\\MyApps\\LearningApp"
+      "value": "D:\\MyProjects\\MyApps\\LearningApp"
     },
     {
       "scope": "files",
       "section": "Pane2",
       "key": "Tab3",
+      "value": "D:\\MyProjects\\MyApps\\sleeping"
       "value": "D:\\MyProjects\\MyApps\\sleeping"
     },
     {
@@ -398,12 +424,14 @@
       "section": "Pane2",
       "key": "Tab4",
       "value": "D:\\MyProjects\\MyApps\\TransportDataAgent"
+      "value": "D:\\MyProjects\\MyApps\\TransportModelingAgent"
     },
     {
       "scope": "files",
       "section": "Pane2",
       "key": "Tab5",
       "value": "D:\\MyProjects\\MyApps\\sleeping-health-webview-rendering"
+      "value": "D:\\MyProjects\\MyApps\\TransportDataAgent"
     },
     {
       "scope": "files",
@@ -416,6 +444,19 @@
       "section": "Pane2",
       "key": "Tab7",
       "value": "D:\\MyProjects\\MyApps\\TransportDataAgent"
+      "value": "D:\\MyProjects\\MyApps\\body_3d"
+    },
+    {
+      "scope": "files",
+      "section": "Pane2",
+      "key": "Tab7",
+      "value": "D:\\MyProjects\\MyApps\\body_3d"
+    },
+    {
+      "scope": "files",
+      "section": "Pane2",
+      "key": "Tab8",
+      "value": "D:\\MyProjects\\MyApps\\body_3d"
     },
     {
       "scope": "files",
@@ -427,7 +468,7 @@
       "scope": "files",
       "section": "Pane3",
       "key": "Tab0",
-      "value": "D:\\MyLife\\myhealth\\我"
+      "value": "D:\\MyLife\\myhealth"
     },
     {
       "scope": "files",
@@ -439,13 +480,13 @@
       "scope": "files",
       "section": "Pane3",
       "key": "Tab2",
-      "value": "D:\\MyProjects\\icanmakeameaningfulcareer\\mystudyandexam"
+      "value": "D:\\MyProjects\\icanmakeameaningfulcareer"
     },
     {
       "scope": "files",
       "section": "Pane3",
       "key": "Tab3",
-      "value": "D:\\MyProjects\\icanbeanaiexpert\\AIUsing\\myagentteams"
+      "value": "D:\\MyProjects\\MyApps"
     }
   ],
   "workspaces": [
@@ -521,86 +562,44 @@
       "target": "nova-batch:7987518378906657662"
     },
     {
-      "id": "6255728511945100573",
+      "id": "7092089952097978101",
       "workspace_id": "6969818039083397288",
       "position": 3,
-      "name": "微信",
-      "target": "C:\\ProgramData\\Microsoft\\Windows\\Start Menu\\Programs\\微信\\微信.lnk"
-    },
-    {
-      "id": "5741496140277305786",
-      "workspace_id": "6969818039083397288",
-      "position": 4,
-      "name": "云之家",
-      "target": "C:\\Users\\mj\\AppData\\Roaming\\Microsoft\\Windows\\Start Menu\\Programs\\云之家\\云之家.lnk"
-    },
-    {
-      "id": "2527702173819322240",
-      "workspace_id": "6969818039083397288",
-      "position": 5,
-      "name": "钉钉",
-      "target": "C:\\ProgramData\\Microsoft\\Windows\\Start Menu\\Programs\\钉钉\\钉钉.lnk"
-    },
-    {
-      "id": "1449645203546609090",
-      "workspace_id": "6969818039083397288",
-      "position": 6,
-      "name": "Telegram",
-      "target": "C:\\Users\\mj\\AppData\\Roaming\\Microsoft\\Windows\\Start Menu\\Programs\\Telegram Desktop\\Telegram.lnk"
-    },
-    {
-      "id": "1116558357515455817",
-      "workspace_id": "6969818039083397288",
-      "position": 7,
       "name": "ChatGPT",
       "target": "D:\\programfiles3\\ChatGPT.lnk"
     },
     {
       "id": "6580304493495951618",
       "workspace_id": "6969818039083397288",
-      "position": 8,
+      "position": 4,
       "name": "Google Chrome",
       "target": "C:\\ProgramData\\Microsoft\\Windows\\Start Menu\\Programs\\Google Chrome.lnk"
     },
     {
-      "id": "6914680770371065798",
-      "workspace_id": "6969818039083397288",
-      "position": 9,
-      "name": "有道云笔记",
-      "target": "C:\\ProgramData\\Microsoft\\Windows\\Start Menu\\Programs\\有道云笔记.lnk"
-    },
-    {
-      "id": "4302892563378620187",
-      "workspace_id": "6969818039083397288",
-      "position": 10,
-      "name": "LocalSend",
-      "target": "C:\\ProgramData\\Microsoft\\Windows\\Start Menu\\Programs\\LocalSend.lnk"
-    },
-    {
       "id": "3569885870074066773",
       "workspace_id": "6969818039083397288",
-      "position": 11,
+      "position": 5,
       "name": "PowerPoint",
       "target": "C:\\ProgramData\\Microsoft\\Windows\\Start Menu\\Programs\\PowerPoint.lnk"
     },
     {
       "id": "5550529118529490085",
       "workspace_id": "6969818039083397288",
-      "position": 12,
+      "position": 6,
       "name": "Word",
       "target": "C:\\ProgramData\\Microsoft\\Windows\\Start Menu\\Programs\\Word.lnk"
     },
     {
-      "id": "225502693743477985",
+      "id": "6914680770371065798",
       "workspace_id": "6969818039083397288",
-      "position": 13,
-      "name": "Docker Desktop",
-      "target": "C:\\Users\\mj\\AppData\\Roaming\\Microsoft\\Windows\\Start Menu\\Programs\\Docker Desktop.lnk"
+      "position": 7,
+      "name": "有道云笔记",
+      "target": "C:\\ProgramData\\Microsoft\\Windows\\Start Menu\\Programs\\有道云笔记.lnk"
     },
     {
-      "id": "3630829652492954164",
+      "id": "1249931362877143957",
       "workspace_id": "6969818039083397288",
-      "position": 14,
+      "position": 8,
       "name": "ToDesk",
       "target": "C:\\ProgramData\\Microsoft\\Windows\\Start Menu\\Programs\\ToDesk\\ToDesk.lnk"
     },
@@ -610,6 +609,13 @@
       "position": 15,
       "name": "GameViewer",
       "target": "D:\\programfiles3\\GameViewer\\GameViewer.exe"
+    },
+    {
+      "id": "1993484412399703598",
+      "workspace_id": "6969818039083397288",
+      "position": 9,
+      "name": "QQ音乐",
+      "target": "C:\\ProgramData\\Microsoft\\Windows\\Start Menu\\Programs\\腾讯软件\\QQ音乐\\QQ音乐.lnk"
     }
   ]
 }

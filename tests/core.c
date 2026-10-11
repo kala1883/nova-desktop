@@ -64,6 +64,36 @@ static void wait_batch_row(HWND steps,int row,const wchar_t *expected){
     assert(!"Timed out waiting for subtask status");
 }
 
+static void test_subtask_reorder(HWND steps){
+    RECT first,last;assert(ListView_GetItemRect(steps,0,&first,LVIR_BOUNDS));assert(ListView_GetItemRect(steps,1,&last,LVIR_BOUNDS));
+    LPARAM down=MAKELPARAM(20,(last.top+last.bottom)/2),up=MAKELPARAM(20,first.top+1);
+    wchar_t folder[BATCH_DIRECTORY_CAP],command[BATCH_COMMAND_CAP],status[1200],value[1200];
+    ListView_GetItemText(steps,1,0,folder,BATCH_DIRECTORY_CAP);ListView_GetItemText(steps,1,1,command,BATCH_COMMAND_CAP);ListView_GetItemText(steps,1,2,status,1200);
+    for(int cancel=0;cancel<4;cancel++){
+        SendMessageW(steps,WM_LBUTTONDOWN,MK_LBUTTON,down);assert(GetCapture()==steps);
+        if(cancel)SendMessageW(steps,WM_TIMER,7801,0); /* A short click must not reorder. */
+        SendMessageW(steps,WM_MOUSEMOVE,MK_LBUTTON,up);
+        if(cancel==1)SendMessageW(steps,WM_KEYDOWN,VK_ESCAPE,0);
+        if(cancel==2)ReleaseCapture();
+        SendMessageW(steps,WM_LBUTTONUP,0,cancel==3?MAKELPARAM(-10,-10):up);
+        assert(GetCapture()!=steps);ListView_GetItemText(steps,1,0,value,1200);assert(!wcscmp(value,folder));
+    }
+    SendMessageW(steps,WM_LBUTTONDOWN,MK_LBUTTON,down);SendMessageW(steps,WM_TIMER,7801,0);
+    SendMessageW(steps,WM_MOUSEMOVE,MK_LBUTTON,up);SendMessageW(steps,WM_LBUTTONUP,0,up);
+    assert(ListView_GetNextItem(steps,-1,LVNI_SELECTED)==0);
+    ListView_GetItemText(steps,0,0,value,1200);assert(!wcscmp(value,folder));
+    ListView_GetItemText(steps,0,2,value,1200);assert(!wcscmp(value,status));
+    BatchTaskList *saved=calloc(1,sizeof(*saved));assert(saved&&store_load_batch_tasks(saved));
+    assert(!wcscmp(saved->tasks[0].directories[0],folder)&&!wcscmp(batch_task_command(&saved->tasks[0],0),command));free(saved);
+    /* Restore the original order, exercising a downward drop after the last row. */
+    SendMessageW(steps,WM_LBUTTONDOWN,MK_LBUTTON,up);SendMessageW(steps,WM_TIMER,7801,0);
+    SendMessageW(steps,WM_LBUTTONUP,0,MAKELPARAM(20,last.bottom-1));
+    assert(ListView_GetNextItem(steps,-1,LVNI_SELECTED)==1);
+    ListView_GetItemText(steps,1,0,value,1200);assert(!wcscmp(value,folder));
+    ListView_GetItemText(steps,1,2,value,1200);assert(!wcscmp(value,status));
+    puts("PASS subtask hold-drag order persists with commands/results, short clicks and cancelled drags preserve order");
+}
+
 int wmain(int argc,wchar_t **argv) {
     wchar_t tempdir[MAX_PATH],dir[MAX_PATH],path[MAX_PATH],command[MAX_PATH+40];
     GetTempPathW(MAX_PATH,tempdir);swprintf(dir,MAX_PATH,L"%lsnova-test-%lu",tempdir,GetCurrentProcessId());
@@ -208,6 +238,7 @@ int wmain(int argc,wchar_t **argv) {
         ListView_GetItemText(steps,1,2,row_status,1200);assert(wcsstr(row_status,L"selected row output"));
         assert(ListView_GetItemCount(steps)==2&&ListView_GetNextItem(steps,-1,LVNI_SELECTED)==1);
         saved_tasks=calloc(1,sizeof(*saved_tasks));assert(saved_tasks&&store_load_batch_tasks(saved_tasks));assert(saved_tasks->tasks[0].directory_count==2&&!wcscmp(saved_tasks->tasks[0].commands[1],L"echo selected row output & exit /b 0"));free(saved_tasks);
+        test_subtask_reorder(steps);
         SetWindowTextW(GetDlgItem(batch_window,2118),L"echo selected failure & exit /b 23");SendMessageW(batch_window,WM_COMMAND,2119,0);wait_batch_idle();
         ListView_GetItemText(steps,1,2,row_status,1200);assert(wcsstr(row_status,L"23")&&wcsstr(row_status,L"selected failure"));
         ListView_GetItemText(steps,0,2,row_status,1200);assert(!wcscmp(row_status,nova_text(L"等待",L"Waiting")));

@@ -2,6 +2,7 @@
 #define WINVER 0x0601
 #define WIN32_LEAN_AND_MEAN
 #include <windows.h>
+#include <windowsx.h>
 #include <commctrl.h>
 #include <shlobj.h>
 #include <uxtheme.h>
@@ -38,6 +39,9 @@ static HWND run_step_button,cancel_step_button;
 static HWND edit_button,apply_button,browse_button,directory_edit,step_command_edit,directory_label,step_command_label;
 static int selected_step=-1,refreshing;
 static BOOL save_command(void);
+static BOOL save_current(const BatchTask *value);
+static void move_step(int source,int destination);
+static void cancel_step_drag(void);
 static void show_step(void);
 static void enable_step(void);
 static HWND shortcut_button,task_owner;
@@ -68,6 +72,9 @@ typedef struct {
 } BatchRunEvent;
 
 static HWND window,list,add_button,remove_button,run_button,close_button,hover_button;
+#define STEP_HOLD_TIMER 7801
+#define STEP_SCROLL_TIMER 7802
+static struct { int armed,dragging,source,insertion,marker; POINT pointer; } step_drag;
 static HFONT body_font,title_font;
 static HBRUSH background,panel;
 static HIMAGELIST row_height_images;
@@ -166,6 +173,7 @@ static void refresh_row(int index){
 }
 static void refresh_list(void){
     if(!list)return;
+    cancel_step_drag();
     refreshing=TRUE;ListView_DeleteAllItems(list);
     for(int i=0;i<task.directory_count;i++){
         LVITEMW item={0};item.mask=LVIF_TEXT;item.iItem=i;item.pszText=task.directories[i];ListView_InsertItem(list,&item);refresh_row(i);
@@ -243,7 +251,7 @@ static void paint_window(HDC dc){
     RECT title={bpx(24),bpx(20),bpx(220),bpx(54)};draw_text(dc,nova_text(L"任务库",L"Task library"),title,title_font,TEXT,DT_SINGLELINE|DT_VCENTER);
     RECT heading={bpx(244),bpx(20),client.right-bpx(338),bpx(54)};draw_text(dc,nova_text(L"任务详情",L"Task details"),heading,title_font,TEXT,DT_SINGLELINE|DT_VCENTER);
     RECT help={bpx(244),bpx(194),client.right-bpx(572),bpx(230)};draw_text(dc,nova_text(L"子任务",L"Subtasks"),help,title_font,TEXT,DT_SINGLELINE|DT_VCENTER);
-    RECT hint={bpx(244),client.bottom-bpx(100),client.right-bpx(24),client.bottom-bpx(76)};draw_text(dc,nova_text(L"选中项可单独执行或取消；双击已完成项查看输出。",L"Run or cancel a selected subtask. Double-click completed rows for output."),hint,body_font,MUTED,DT_SINGLELINE|DT_END_ELLIPSIS);
+    RECT hint={bpx(244),client.bottom-bpx(100),client.right-bpx(24),client.bottom-bpx(76)};draw_text(dc,nova_text(L"长按并上下拖动排序；双击已完成项查看输出。",L"Hold and drag rows to reorder. Double-click completed rows for output."),hint,body_font,MUTED,DT_SINGLELINE|DT_END_ELLIPSIS);
     RECT summary={bpx(244),client.bottom-bpx(60),client.right-bpx(260),client.bottom-bpx(24)};draw_text(dc,summary_text,summary,body_font,MUTED,DT_SINGLELINE|DT_VCENTER|DT_END_ELLIPSIS);
 }
 static LRESULT CALLBACK button_proc(HWND hwnd,UINT message,WPARAM wp,LPARAM lp,UINT_PTR subclass_id,DWORD_PTR data){
@@ -253,8 +261,67 @@ static LRESULT CALLBACK button_proc(HWND hwnd,UINT message,WPARAM wp,LPARAM lp,U
     if(message==WM_NCDESTROY)RemoveWindowSubclass(hwnd,button_proc,1);
     return DefSubclassProc(hwnd,message,wp,lp);
 }
+static void cancel_step_drag(void){
+    step_drag.armed=step_drag.dragging=0;step_drag.insertion=-1;
+    if(!list)return;
+    KillTimer(list,STEP_HOLD_TIMER);KillTimer(list,STEP_SCROLL_TIMER);
+    if(GetCapture()==list)ReleaseCapture();
+    InvalidateRect(list,NULL,FALSE);SetCursor(LoadCursorW(NULL,IDC_ARROW));
+}
+static RECT step_drag_area(void){
+    RECT area,header;GetClientRect(list,&area);
+    GetWindowRect(ListView_GetHeader(list),&header);MapWindowPoints(NULL,list,(POINT*)&header,2);
+    area.top=header.bottom;return area;
+}
+static void update_step_drag(BOOL scroll){
+    RECT area=step_drag_area();POINT point=step_drag.pointer;
+    step_drag.insertion=-1;
+    if(PtInRect(&area,point)){
+        int top=ListView_GetTopIndex(list);RECT row;
+        if(scroll&&ListView_GetItemRect(list,top,&row,LVIR_BOUNDS)){
+            int delta=point.y<area.top+bpx(20)?-1:point.y>=area.bottom-bpx(20)?1:0;
+            if(delta)ListView_Scroll(list,0,delta*(row.bottom-row.top));
+        }
+        for(int i=ListView_GetTopIndex(list);i<task.directory_count;i++){
+            if(!ListView_GetItemRect(list,i,&row,LVIR_BOUNDS))break;
+            if(point.y<(row.top+row.bottom)/2){step_drag.insertion=i;step_drag.marker=row.top;break;}
+            step_drag.insertion=i+1;step_drag.marker=row.bottom;
+        }
+        if(step_drag.marker<area.top)step_drag.marker=area.top;
+        if(step_drag.marker>area.bottom-bpx(2))step_drag.marker=area.bottom-bpx(2);
+    }
+    SetCursor(LoadCursorW(NULL,step_drag.insertion<0?IDC_NO:IDC_SIZENS));InvalidateRect(list,NULL,FALSE);
+}
 static LRESULT CALLBACK folder_list_proc(HWND hwnd,UINT message,WPARAM wp,LPARAM lp,UINT_PTR id,DWORD_PTR data){
     (void)id;(void)data;
+    if(message==WM_LBUTTONDOWN&&!running&&collection.count){
+        cancel_step_drag();LVHITTESTINFO hit={0};hit.pt=(POINT){GET_X_LPARAM(lp),GET_Y_LPARAM(lp)};
+        int row=ListView_SubItemHitTest(hwnd,&hit);
+        if(row>=0){
+            /* Validate pending edits before native selection notifications can change rows. */
+            if(!save_command())return 0;
+            SetFocus(hwnd);ListView_SetItemState(hwnd,-1,0,LVIS_SELECTED|LVIS_FOCUSED);
+            ListView_SetItemState(hwnd,row,LVIS_SELECTED|LVIS_FOCUSED,LVIS_SELECTED|LVIS_FOCUSED);ListView_SetSelectionMark(hwnd,row);
+            step_drag.source=row;step_drag.pointer=hit.pt;step_drag.armed=1;SetCapture(hwnd);
+            if(!SetTimer(hwnd,STEP_HOLD_TIMER,350,NULL))cancel_step_drag();
+            return 0;
+        }
+    }
+    if(message==WM_TIMER&&wp==STEP_HOLD_TIMER){
+        KillTimer(hwnd,STEP_HOLD_TIMER);
+        if(step_drag.armed&&!running){step_drag.dragging=1;update_step_drag(FALSE);SetTimer(hwnd,STEP_SCROLL_TIMER,100,NULL);}
+        else cancel_step_drag();
+        return 0;
+    }
+    if(message==WM_TIMER&&wp==STEP_SCROLL_TIMER){if(step_drag.dragging)update_step_drag(TRUE);return 0;}
+    if(message==WM_MOUSEMOVE&&step_drag.armed){step_drag.pointer=(POINT){GET_X_LPARAM(lp),GET_Y_LPARAM(lp)};if(step_drag.dragging)update_step_drag(FALSE);return 0;}
+    if(message==WM_LBUTTONUP&&step_drag.armed){
+        int source=step_drag.source,destination=-1;
+        if(step_drag.dragging){step_drag.pointer=(POINT){GET_X_LPARAM(lp),GET_Y_LPARAM(lp)};update_step_drag(FALSE);destination=step_drag.insertion;if(destination>source)destination--;}
+        cancel_step_drag();if(destination>=0)move_step(source,destination);return 0;
+    }
+    if(message==WM_KEYDOWN&&wp==VK_ESCAPE&&step_drag.armed){cancel_step_drag();return 0;}
+    if(message==WM_LBUTTONDBLCLK||message==WM_CANCELMODE||message==WM_KILLFOCUS||(message==WM_CAPTURECHANGED&&GetCapture()!=hwnd))cancel_step_drag();
     if(message==WM_NOTIFY&&((NMHDR*)lp)->code==NM_CUSTOMDRAW)return SendMessageW(window,WM_NOTIFY,wp,lp);
     if(message==WM_PAINT){
         LRESULT result=DefSubclassProc(hwnd,message,wp,lp);
@@ -263,9 +330,13 @@ static LRESULT CALLBACK folder_list_proc(HWND hwnd,UINT message,WPARAM wp,LPARAM
             HDC dc=GetDC(hwnd);FillRect(dc,&area,panel);InflateRect(&area,-bpx(16),-bpx(8));
             draw_text(dc,nova_text(L"点击“新增子任务”，设置工作目录和命令。",L"Add a subtask, then set its folder and command."),area,body_font,MUTED,DT_CENTER|DT_VCENTER|DT_SINGLELINE|DT_END_ELLIPSIS);ReleaseDC(hwnd,dc);
         }
+        if(step_drag.dragging&&step_drag.insertion>=0){
+            RECT area=step_drag_area();area.top=step_drag.marker;area.bottom=area.top+bpx(2);
+            HDC dc=GetDC(hwnd);SetDCBrushColor(dc,RGB(145,181,255));FillRect(dc,&area,(HBRUSH)GetStockObject(DC_BRUSH));ReleaseDC(hwnd,dc);
+        }
         return result;
     }
-    if(message==WM_NCDESTROY)RemoveWindowSubclass(hwnd,folder_list_proc,1);
+    if(message==WM_NCDESTROY){cancel_step_drag();RemoveWindowSubclass(hwnd,folder_list_proc,1);}
     return DefSubclassProc(hwnd,message,wp,lp);
 }
 static HWND make_button(const wchar_t *label,int id){
@@ -365,6 +436,29 @@ static BOOL save_command(void){
     task=next;refresh_tasks();for(int i=0;i<task.directory_count;i++)refresh_row(i);show_step();set_summary(nova_text(L"任务已保存。",L"Task saved."));
     if(!running&&task_queue.count)PostMessageW(window,WM_BATCH_RESUME,0,0);
     return TRUE;
+}
+static void move_step(int source,int destination){
+    if(running||!collection.count||source<0||source>=task.directory_count||destination<0||destination>=task.directory_count||source==destination)return;
+    if(!save_command())return;
+    BatchTask next=task;
+    int direction=destination>source?1:-1;
+    for(int i=source;i!=destination;i+=direction){
+        int j=i+direction;
+        memcpy(next.directories[i],task.directories[j],sizeof(next.directories[i]));
+        memcpy(next.commands[i],task.commands[j],sizeof(next.commands[i]));
+    }
+    memcpy(next.directories[destination],task.directories[source],sizeof(next.directories[destination]));
+    memcpy(next.commands[destination],task.commands[source],sizeof(next.commands[destination]));
+    /* Commit configuration before moving UI results; a failed write leaves order intact. */
+    if(!save_current(&next)){MessageBoxW(window,store_error(),L"NOVA Desktop",MB_OK|MB_ICONWARNING);return;}
+    int status=statuses[source];DWORD code=exit_codes[source],error=errors[source];wchar_t output[BATCH_OUTPUT_CAP];
+    memcpy(output,outputs[source],sizeof(output));
+    for(int i=source;i!=destination;i+=direction){
+        int j=i+direction;statuses[i]=statuses[j];exit_codes[i]=exit_codes[j];errors[i]=errors[j];memcpy(outputs[i],outputs[j],sizeof(outputs[i]));
+    }
+    statuses[destination]=status;exit_codes[destination]=code;errors[destination]=error;memcpy(outputs[destination],output,sizeof(output));
+    selected_step=destination;refresh_list();ListView_EnsureVisible(list,destination,FALSE);
+    set_summary(nova_text(L"子任务顺序已保存。",L"Subtask order saved."));
 }
 static BOOL begin_task(const BatchTask *snapshot,int source_row){
     if(source_row < -1||source_row>=snapshot->directory_count)return FALSE;
