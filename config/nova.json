@@ -343,19 +343,19 @@
       "scope": "files",
       "section": "Pane2",
       "key": "Tab2",
-      "value": "D:\\MyProjects\\MyApps\\LearningApp"
-    },
-    {
-      "scope": "files",
-      "section": "Pane2",
-      "key": "Tab3",
       "value": "D:\\MyProjects\\MyApps\\sleeping"
     },
     {
       "scope": "files",
       "section": "Pane2",
+      "key": "Tab3",
+      "value": "D:\\MyProjects\\MyApps\\3dhuman"
+    },
+    {
+      "scope": "files",
+      "section": "Pane2",
       "key": "Tab4",
-      "value": "D:\\MyProjects\\MyApps\\TransportModelingAgent"
+      "value": "D:\\MyProjects\\MyApps\\LearningApp"
     },
     {
       "scope": "files",
@@ -367,19 +367,19 @@
       "scope": "files",
       "section": "Pane2",
       "key": "Tab6",
-      "value": "D:\\MyProjects\\MyApps\\body_3d"
+      "value": "D:\\MyProjects\\MyApps\\TransportModelingAgent"
     },
     {
       "scope": "files",
       "section": "Pane2",
       "key": "Tab7",
-      "value": "D:\\MyProjects\\MyApps\\body_3d"
+      "value": "D:\\MyProjects\\MyApps\\TransportModelingAgent"
     },
     {
       "scope": "files",
       "section": "Pane2",
       "key": "Tab8",
-      "value": "D:\\MyProjects\\MyApps\\body_3d"
+      "value": "D:\\MyProjects\\MyApps\\TransportModelingAgent"
     },
     {
       "scope": "files",
@@ -403,13 +403,7 @@
       "scope": "files",
       "section": "Pane3",
       "key": "Tab2",
-      "value": "D:\\MyProjects\\icanmakeameaningfulcareer"
-    },
-    {
-      "scope": "files",
-      "section": "Pane3",
-      "key": "Tab3",
-      "value": "D:\\MyProjects\\MyApps"
+      "value": "D:\\MyProjects\\icanmakeameaningfulcareer\\mystudyandexam"
     }
   ],
   "workspaces": [
@@ -485,53 +479,60 @@
       "target": "nova-batch:7987518378906657662"
     },
     {
-      "id": "7092089952097978101",
-      "workspace_id": "6969818039083397288",
-      "position": 3,
-      "name": "ChatGPT",
-      "target": "D:\\programfiles3\\ChatGPT.lnk"
-    },
-    {
       "id": "6580304493495951618",
       "workspace_id": "6969818039083397288",
-      "position": 4,
+      "position": 3,
       "name": "Google Chrome",
       "target": "C:\\ProgramData\\Microsoft\\Windows\\Start Menu\\Programs\\Google Chrome.lnk"
     },
     {
-      "id": "3569885870074066773",
+      "id": "6914680770371065798",
+      "workspace_id": "6969818039083397288",
+      "position": 4,
+      "name": "有道云笔记",
+      "target": "C:\\ProgramData\\Microsoft\\Windows\\Start Menu\\Programs\\有道云笔记.lnk"
+    },
+    {
+      "id": "4375655893897816085",
       "workspace_id": "6969818039083397288",
       "position": 5,
+      "name": "Codex",
+      "target": "C:\\Users\\Administrator\\Desktop\\Codex.lnk"
+    },
+    {
+      "id": "3558839495169918222",
+      "workspace_id": "6969818039083397288",
+      "position": 6,
+      "name": "百度网盘",
+      "target": "C:\\Users\\Administrator\\Desktop\\百度网盘.lnk"
+    },
+    {
+      "id": "3569885870074066773",
+      "workspace_id": "6969818039083397288",
+      "position": 7,
       "name": "PowerPoint",
       "target": "C:\\ProgramData\\Microsoft\\Windows\\Start Menu\\Programs\\PowerPoint.lnk"
     },
     {
       "id": "5550529118529490085",
       "workspace_id": "6969818039083397288",
-      "position": 6,
+      "position": 8,
       "name": "Word",
       "target": "C:\\ProgramData\\Microsoft\\Windows\\Start Menu\\Programs\\Word.lnk"
     },
     {
-      "id": "6914680770371065798",
-      "workspace_id": "6969818039083397288",
-      "position": 7,
-      "name": "有道云笔记",
-      "target": "C:\\ProgramData\\Microsoft\\Windows\\Start Menu\\Programs\\有道云笔记.lnk"
-    },
-    {
       "id": "1249931362877143957",
       "workspace_id": "6969818039083397288",
-      "position": 8,
+      "position": 9,
       "name": "ToDesk",
       "target": "C:\\ProgramData\\Microsoft\\Windows\\Start Menu\\Programs\\ToDesk\\ToDesk.lnk"
     },
     {
-      "id": "1993484412399703598",
+      "id": "5633617172492545708",
       "workspace_id": "6969818039083397288",
-      "position": 9,
-      "name": "QQ音乐",
-      "target": "C:\\ProgramData\\Microsoft\\Windows\\Start Menu\\Programs\\腾讯软件\\QQ音乐\\QQ音乐.lnk"
+      "position": 10,
+      "name": "GameViewer",
+      "target": "D:\\programfiles1\\GameViewer\\GameViewer.lnk"
     }
   ]
 }
