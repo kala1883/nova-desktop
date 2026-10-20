@@ -16,6 +16,7 @@
 #include <stdlib.h>
 #include <wchar.h>
 #include "file_manager.h"
+#include "ssh_view.h"
 #include "../platform/storage.h"
 #include "../i18n.h"
 
@@ -32,14 +33,14 @@
 #define SAVE_TIMER 2
 #define SPLIT_SCALE 10000
 #define SPLIT_MIN_LOGICAL 96
-#define MANAGER_TOOLBAR_COUNT 6
+#define MANAGER_TOOLBAR_COUNT 7
 #define TAB_DRAG_TIMER_ID 7702
 #define TAB_DRAG_HOLD_MS 350
 #define PANE_LAYOUT_MESSAGE (WM_APP+42)
 enum { C_LAYOUT=200, C_FAVORITES, C_VIEW, C_COPY, C_CUT, C_PASTE, C_RENAME,
        C_DELETE, C_NEWFOLDER, C_HELP, C_BACK=240, C_FORWARD, C_UP, C_GO,
        C_NEWTAB, C_CLOSETAB, C_REFRESH, C_ADDRESS, C_TABS, C_NAVMENU,
-       C_COMMAND, C_COMMAND_MENU };
+       C_COMMAND, C_COMMAND_MENU, C_SERVERS, C_PANE_MODE, C_PANE_LOCAL, C_PANE_SERVER };
 enum { COMMAND_MENU_RUN=3000, COMMAND_MENU_DEFAULT=3040, COMMAND_MENU_MANAGE=3080 };
 enum { COMMAND_LIST=3100, COMMAND_NAME, COMMAND_TEXT, COMMAND_NEW, COMMAND_DELETE,
        COMMAND_SAVE, COMMAND_SET_DEFAULT, COMMAND_CLOSE };
@@ -51,7 +52,7 @@ typedef struct Tab {
     IExplorerBrowser *browser;
     HWND host;
     DWORD cookie;
-    BOOL advised, pending;
+    BOOL advised, pending, remote;
     ULONGLONG hidden_since;
     wchar_t *history[HISTORY_LIMIT];
     int history_count, history_pos, travel_target;
@@ -61,11 +62,11 @@ typedef struct Tab {
 } Tab;
 struct Pane {
     HWND window, address, tabs, back, forward, up, go, add, close, refresh;
-    HWND cut, paste, delete_file, new_folder, navigation_menu, command_button;
+    HWND cut, paste, delete_file, new_folder, navigation_menu, command_button,mode_button;
     Tab *items[TAB_LIMIT];
     int count, selected, index, tab_drag_source, tab_drop_index;
     POINT tab_drag_down;
-    BOOL tab_drag_armed, tab_dragging, tab_left_down, command_dropdown;
+    BOOL tab_drag_armed, tab_dragging, tab_left_down, command_dropdown,server_mode;
 };
 typedef struct Splitter {
     BOOL vertical;
@@ -89,6 +90,9 @@ static struct {
          command_delete,command_save,command_default,command_close;
     int command_selected;
     ULONGLONG notice_until;
+    /* UI-boundary callbacks let integration tests select a server without network access. */
+    BOOL (*server_picker)(HWND owner,HWND anchor,SshLogin *login);
+    BOOL (*server_connector)(HWND view,const SshLogin *login);
 } fm;
 static const wchar_t *layout_names_zh[]={L"四窗格",L"双栏",L"双行",L"单窗格",L"左一右二",L"左二右一",L"上一下二",L"上二下一",L"四列",L"四行",L"三列",L"三行"};
 static const wchar_t *layout_names_en[]={L"Four panes",L"Two columns",L"Two rows",L"Single pane",L"One left, two right",L"Two left, one right",L"One top, two bottom",L"Two top, one bottom",L"Four columns",L"Four rows",L"Three columns",L"Three rows"};
@@ -104,6 +108,7 @@ static void select_tab(Pane *p,int index);
 static void cancel_tab_drag(Pane *p);
 static void popup_commands(Pane *p,HWND anchor);
 static void open_command_manager(void);
+static void update_pane_mode(Pane *p);
 static void status_text(const wchar_t *s){SetWindowTextW(fm.status,s);fm.notice_until=GetTickCount64()+6000;}
 static void failure(const wchar_t *action,HRESULT hr){
     wchar_t text[320];swprintf(text,320,nova_text(L"%ls（0x%08lX）。请检查路径、设备连接或访问权限。",L"%ls (0x%08lX). Check the path, device connection, and access permissions."),action,(unsigned long)hr);status_text(text);
@@ -112,12 +117,14 @@ static void activate(Pane *p){
     if(fm.active!=p->index){int old=fm.active;fm.active=p->index;InvalidateRect(fm.panes[old].window,NULL,FALSE);InvalidateRect(fm.panes[old].tabs,NULL,FALSE);InvalidateRect(p->window,NULL,FALSE);InvalidateRect(p->tabs,NULL,FALSE);}
 }
 static void focus_view(Tab *t){
+    if(t&&t->remote){ssh_view_focus(t->host);return;}
     IShellView *view=NULL;
     if(t&&t->browser&&SUCCEEDED(IExplorerBrowser_GetCurrentView(t->browser,&IID_IShellView,(void**)&view))){
         IShellView_UIActivate(view,SVUIA_ACTIVATE_FOCUS);IShellView_Release(view);
     }
 }
 static HRESULT navigate(Tab *t,const wchar_t *location){
+    if(t&&t->remote)return ensure_browser(t)&&ssh_view_navigate(t->host,location)?S_OK:E_FAIL;
     if(!t||!t->browser)return E_FAIL;
     PIDLIST_ABSOLUTE id=NULL;
     HRESULT hr=SHParseDisplayName(location,NULL,&id,0,NULL);
@@ -156,6 +163,7 @@ static BOOL location_syntax(const wchar_t *value){
     return !PathIsRelativeW(value)||!wcsncmp(value,L"shell:",6)||!wcsncmp(value,L"::{",3)||value[0]==L'\\'||wcschr(value,L'\\')||wcschr(value,L'/');
 }
 static BOOL run_command(Tab *t,const wchar_t *command){
+    if(t&&t->remote)return ensure_browser(t)&&ssh_view_run(t->host,command);
     wchar_t directory[LOCATION_SIZE],parameters[LOCATION_SIZE+32];command_directory(t,directory);
     if(wcslen(command)+16>=sizeof(parameters)/sizeof(parameters[0])){status_text(nova_text(L"命令过长，请缩短后重试。",L"The command is too long. Shorten it and try again."));return FALSE;}
     if(fm.test_mode){fm.command_runs++;lstrcpynW(fm.last_command,command,LOCATION_SIZE);lstrcpynW(fm.last_command_directory,directory,LOCATION_SIZE);return TRUE;}
@@ -173,6 +181,7 @@ static BOOL set_default_command(int index){
     return TRUE;
 }
 static void popup_commands(Pane *p,HWND anchor){
+    if(p&&current(p)&&current(p)->remote){ssh_view_action(current(p)->host,SSH_COMMAND);return;}
     if(!p||!fm.commands.count)return;
     HMENU menu=CreatePopupMenu(),defaults=CreatePopupMenu();if(!menu||!defaults){if(menu)DestroyMenu(menu);if(defaults)DestroyMenu(defaults);return;}
     for(int i=0;i<fm.commands.count;i++){
@@ -194,6 +203,14 @@ static void open_address(Pane *p){
     wchar_t input[LOCATION_SIZE],expanded[LOCATION_SIZE],resolved[LOCATION_SIZE];GetWindowTextW(p->address,input,LOCATION_SIZE);
     wchar_t *value=input;while(*value==L' '||*value==L'\t')value++;size_t length=wcslen(value);while(length&&(value[length-1]==L' '||value[length-1]==L'\t'))value[--length]=0;
     if(!*value){SetWindowTextW(p->address,t->location);return;}
+    if(t->remote){
+        if(*value==L'>'){value++;while(*value==L' '||*value==L'\t')value++;run_command(t,value);SetWindowTextW(p->address,t->location);return;}
+        if(!wcsncmp(value,L"nova-ssh:",9)||value[0]==L'/'){navigate(t,value);return;}
+        const wchar_t *space=wcspbrk(value,L" \t"),*slash=wcschr(value,L'/');
+        if(!space||(slash&&slash<space)||ssh_view_has_directory(t->host,value)){wchar_t location[LOCATION_SIZE],path[LOCATION_SIZE];int64_t id;const wchar_t *base;
+            if(ssh_view_location(t->host,location,LOCATION_SIZE)&&ssh_location_parse(location,&id,&base)&&wcslen(base)+wcslen(value)+2<LOCATION_SIZE){swprintf(path,LOCATION_SIZE,L"%ls/%ls",base,value);navigate(t,path);}return;}
+        run_command(t,value);SetWindowTextW(p->address,t->location);return;
+    }
     BOOL forced=*value==L'>';if(forced){value++;while(*value==L' '||*value==L'\t')value++;}
     DWORD n=ExpandEnvironmentStringsW(value,expanded,LOCATION_SIZE);if(!n||n>LOCATION_SIZE)lstrcpynW(expanded,value,LOCATION_SIZE);
     if(!forced&&relative_directory(t,value,resolved)){if(SUCCEEDED(navigate(t,resolved)))focus_view(t);return;}
@@ -221,9 +238,10 @@ static HRESULT STDMETHODCALLTYPE event_created(IExplorerBrowserEvents *self,IShe
     if(!fm.closing)PostMessageW(t->pane->window,PANE_LAYOUT_MESSAGE,0,0);
     return S_OK;
 }
+static int compare_location(const wchar_t *a,const wchar_t *b){return !wcsncmp(a,L"nova-ssh:",9)||!wcsncmp(b,L"nova-ssh:",9)?lstrcmpW(a,b):lstrcmpiW(a,b);}
 static void record_history(Tab *t){
-    if(t->travel_target>=0&&t->travel_target<t->history_count&&!lstrcmpiW(t->location,t->history[t->travel_target]))t->history_pos=t->travel_target;
-    else if(!t->history_count||lstrcmpiW(t->location,t->history[t->history_pos])){
+    if(t->travel_target>=0&&t->travel_target<t->history_count&&!compare_location(t->location,t->history[t->travel_target]))t->history_pos=t->travel_target;
+    else if(!t->history_count||compare_location(t->location,t->history[t->history_pos])){
         wchar_t *path=_wcsdup(t->location);if(!path){t->travel_target=-1;return;}
         while(t->history_count>t->history_pos+1)free(t->history[--t->history_count]);
         if(t->history_count==HISTORY_LIMIT){free(t->history[0]);memmove(t->history,t->history+1,(HISTORY_LIMIT-1)*sizeof(t->history[0]));--t->history_count;}
@@ -261,12 +279,14 @@ static void suspend_tab(Tab *t){
 }
 static void release_tab(Tab *t){
     if(!t)return;
+    if(t->remote&&t->host){DestroyWindow(t->host);t->host=NULL;}
     suspend_tab(t);
     for(int i=0;i<t->history_count;i++)free(t->history[i]);
     IExplorerBrowserEvents_Release(&t->events);
 }
 static BOOL ensure_browser(Tab *t){
     if(!t)return FALSE;
+    if(t->remote){if(!t->host){t->host=ssh_view_create(t->pane->window,fm.font,t->location);if(t->host){ssh_view_title(t->host,t->title,128);for(int i=0;i<t->pane->count;i++)if(t->pane->items[i]==t){TCITEMW item={0};item.mask=TCIF_TEXT;item.pszText=t->title;TabCtrl_SetItem(t->pane->tabs,i,&item);}}else status_text(nova_text(L"无法创建远程文件视图；请检查服务器配置和路径。",L"Unable to create the remote file view; check the server profile and path."));}return t->host!=NULL;}
     if(t->browser)return TRUE;
     RECT bounds;GetClientRect(t->pane->window,&bounds);
     int width=bounds.right-2*scale(4),height=bounds.bottom-scale(107);
@@ -289,7 +309,9 @@ static BOOL add_tab(Pane *p,const wchar_t *location){
     Tab *t=calloc(1,sizeof(*t));if(!t)return FALSE;
     t->events.lpVtbl=&event_vtable;t->references=1;t->pane=p;t->travel_target=-1;t->view_mode=FVM_DETAILS;t->icon_size=16;
     lstrcpynW(t->location,location,LOCATION_SIZE);
-    const wchar_t *base=wcsrchr(location,L'\\');lstrcpynW(t->title,base&&base[1]?base+1:location,128);
+    t->remote=!wcsncmp(location,L"nova-ssh:",9);
+    const wchar_t *base=wcsrchr(location,t->remote?L'/':L'\\');lstrcpynW(t->title,base&&base[1]?base+1:location,128);
+    if(t->remote){wchar_t title[128];swprintf(title,128,L"SSH · %.110ls",t->title);lstrcpyW(t->title,title);}
     int n=p->count++;p->items[n]=t;
     TCITEMW item={0};item.mask=TCIF_TEXT;item.pszText=t->title;TabCtrl_InsertItem(p->tabs,n,&item);
     select_tab(p,n);return TRUE;
@@ -299,6 +321,7 @@ static void select_tab(Pane *p,int index){
     p->selected=index;TabCtrl_SetCurSel(p->tabs,index);
     for(int i=0;i<p->count;i++)ShowWindow(p->items[i]->host,i==index?SW_SHOW:SW_HIDE);
     SetWindowTextW(p->address,current(p)->location);EnableWindow(p->close,p->count>1);EnableWindow(p->add,p->count<TAB_LIMIT);InvalidateRect(p->tabs,NULL,FALSE);
+    SetWindowTextW(p->command_button,current(p)->remote?nova_text(L"聚焦远程命令输入框",L"Focus remote command input"):nova_text(L"执行默认命令或选择命令",L"Run default or choose a command"));
     arrange();
 }
 static void close_tab(Pane *p){
@@ -322,6 +345,7 @@ static void shell_verb(Tab *t,const char *verb,BOOL background){
     if(FAILED(hr))failure(nova_text(L"操作未完成，请选择文件或使用文件视图的右键菜单",L"The operation did not complete. Select a file or use the file view context menu"),hr);
 }
 static void refresh(Tab *t){
+    if(t&&t->remote){ssh_view_action(t->host,SSH_REFRESH);return;}
     if(t)pane_layout(t->pane);
     IShellView *view=NULL;if(t&&t->browser&&SUCCEEDED(IExplorerBrowser_GetCurrentView(t->browser,&IID_IShellView,(void**)&view))){IShellView_Refresh(view);IShellView_Release(view);}
 }
@@ -334,16 +358,16 @@ static void popup_favorites(void){
     RECT r;GetWindowRect(fm.toolbar[1],&r);UINT id=TrackPopupMenu(m,TPM_RETURNCMD|TPM_RIGHTBUTTON,r.left,r.bottom,0,fm.window,NULL);DestroyMenu(m);
     Tab *t=current(&fm.panes[fm.active]);if(!t)return;
     if(id==1){
-        for(int i=0;i<fm.favorite_count;i++)if(!lstrcmpiW(t->location,fm.favorites[i])){status_text(nova_text(L"此目录已在收藏中。",L"This folder is already a favorite."));return;}
+        for(int i=0;i<fm.favorite_count;i++)if(!compare_location(t->location,fm.favorites[i])){status_text(nova_text(L"此目录已在收藏中。",L"This folder is already a favorite."));return;}
         if(fm.favorite_count==FAVORITE_LIMIT){status_text(nova_text(L"收藏已满（32 项），请先移除不需要的收藏。",L"Favorites are full (32 items). Remove an unused favorite first."));return;}
         lstrcpynW(fm.favorites[fm.favorite_count++],t->location,LOCATION_SIZE);save_session();status_text(nova_text(L"已收藏当前目录。",L"Current folder added to favorites."));
     }else if(id==2){
-        for(int i=0;i<fm.favorite_count;i++)if(!lstrcmpiW(t->location,fm.favorites[i])){
+        for(int i=0;i<fm.favorite_count;i++)if(!compare_location(t->location,fm.favorites[i])){
             for(int j=i;j<fm.favorite_count-1;j++)memcpy(fm.favorites[j],fm.favorites[j+1],sizeof(fm.favorites[j]));
             --fm.favorite_count;save_session();status_text(nova_text(L"已移除目录收藏。",L"Folder removed from favorites."));break;
         }
-    }else if(id>=3&&id<=6){const wchar_t *places[]={HOME,L"shell:Desktop",L"shell:Downloads",L"shell:Profile"};navigate(t,places[id-3]);}
-    else if(id>=100&&id<(UINT)(100+fm.favorite_count))navigate(t,fm.favorites[id-100]);
+    }else if(id>=3&&id<=6){const wchar_t *places[]={HOME,L"shell:Desktop",L"shell:Downloads",L"shell:Profile"};if(t->remote)add_tab(t->pane,places[id-3]);else navigate(t,places[id-3]);}
+    else if(id>=100&&id<(UINT)(100+fm.favorite_count)){const wchar_t *target=fm.favorites[id-100];int64_t a=0,b=0;ssh_location_parse(t->location,&a,NULL);ssh_location_parse(target,&b,NULL);if(a!=b)add_tab(t->pane,target);else navigate(t,target);}
 }
 static void view_menu(void){
     HMENU m=CreatePopupMenu();const wchar_t *labels_zh[]={L"详细信息",L"列表",L"小图标",L"大图标 / 缩略图",L"内容",L"平铺"};
@@ -360,11 +384,60 @@ static void view_menu(void){
         arrange();save_session();
     }
 }
+static void update_tip(HWND control,const wchar_t *text){
+    TOOLINFOW info={0};info.cbSize=TTTOOLINFOW_V2_SIZE;info.uFlags=TTF_IDISHWND;info.hwnd=GetParent(control);info.uId=(UINT_PTR)control;info.lpszText=(LPWSTR)text;
+    SendMessageW(fm.tooltip,TTM_UPDATETIPTEXTW,0,(LPARAM)&info);
+}
+static void update_pane_mode(Pane *p){
+    SetWindowTextW(p->mode_button,p->server_mode?nova_text(L"服务器",L"Servers"):nova_text(L"本地",L"Local"));
+    SetWindowTextW(p->add,p->server_mode?nova_text(L"选择服务器并新建标签",L"Choose server for new tab"):nova_text(L"新建本地标签",L"New local tab"));
+    update_tip(p->mode_button,p->server_mode?nova_text(L"服务器模式：新标签选择服务器；点击可切换模式",L"Server mode: new tabs choose a server; click to switch mode"):nova_text(L"本地模式：新标签打开本地目录；点击可切换模式",L"Local mode: new tabs open local folders; click to switch mode"));
+    update_tip(p->add,p->server_mode?nova_text(L"选择服务器并新建标签 (Ctrl+T)",L"Choose server for new tab (Ctrl+T)"):nova_text(L"新建本地目录标签 (Ctrl+T)",L"New local folder tab (Ctrl+T)"));
+    InvalidateRect(p->mode_button,NULL,TRUE);
+}
+static void set_pane_server_mode(Pane *p,BOOL server){
+    if(p->server_mode==(server!=FALSE))return;
+    cancel_tab_drag(p);p->server_mode=server!=FALSE;update_pane_mode(p);save_session();
+    status_text(p->server_mode?nova_text(L"此窗格已切换为服务器模式；新标签选择服务器，已有标签保留。",L"This pane is in server mode. New tabs choose a server; existing tabs are retained."):nova_text(L"此窗格已切换为本地模式；新标签打开本地目录，已有标签保留。",L"This pane is in local mode. New tabs open local folders; existing tabs are retained."));
+}
+static void new_server_tab(Pane *p,BOOL quick){
+    if(p->count>=TAB_LIMIT){status_text(nova_text(L"每个窗格最多 12 个标签，请先关闭一个标签。",L"Each pane supports at most 12 tabs. Close a tab first."));return;}
+    SshLogin *login=calloc(1,sizeof(*login));if(!login)return;
+    BOOL chosen=quick?(fm.server_picker?fm.server_picker:ssh_pick_server)(fm.window,p->add,login):ssh_choose_server(fm.window,0,login);
+    if(chosen){wchar_t location[LOCATION_SIZE];
+        if(ssh_location_format(location,LOCATION_SIZE,login->server.id,login->server.directory)){
+            set_pane_server_mode(p,TRUE);
+            if(add_tab(p,location)){Tab *t=current(p);if(ensure_browser(t))(fm.server_connector?fm.server_connector:ssh_view_connect)(t->host,login);save_session();}
+        }else status_text(nova_text(L"服务器配置或远程目录无效，未新建标签。",L"The server profile or remote directory is invalid. No tab was created."));
+    }
+    SecureZeroMemory(login,sizeof(*login));free(login);
+}
+static int pane_mode_menu(Pane *p){
+    HMENU menu=CreatePopupMenu();if(!menu)return 0;
+    AppendMenuW(menu,MF_STRING|(!p->server_mode?MF_CHECKED:0),C_PANE_LOCAL,nova_text(L"本地模式",L"Local mode"));
+    AppendMenuW(menu,MF_STRING|(p->server_mode?MF_CHECKED:0),C_PANE_SERVER,nova_text(L"服务器模式",L"Server mode"));
+    AppendMenuW(menu,MF_SEPARATOR,0,NULL);AppendMenuW(menu,MF_STRING,C_NEWTAB,p->server_mode?nova_text(L"新建服务器标签…    Ctrl+T",L"New server tab…    Ctrl+T"):nova_text(L"新建本地标签    Ctrl+T",L"New local tab    Ctrl+T"));
+    AppendMenuW(menu,MF_STRING|(p->count<=1?MF_GRAYED:0),C_CLOSETAB,nova_text(L"关闭当前标签    Ctrl+W",L"Close current tab    Ctrl+W"));
+    RECT area;GetWindowRect(p->mode_button,&area);UINT id=TrackPopupMenu(menu,TPM_RETURNCMD|TPM_RIGHTBUTTON,area.left,area.bottom,0,p->window,NULL);DestroyMenu(menu);return (int)id;
+}
+static void new_local_tab(Pane *p){
+    const wchar_t *location=START_FOLDER;
+    for(int offset=0;offset<p->count;offset++){int index=(p->selected-offset+p->count)%p->count;Tab *t=p->items[index];if(!t->remote){location=t->location;break;}}
+    wchar_t copy[LOCATION_SIZE];lstrcpynW(copy,location,LOCATION_SIZE);if(add_tab(p,copy))save_session();
+}
 static void command(Pane *p,int id){
     Tab *t=current(p);activate(p);
-    if(id==C_NEWTAB){wchar_t location[LOCATION_SIZE];lstrcpynW(location,t?t->location:HOME,LOCATION_SIZE);add_tab(p,location);save_session();return;}
+    if(id==C_PANE_MODE){int chosen=pane_mode_menu(p);if(chosen)command(p,chosen);return;}
+    if(id==C_PANE_LOCAL||id==C_PANE_SERVER){set_pane_server_mode(p,id==C_PANE_SERVER);return;}
+    if(id==C_SERVERS){new_server_tab(p,FALSE);return;}
+    if(id==C_NEWTAB){if(p->server_mode)new_server_tab(p,TRUE);else new_local_tab(p);return;}
     if(!t)return;
+    if(id==C_CLOSETAB){close_tab(p);return;}
     if(!ensure_browser(t))return;
+    if(t->remote){
+        int action=0;switch(id){case C_COPY:action=SSH_COPY;break;case C_CUT:action=SSH_CUT;break;case C_PASTE:action=SSH_PASTE;break;case C_RENAME:action=SSH_RENAME;break;case C_DELETE:action=SSH_DELETE;break;case C_NEWFOLDER:action=SSH_NEWFOLDER;break;case C_UP:action=SSH_UP;break;case C_COMMAND:case C_COMMAND_MENU:action=SSH_COMMAND;break;}
+        if(action){ssh_view_action(t->host,action);return;}
+    }
     switch(id){
     case C_CLOSETAB:close_tab(p);break;
     case C_GO:open_address(p);break;
@@ -387,7 +460,7 @@ static void command(Pane *p,int id){
         AppendMenuW(menu,back,C_BACK,nova_text(L"后退    Alt+←",L"Back    Alt+Left"));AppendMenuW(menu,forward,C_FORWARD,nova_text(L"前进    Alt+→",L"Forward    Alt+Right"));
         AppendMenuW(menu,MF_STRING,C_UP,nova_text(L"上级目录    Alt+↑",L"Parent folder    Alt+Up"));AppendMenuW(menu,MF_STRING,C_REFRESH,nova_text(L"刷新    F5",L"Refresh    F5"));
         AppendMenuW(menu,MF_SEPARATOR,0,NULL);
-        AppendMenuW(menu,MF_STRING,C_COMMAND,nova_text(L"执行默认命令",L"Run default command"));AppendMenuW(menu,MF_STRING,C_COMMAND_MENU,nova_text(L"选择或管理命令…",L"Choose or manage commands…"));
+        AppendMenuW(menu,MF_STRING,C_COMMAND,t->remote?nova_text(L"输入远程命令…",L"Enter remote command…"):nova_text(L"执行默认命令",L"Run default command"));if(!t->remote)AppendMenuW(menu,MF_STRING,C_COMMAND_MENU,nova_text(L"选择或管理命令…",L"Choose or manage commands…"));
         RECT rect;GetWindowRect(p->navigation_menu,&rect);UINT chosen=TrackPopupMenu(menu,TPM_RETURNCMD|TPM_RIGHTBUTTON,rect.left,rect.bottom,0,p->window,NULL);DestroyMenu(menu);
         if(chosen)command(p,(int)chosen);
         break;}
@@ -400,6 +473,7 @@ static HWND child(HWND parent,const wchar_t *cls,const wchar_t *title,DWORD styl
 static LRESULT CALLBACK button_proc(HWND h,UINT message,WPARAM wp,LPARAM lp,UINT_PTR id,DWORD_PTR data){
     (void)id;(void)data;
     Pane *pane=(Pane*)GetWindowLongPtrW(GetParent(h),GWLP_USERDATA);
+    if(pane&&h==pane->mode_button&&message==WM_KEYDOWN&&wp==VK_DOWN){SendMessageW(pane->window,WM_COMMAND,MAKEWPARAM(C_PANE_MODE,BN_CLICKED),(LPARAM)h);return 0;}
     if(pane&&h==pane->command_button){
         if(message==WM_LBUTTONDOWN){RECT area;GetClientRect(h,&area);pane->command_dropdown=GET_X_LPARAM(lp)>=area.right-scale(16);}
         if(message==WM_CONTEXTMENU){pane->command_dropdown=TRUE;SendMessageW(pane->window,WM_COMMAND,MAKEWPARAM(C_COMMAND,BN_CLICKED),(LPARAM)h);pane->command_dropdown=FALSE;return 0;}
@@ -428,16 +502,20 @@ static const wchar_t *button_glyph(int id){
     case C_RENAME:return L"\xE8AC";case C_DELETE:return L"\xE74D";case C_NEWFOLDER:return L"\xE8F4";case C_HELP:return L"\xE897";
     case C_BACK:return L"\xE72B";case C_FORWARD:return L"\xE72A";case C_UP:return L"\xE74A";case C_GO:return L"\xE8AD";
     case C_NEWTAB:return L"\xE710";case C_CLOSETAB:return L"\xE711";case C_REFRESH:return L"\xE72C";
-    case C_NAVMENU:return L"\xE712";case C_COMMAND:return L"\xE756";
+    case C_NAVMENU:return L"\xE712";case C_COMMAND:return L"\xE756";case C_SERVERS:return L"\xE968";case C_PANE_MODE:return L"\xE713";
     }return L"";
 }
 static LRESULT draw_button(DRAWITEMSTRUCT *d){
     RECT r=d->rcItem;BOOL pressed=(d->itemState&ODS_SELECTED)!=0,hot=fm.hot_button==d->hwndItem&&!(d->itemState&ODS_DISABLED);
-    COLORREF fill=pressed?RGB(53,77,122):hot?RGB(43,57,78):RGB(25,34,49);HBRUSH brush=CreateSolidBrush(fill);FillRect(d->hDC,&r,brush);DeleteObject(brush);
+    Pane *pane=d->CtlID==C_PANE_MODE?(Pane*)GetWindowLongPtrW(GetParent(d->hwndItem),GWLP_USERDATA):NULL;
+    COLORREF fill=pressed||(pane&&pane->server_mode)?RGB(53,77,122):hot?RGB(43,57,78):RGB(25,34,49);HBRUSH brush=CreateSolidBrush(fill);FillRect(d->hDC,&r,brush);DeleteObject(brush);
     if(pressed)OffsetRect(&r,0,scale(1));
     SetBkMode(d->hDC,TRANSPARENT);SetTextColor(d->hDC,(d->itemState&ODS_DISABLED)?RGB(112,128,150):hot?RGB(255,255,255):RGB(218,227,241));
     HFONT old=(HFONT)SelectObject(d->hDC,fm.icon_font);
-    if(d->CtlID==C_COMMAND){
+    if(d->CtlID==C_PANE_MODE){
+        if(r.right-r.left>=scale(64)){wchar_t text[64];GetWindowTextW(d->hwndItem,text,64);SelectObject(d->hDC,fm.font);RECT label=r;label.right-=scale(16);DrawTextW(d->hDC,text,-1,&label,DT_CENTER|DT_VCENTER|DT_SINGLELINE|DT_NOPREFIX);SelectObject(d->hDC,fm.icon_font);RECT arrow=r;arrow.left=arrow.right-scale(16);DrawTextW(d->hDC,L"\xE70D",-1,&arrow,DT_CENTER|DT_VCENTER|DT_SINGLELINE|DT_NOPREFIX);}
+        else DrawTextW(d->hDC,pane&&pane->server_mode?L"\xE968":L"\xE7F8",-1,&r,DT_CENTER|DT_VCENTER|DT_SINGLELINE|DT_NOPREFIX);
+    }else if(d->CtlID==C_COMMAND){
         RECT icon=r;icon.right-=scale(16);DrawTextW(d->hDC,button_glyph(d->CtlID),-1,&icon,DT_CENTER|DT_VCENTER|DT_SINGLELINE|DT_NOPREFIX);
         RECT divider=r;divider.left=divider.right-scale(16);divider.right=divider.left+1;HBRUSH line=CreateSolidBrush(RGB(54,69,92));FillRect(d->hDC,&divider,line);DeleteObject(line);
         RECT arrow=r;arrow.left=arrow.right-scale(16);DrawTextW(d->hDC,L"\xE70D",-1,&arrow,DT_CENTER|DT_VCENTER|DT_SINGLELINE|DT_NOPREFIX);
@@ -626,8 +704,9 @@ static void open_command_manager(void){
 static void pane_layout(Pane *p){
     if(!p->window)return;
     RECT r;GetClientRect(p->window,&r);int w=r.right,h=r.bottom,s=scale(4),bh=scale(28);
-    MoveWindow(p->tabs,s,s,w-scale(76)-s,bh,TRUE);
-    MoveWindow(p->add,w-scale(68),s,scale(32),bh,TRUE);MoveWindow(p->close,w-scale(34),s,scale(30),bh,TRUE);
+    BOOL compact_tabs=w<scale(180);int mode_width=w>=scale(300)?scale(84):scale(32),add_left=w-scale(compact_tabs?34:68),mode_left=add_left-scale(4)-mode_width;
+    MoveWindow(p->tabs,s,s,max(1,mode_left-2*s),bh,TRUE);MoveWindow(p->mode_button,mode_left,s,mode_width,bh,TRUE);
+    MoveWindow(p->add,add_left,s,scale(32),bh,TRUE);ShowWindow(p->close,compact_tabs?SW_HIDE:SW_SHOW);MoveWindow(p->close,w-scale(34),s,scale(30),bh,TRUE);
     int y=scale(36),button_width=scale(32),button_gap=scale(4),group_gap=scale(12),command_width=scale(48);HWND nav[]={p->back,p->forward,p->up,p->refresh};HWND actions[]={p->cut,p->paste,p->delete_file,p->new_folder};
     int needed=2*s+8*button_width+6*button_gap+2*group_gap+command_width;
     if(w>=needed){
@@ -645,7 +724,7 @@ static void pane_layout(Pane *p){
     }
     MoveWindow(p->address,s,scale(70),w-scale(42),bh,TRUE);MoveWindow(p->go,w-scale(36),scale(70),scale(32),bh,TRUE);
     for(int i=0;i<p->count;i++){
-        Tab *t=p->items[i];if(!t->browser)continue;MoveWindow(t->host,s,scale(103),w-2*s>0?w-2*s:1,h-scale(107)>0?h-scale(107):1,TRUE);
+        Tab *t=p->items[i];if(t->remote&&t->host){MoveWindow(t->host,s,scale(103),max(1,w-2*s),max(1,h-scale(107)),TRUE);continue;}if(!t->browser)continue;MoveWindow(t->host,s,scale(103),w-2*s>0?w-2*s:1,h-scale(107)>0?h-scale(107):1,TRUE);
         RECT rect;GetClientRect(t->host,&rect);IExplorerBrowser_SetRect(t->browser,NULL,rect);
     }
 }
@@ -804,6 +883,7 @@ static BOOL flush_session(void){
     for(int i=0;i<4;i++){
         Pane *p=&fm.panes[i];swprintf(section,32,L"Pane%d",i);
         ok=store_set_int(L"files",section,L"Count",p->count)&&ok;ok=store_set_int(L"files",section,L"Selected",p->selected)&&ok;
+        ok=store_set_int(L"files",section,L"ServerMode",p->server_mode)&&ok;
         for(int j=0;j<p->count;j++){swprintf(key,32,L"Tab%d",j);ok=store_set(L"files",section,key,p->items[j]->location)&&ok;}
     }
     if(!store_end(ok)){status_text(store_error());return FALSE;}
@@ -822,6 +902,8 @@ static LRESULT CALLBACK pane_proc(HWND h,UINT msg,WPARAM wp,LPARAM lp){
     if(msg==WM_NCCREATE){p=(Pane*)((CREATESTRUCTW*)lp)->lpCreateParams;SetWindowLongPtrW(h,GWLP_USERDATA,(LONG_PTR)p);p->window=h;}
     if(!p)return DefWindowProcW(h,msg,wp,lp);
     switch(msg){
+    case SSH_VIEW_NAVIGATED:for(int i=0;i<p->count;i++){Tab *t=p->items[i];if(t->remote&&t->host==(HWND)wp&&ssh_view_location(t->host,t->location,LOCATION_SIZE)){
+        ssh_view_title(t->host,t->title,128);TCITEMW item={0};item.mask=TCIF_TEXT;item.pszText=t->title;TabCtrl_SetItem(p->tabs,i,&item);record_history(t);if(current(p)==t)SetWindowTextW(p->address,t->location);save_session();break;}}return 0;
     case WM_COMMAND:activate(p);if(HIWORD(wp)==BN_CLICKED)command(p,LOWORD(wp));return 0;
     case WM_NOTIFY:if(((NMHDR*)lp)->hwndFrom==p->tabs&&((NMHDR*)lp)->code==TCN_SELCHANGE){activate(p);select_tab(p,TabCtrl_GetCurSel(p->tabs));save_session();}return 0;
     case WM_SIZE:case PANE_LAYOUT_MESSAGE:pane_layout(p);return 0;
@@ -838,13 +920,16 @@ static void initialize_panes(void){
         p->window=CreateWindowExW(WS_EX_CONTROLPARENT,PANE_CLASS,nova_text(L"目录窗格",L"Folder pane"),WS_CHILD|WS_VISIBLE|WS_CLIPCHILDREN,0,0,300,300,fm.window,NULL,GetModuleHandleW(NULL),p);
         p->tabs=child(p->window,WC_TABCONTROLW,nova_text(L"目录标签",L"Folder tabs"),TCS_FOCUSNEVER|TCS_OWNERDRAWFIXED,C_TABS);SetWindowSubclass(p->tabs,tab_proc,1,(DWORD_PTR)p);p->tab_drag_source=-1;p->tab_drop_index=-1;
         p->add=button(p->window,nova_text(L"新页",L"New tab"),C_NEWTAB);p->close=button(p->window,nova_text(L"关页",L"Close tab"),C_CLOSETAB);
+        p->mode_button=button(p->window,nova_text(L"本地",L"Local"),C_PANE_MODE);
         p->back=button(p->window,nova_text(L"后退",L"Back"),C_BACK);p->forward=button(p->window,nova_text(L"前进",L"Forward"),C_FORWARD);p->up=button(p->window,nova_text(L"上级",L"Up"),C_UP);p->refresh=button(p->window,nova_text(L"刷新",L"Refresh"),C_REFRESH);
         p->cut=button(p->window,nova_text(L"剪切",L"Cut"),C_CUT);p->paste=button(p->window,nova_text(L"粘贴",L"Paste"),C_PASTE);p->delete_file=button(p->window,nova_text(L"删除",L"Delete"),C_DELETE);p->new_folder=button(p->window,nova_text(L"新建文件夹",L"New folder"),C_NEWFOLDER);p->navigation_menu=button(p->window,nova_text(L"更多导航",L"More navigation"),C_NAVMENU);p->command_button=button(p->window,nova_text(L"执行默认命令或选择命令",L"Run default or choose a command"),C_COMMAND);
         p->address=child(p->window,L"EDIT",L"",ES_AUTOHSCROLL,C_ADDRESS);SendMessageW(p->address,EM_SETLIMITTEXT,LOCATION_SIZE-1,0);SendMessageW(p->address,EM_SETCUEBANNER,TRUE,(LPARAM)nova_text(L"目录或命令（> 强制命令）  Ctrl+L",L"Folder or command (> forces command)  Ctrl+L"));
         p->go=button(p->window,nova_text(L"转到",L"Go"),C_GO);
         add_tip(p->add,nova_text(L"新建标签 (Ctrl+T)",L"New tab (Ctrl+T)"));add_tip(p->close,nova_text(L"关闭标签 (Ctrl+W)",L"Close tab (Ctrl+W)"));add_tip(p->back,nova_text(L"后退 (Alt+←)",L"Back (Alt+Left)"));add_tip(p->forward,nova_text(L"前进 (Alt+→)",L"Forward (Alt+Right)"));add_tip(p->up,nova_text(L"上级目录 (Alt+↑)",L"Parent folder (Alt+Up)"));add_tip(p->refresh,nova_text(L"刷新 (F5)",L"Refresh (F5)"));add_tip(p->address,nova_text(L"输入目录可切换；输入命令可在当前目录启动 cmd；> 强制按命令执行",L"Enter a folder to navigate, or a command to start cmd here; > forces command mode"));add_tip(p->go,nova_text(L"打开目录或在当前目录执行命令",L"Open the folder or run the command in the current folder"));
         add_tip(p->tabs,nova_text(L"按住标签后拖动可更改顺序",L"Press and hold a tab, then drag to reorder"));add_tip(p->cut,nova_text(L"剪切当前窗格的所选文件 (Ctrl+X)",L"Cut the selected files in this pane (Ctrl+X)"));add_tip(p->paste,nova_text(L"粘贴到当前窗格 (Ctrl+V)",L"Paste into this pane (Ctrl+V)"));add_tip(p->delete_file,nova_text(L"删除当前窗格的所选文件 (Delete)",L"Delete the selected files in this pane (Delete)"));add_tip(p->new_folder,nova_text(L"在当前窗格新建文件夹 (Ctrl+Shift+N)",L"Create a folder in this pane (Ctrl+Shift+N)"));add_tip(p->navigation_menu,nova_text(L"更多导航操作和命令",L"More navigation actions and commands"));add_tip(p->command_button,nova_text(L"单击左侧执行默认命令；单击箭头选择或管理命令",L"Click the left side to run the default command; click the arrow to choose or manage commands"));
+        add_tip(p->mode_button,nova_text(L"切换此窗格的本地 / 服务器模式",L"Switch this pane between local and server mode"));
         wchar_t section[32],key[32],location[LOCATION_SIZE];swprintf(section,32,L"Pane%d",i);
+        p->server_mode=session_int(section,L"ServerMode",0)!=0;update_pane_mode(p);
         int count=session_int(section,L"Count",1);if(count<1||count>TAB_LIMIT)count=1;
         for(int j=0;j<count;j++){swprintf(key,32,L"Tab%d",j);session_get(section,key,START_FOLDER,location,LOCATION_SIZE);if(!add_tab(p,location))break;}
         int selected=session_int(section,L"Selected",0);select_tab(p,selected>=0&&selected<p->count?selected:0);
@@ -864,11 +949,11 @@ static LRESULT CALLBACK manager_proc(HWND h,UINT msg,WPARAM wp,LPARAM lp){
         fm.font=CreateFontW(-scale(14),0,0,0,FW_NORMAL,FALSE,FALSE,FALSE,DEFAULT_CHARSET,OUT_DEFAULT_PRECIS,CLIP_DEFAULT_PRECIS,CLEARTYPE_QUALITY,DEFAULT_PITCH,L"Microsoft YaHei UI");
         fm.icon_font=CreateFontW(-scale(16),0,0,0,FW_NORMAL,FALSE,FALSE,FALSE,DEFAULT_CHARSET,OUT_DEFAULT_PRECIS,CLIP_DEFAULT_PRECIS,CLEARTYPE_QUALITY,DEFAULT_PITCH,L"Segoe MDL2 Assets");
         fm.tooltip=CreateWindowExW(WS_EX_TOPMOST,TOOLTIPS_CLASSW,NULL,WS_POPUP|TTS_ALWAYSTIP|TTS_NOPREFIX,CW_USEDEFAULT,CW_USEDEFAULT,CW_USEDEFAULT,CW_USEDEFAULT,h,NULL,GetModuleHandleW(NULL),NULL);
-        const int toolbar_ids[]={C_LAYOUT,C_FAVORITES,C_VIEW,C_COPY,C_RENAME,C_HELP};
-        const wchar_t *names_zh[]={L"四窗格",L"目录收藏",L"视图",L"复制",L"重命名",L"帮助"};
-        const wchar_t *names_en[]={L"Four panes",L"Favorites",L"View",L"Copy",L"Rename",L"Help"};
-        const wchar_t *tips_zh[]={L"切换窗格布局",L"目录收藏",L"切换文件视图",L"复制当前窗格的所选文件 (Ctrl+C)",L"重命名当前窗格的所选文件 (F2)",L"帮助与快捷键"};
-        const wchar_t *tips_en[]={L"Change pane layout",L"Folder favorites",L"Change file view",L"Copy the selected files in the current pane (Ctrl+C)",L"Rename the selected file in the current pane (F2)",L"Help and keyboard shortcuts"};
+        const int toolbar_ids[]={C_LAYOUT,C_FAVORITES,C_VIEW,C_COPY,C_RENAME,C_HELP,C_SERVERS};
+        const wchar_t *names_zh[]={L"四窗格",L"目录收藏",L"视图",L"复制",L"重命名",L"帮助",L"服务器"};
+        const wchar_t *names_en[]={L"Four panes",L"Favorites",L"View",L"Copy",L"Rename",L"Help",L"Servers"};
+        const wchar_t *tips_zh[]={L"切换窗格布局",L"目录收藏",L"切换文件视图",L"复制当前窗格的所选文件 (Ctrl+C)",L"重命名当前窗格的所选文件 (F2)",L"帮助与快捷键",L"管理 SSH 服务器并在新标签连接"};
+        const wchar_t *tips_en[]={L"Change pane layout",L"Folder favorites",L"Change file view",L"Copy the selected files in the current pane (Ctrl+C)",L"Rename the selected file in the current pane (F2)",L"Help and keyboard shortcuts",L"Manage SSH servers and connect in a new tab"};
         const wchar_t **names=nova_english?names_en:names_zh,**tips=nova_english?tips_en:tips_zh;
         for(int i=0;i<MANAGER_TOOLBAR_COUNT;i++){fm.toolbar[i]=button(h,names[i],toolbar_ids[i]);add_tip(fm.toolbar[i],tips[i]);}
         fm.status=child(h,L"STATIC",nova_text(L"正在加载目录…",L"Loading folders…"),SS_LEFTNOWORDWRAP,300);
@@ -890,6 +975,7 @@ static LRESULT CALLBACK manager_proc(HWND h,UINT msg,WPARAM wp,LPARAM lp){
     case WM_CAPTURECHANGED:if(fm.splitter_dragging)cancel_splitter(TRUE);return 0;
     case WM_GETMINMAXINFO:((MINMAXINFO*)lp)->ptMinTrackSize.x=scale(880);((MINMAXINFO*)lp)->ptMinTrackSize.y=scale(640);return 0;
     case WM_COMMAND:
+        if(LOWORD(wp)==C_SERVERS){command(&fm.panes[fm.active],C_SERVERS);return 0;}
         if(LOWORD(wp)==C_LAYOUT){
             HMENU m=CreatePopupMenu();for(int i=0;i<12;i++)AppendMenuW(m,MF_STRING|(fm.layout==i?MF_CHECKED:0),i+1,layout_name(i));
             RECT r;GetWindowRect(fm.toolbar[0],&r);UINT id=TrackPopupMenu(m,TPM_RETURNCMD,r.left,r.bottom,0,h,NULL);DestroyMenu(m);
@@ -897,7 +983,7 @@ static LRESULT CALLBACK manager_proc(HWND h,UINT msg,WPARAM wp,LPARAM lp){
         }
         if(LOWORD(wp)==C_FAVORITES){popup_favorites();return 0;}
         if(LOWORD(wp)==C_VIEW){view_menu();return 0;}
-        if(LOWORD(wp)==C_HELP){MessageBoxW(h,nova_text(L"每个窗格独立浏览目录，可使用系统右键菜单、排序、拖放和缩略图。拖动窗格边界可调整大小。\n\nCtrl+L：目录/命令地址栏（支持环境变量）\n输入目录：在当前窗格切换\n输入命令：以当前目录为 cmd 工作目录执行\n> 命令：强制按命令执行\n命令按钮：主体执行默认命令，箭头选择或管理预设\nAlt+左 / 右：后退 / 前进\nAlt+上：上级目录\nCtrl+T / Ctrl+W：新建 / 关闭标签\nCtrl+Tab：下一个标签\n按住标签后拖动：调整当前窗格的标签顺序\nF6：下一个窗格\nF5：刷新\nCtrl+C / X / V：复制 / 剪切 / 粘贴\nF2：重命名    Delete：删除\nCtrl+Shift+N：新建文件夹\n\n每个窗格都提供剪切、粘贴、删除、新建文件夹和命令按钮。复制后点击目标窗格再粘贴；拖放行为和覆盖提示由 Windows 处理。\n目录标签、布局、窗格比例、收藏和命令预设在关闭后恢复。",L"Each pane browses independently and supports Windows context menus, sorting, drag and drop, and thumbnails. Drag a pane divider to resize it.\n\nCtrl+L: folder/command address bar (environment variables supported)\nEnter a folder: navigate the current pane\nEnter a command: run it with the current folder as the cmd working directory\n> command: force command mode\nCommand button: main area runs the default; arrow chooses or manages presets\nAlt+Left / Right: back / forward\nAlt+Up: parent folder\nCtrl+T / Ctrl+W: new / close tab\nCtrl+Tab: next tab\nPress and hold a tab, then drag: reorder tabs in the current pane\nF6: next pane\nF5: refresh\nCtrl+C / X / V: copy / cut / paste\nF2: rename    Delete: delete\nCtrl+Shift+N: new folder\n\nEach pane provides cut, paste, delete, new-folder, and command buttons. After copying, click the destination pane and paste. Windows handles drag-and-drop behavior and overwrite prompts.\nFolder tabs, layouts, pane proportions, favorites, and command presets are restored after closing."),nova_text(L"NOVA 文件管理",L"NOVA File Manager"),MB_OK);return 0;}
+        if(LOWORD(wp)==C_HELP){MessageBoxW(h,nova_text(L"SSH：点击工具栏的服务器按钮创建连接。远程标签使用 SFTP，命令在其当前远程目录执行；删除为永久删除。\n\n每个窗格独立浏览目录，可使用系统右键菜单、排序、拖放和缩略图。拖动窗格边界可调整大小。\n\nCtrl+L：目录/命令地址栏（支持环境变量）\n输入目录：在当前窗格切换\n输入命令：以当前目录为 cmd 工作目录执行\n> 命令：强制按命令执行\n命令按钮：主体执行默认命令，箭头选择或管理预设\nAlt+左 / 右：后退 / 前进\nAlt+上：上级目录\nCtrl+T / Ctrl+W：新建 / 关闭标签\nCtrl+Tab：下一个标签\n按住标签后拖动：调整当前窗格的标签顺序\nF6：下一个窗格\nF5：刷新\nCtrl+C / X / V：复制 / 剪切 / 粘贴\nF2：重命名    Delete：删除\nCtrl+Shift+N：新建文件夹\n\n每个窗格都提供剪切、粘贴、删除、新建文件夹和命令按钮。复制后点击目标窗格再粘贴；拖放行为和覆盖提示由 Windows 处理。\n目录标签、布局、窗格比例、收藏和命令预设在关闭后恢复。",L"SSH: use Servers in the toolbar to create a connection. Remote tabs use SFTP; commands run in their current remote directory. Remote deletion is permanent.\n\nEach pane browses independently and supports Windows context menus, sorting, drag and drop, and thumbnails. Drag a pane divider to resize it.\n\nCtrl+L: folder/command address bar (environment variables supported)\nEnter a folder: navigate the current pane\nEnter a command: run it with the current folder as the cmd working directory\n> command: force command mode\nCommand button: main area runs the default; arrow chooses or manages presets\nAlt+Left / Right: back / forward\nAlt+Up: parent folder\nCtrl+T / Ctrl+W: new / close tab\nCtrl+Tab: next tab\nPress and hold a tab, then drag: reorder tabs in the current pane\nF6: next pane\nF5: refresh\nCtrl+C / X / V: copy / cut / paste\nF2: rename    Delete: delete\nCtrl+Shift+N: new folder\n\nEach pane provides cut, paste, delete, new-folder, and command buttons. After copying, click the destination pane and paste. Windows handles drag-and-drop behavior and overwrite prompts.\nFolder tabs, layouts, pane proportions, favorites, and command presets are restored after closing."),nova_text(L"NOVA 文件管理",L"NOVA File Manager"),MB_OK);return 0;}
         command(&fm.panes[fm.active],LOWORD(wp));return 0;
     case WM_DRAWITEM:return draw_button((DRAWITEMSTRUCT*)lp);
     case WM_CTLCOLORSTATIC:SetTextColor((HDC)wp,RGB(167,181,202));SetBkColor((HDC)wp,RGB(14,19,29));return (LRESULT)fm.background;
@@ -959,6 +1045,7 @@ BOOL file_manager_message(MSG *msg){
         if(id){command(p,id);return TRUE;}
     }
     Tab *t=current(p);IShellView *view=NULL;
+    if(t&&t->remote&&t->host&&(msg->hwnd==t->host||IsChild(t->host,msg->hwnd))&&ssh_view_message(t->host,msg))return TRUE;
     if(msg->message>=WM_KEYFIRST&&msg->message<=WM_KEYLAST&&t&&t->browser&&IsChild(t->host,msg->hwnd)&&SUCCEEDED(IExplorerBrowser_GetCurrentView(t->browser,&IID_IShellView,(void**)&view))){
         HRESULT hr=IShellView_TranslateAccelerator(view,msg);IShellView_Release(view);if(hr==S_OK)return TRUE;
     }

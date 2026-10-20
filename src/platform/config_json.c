@@ -9,7 +9,7 @@
 #include <wchar.h>
 
 #define JSON_LIMIT (16*1024*1024)
-#define LOCAL_STATE "((scope='app' AND section='Nova' AND key IN ('Active','AlwaysOnTop','DesktopMode','SidebarCollapsed')) OR (scope='files' AND ((section IN ('Pane0','Pane1','Pane2','Pane3') AND key='Selected') OR (section='Manager' AND (key IN ('Layout','NavigationTree') OR key GLOB 'Split[0-9]*_[0-9]*')))))"
+#define LOCAL_STATE "((scope='app' AND section='Nova' AND key IN ('Active','AlwaysOnTop','DesktopMode','SidebarCollapsed')) OR (scope='files' AND ((section IN ('Pane0','Pane1','Pane2','Pane3') AND key IN ('Selected','ServerMode')) OR (section='Manager' AND (key IN ('Layout','NavigationTree') OR key GLOB 'Split[0-9]*_[0-9]*')))))"
 static BOOL invalid(wchar_t *error){
     lstrcpyW(error,nova_text(L"JSON 配置损坏、超出容量或来自更新版本，原文件未修改。",L"JSON configuration is damaged, exceeds capacity, or is from a newer version. The original file was not changed."));return FALSE;
 }

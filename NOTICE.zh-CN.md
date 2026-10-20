@@ -12,6 +12,9 @@ MIT 协议允许复制、修改和再分发，但不代表修改版是官方版�
 
 - 项目在 `third_party/sqlite` 中包含并静态链接 SQLite 3.53.4。SQLite 已贡献
   至公有领域；来源和文件哈希见 `third_party/sqlite/README.md`。
+- libssh2 1.11.1 以 BSD-3-Clause 协议随源码提供并静态链接；OpenSSL libcrypto
+  以 Apache-2.0 协议从构建工具链静态链接。完整许可证见随包提供的
+  `THIRD_PARTY_NOTICES.txt`。
 - Windows、Win32、PowerShell 等名称是 Microsoft Corporation 的商标。
   NOVA Desktop 与 Microsoft 不存在隶属、合作或背书关系。
 - 项目仅使用 Q-Dir 一词描述用户熟悉的多窗格文件管理工作流。NOVA Desktop
@@ -25,7 +28,9 @@ NOVA Desktop 在本地 `config/nova.json` 保存偏好、已保存任务、工�
 添加项目只记录路径，不会复制、移动或上传文件，也不会主张
 用户文件的任何权益。项目不包含统计分析、广告 SDK 或云同步服务。
 主 JSON 可以纳入 Git；查看或发布它会包含已保存的名称、路径与命令文本。
-NOVA 本身不上传这些数据。
+NOVA 不自动上传这些数据。用户明确发起的 SSH/SFTP 操作向所选服务器传输所选
+文件并执行请求的命令；密码、私钥口令和私钥路径不写入 JSON，主机指纹保存在
+当前用户的 Windows 凭据管理器。
 
 英文版本见 [NOTICE.md](NOTICE.md)。
 

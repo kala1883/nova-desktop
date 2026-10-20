@@ -3,20 +3,35 @@ Set-StrictMode -Version Latest
 $sourceRoot=Split-Path -Parent $PSScriptRoot
 $fixtureRoot=Join-Path ([IO.Path]::GetTempPath()) ('nova config sync '+[guid]::NewGuid().ToString('N'))
 $repo=Join-Path $fixtureRoot 'repo';$publisher=Join-Path $fixtureRoot 'publisher';$remote=Join-Path $fixtureRoot 'remote.git'
+$syncRunner=Join-Path $fixtureRoot 'sync-fixture.ps1'
 function Check($Condition,[string]$Message){if(-not $Condition){throw $Message}}
 function Git([string]$Directory,[string[]]$Arguments){
     $result=@(& git.exe -C $Directory @Arguments);if($LASTEXITCODE){throw ($result -join "`n")};return ,$result
 }
 function Write-Config([string]$Directory,$Data){[IO.File]::WriteAllText((Join-Path $Directory 'config\nova.json'),(ConvertTo-Json -InputObject $Data -Depth 100)+"`n",[Text.UTF8Encoding]::new($false))}
 function Read-Config([string]$Directory){return Get-Content -LiteralPath (Join-Path $Directory 'config\nova.json') -Raw -Encoding UTF8 | ConvertFrom-Json}
-function Sync([bool]$Success,[switch]$Preview){
-    $args=@('-NoLogo','-NoProfile','-ExecutionPolicy','Bypass','-File',(Join-Path $repo 'deployment\sync_config.ps1'))
+function Sync([bool]$Success,[switch]$Preview,[switch]$AppRunning){
+    $args=@('-NoLogo','-NoProfile','-ExecutionPolicy','Bypass','-File',$syncRunner)
     if($Preview){$args+='-Preview'}
+    if($AppRunning){$args+='-AppRunning'}
     & powershell.exe @args | Out-Host
     Check (($LASTEXITCODE -eq 0) -eq $Success) 'Unexpected synchronization status'
 }
 New-Item -ItemType Directory -Path $fixtureRoot,$repo -Force | Out-Null
 try {
+    # Only the disposable script sees this process stub. The real NOVA can stay
+    # open; also verify that a running fixture app still blocks synchronization.
+    @'
+param([switch]$Preview, [switch]$AppRunning)
+$global:NovaFixtureAppRunning = $AppRunning
+function global:Get-Process {
+    [CmdletBinding()]
+    param([string]$Name)
+    if ($global:NovaFixtureAppRunning) { [pscustomobject]@{Id=1; ProcessName='nova-desktop'} }
+}
+& (Join-Path $PSScriptRoot 'repo\deployment\sync_config.ps1') -Preview:$Preview
+exit $LASTEXITCODE
+'@ | Set-Content -LiteralPath $syncRunner -Encoding ASCII
     Git $fixtureRoot @('init','--bare',$remote) | Out-Null
     Git $repo @('init','-b','main') | Out-Null
     Git $repo @('config','user.name','NOVA fixture') | Out-Null
@@ -39,6 +54,8 @@ try {
     $before=[IO.File]::ReadAllText((Join-Path $repo 'config\nova.json'));$head=(Git $repo @('rev-parse','HEAD'))[0]
     Sync $true -Preview
     Check ((Git $repo @('rev-parse','HEAD'))[0] -eq $head -and [IO.File]::ReadAllText((Join-Path $repo 'config\nova.json')) -ceq $before) 'Preview changed working data or HEAD'
+    Sync $false -AppRunning
+    Check ((Git $repo @('rev-parse','HEAD'))[0] -eq $head -and [IO.File]::ReadAllText((Join-Path $repo 'config\nova.json')) -ceq $before) 'Running app guard changed working data or HEAD'
     Sync $true
     $saved=Read-Config $repo
     Check ($saved.settings.Count -eq 2 -and (Git $repo @('stash','list')).Count -eq 0) 'Sync lost data or touched stashes'

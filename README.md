@@ -44,6 +44,8 @@ required.
 
 - Windows 7 or later
 - MinGW-w64 GCC and `windres` to build from source
+- OpenSSL headers and static `libcrypto.a` from the same MinGW toolchain
+  (MSYS2 MINGW64: `pacman -S mingw-w64-x86_64-openssl`)
 - PowerShell for the build and test scripts
 
 SQLite 3.53.4 is vendored in `third_party/sqlite` and linked statically. After
@@ -51,6 +53,18 @@ the first build, no network access is needed. It provides in-memory transactions
 JSON parsing and migration of older databases; new configuration is stored as JSON.
 
 ## Build and run
+
+Build, deployment and test scripts select a complete toolchain from
+`NOVA_MINGW_BIN` (if set), then `PATH`, then common MSYS2 `mingw64/bin` or
+`ucrt64/bin` locations. Automatic discovery checks local drive roots and their
+immediate subdirectories, plus Local AppData. For another installation location:
+
+```powershell
+$env:NOVA_MINGW_BIN = 'C:\msys64\mingw64\bin'
+```
+
+The selected directory must contain both `gcc.exe` and `windres.exe`. Scripts
+adjust their own process environment; they do not change the system/user PATH.
 
 ```powershell
 .\deployment\build.bat
@@ -195,6 +209,72 @@ different preset, choose the default, or open **Manage commands…**. Preset
 names and commands are stored in the JSON configuration. NOVA starts with a `cmd.exe`
 preset (`cd .`), which opens a command prompt in the current folder without
 changing its contents.
+
+## SSH servers
+
+Each file pane has a **Local / Servers** mode button beside its tabs. The four
+panes can use different modes. In **Server mode**, `+` and `Ctrl+T` directly list
+saved servers; select one, provide its login credentials, and connect in a new
+tab. An empty collection opens server management, also available as **Manage
+servers…** in the picker. Cancelling creates no tab. Switching modes retains
+existing tabs and connections; new local tabs use a local folder already open in
+that pane, or the user folder if none exists. Modes live only in `config/local.json`, and restoring never auto-connects.
+
+Use **Servers** in the file-manager toolbar to save a name, host, SSH port,
+username and absolute initial directory, then open a remote tab with a password
+or private key, including encrypted OpenSSH Ed25519 keys. Passwords, passphrases
+and key paths are never written to JSON. Independently verify the SHA256 host
+fingerprint on first connection. Pins use the current user's Windows Credential
+Manager, keyed by host/port; changed pins block connections.
+The server holds your public key; select the matching local private key, such as
+`id_ed25519`, not `id_ed25519.pub`. Connect requires a password or private key;
+this release does not automatically use SSH Agent or other clients' credentials.
+Public keys, PPK and UTF-16 files get specific guidance, without modifying files.
+Connection failures show a full error dialog and retain copyable stage, native/SSH/SFTP
+error codes and details in the output area.
+
+The server needs SSH exec, SFTP and POSIX `sh`, with no NOVA agent or extra listening
+port. This release targets Linux/POSIX servers. Save up to 16 profiles and use at
+most four remote-tab workers; disconnect or close a tab to release its worker.
+Restoring tabs never connects automatically. Profiles and remote tab paths use
+shared transactional `nova.json`; review hosts, usernames and paths before
+committing it. Removing a profile never deletes server files.
+
+Remote tabs share layouts, history, favorites, refresh and parent navigation, with
+case-sensitive paths. Enter absolute/relative directories, or `> command` to force
+execution in the current remote directory. Plain text containing spaces also runs
+remotely; a single word navigates relatively. Prefix relative paths containing
+spaces with `./`; names of listed directories also navigate first. Use the embedded command field for
+single-word commands such as `pwd`. The remote command button focuses this field,
+without using Windows presets. Each command gets a new non-interactive `sh`, with
+no previous `cd` or environment changes. Completion shows the target, directory,
+exit code and at most the final 64 KiB of output. Cancel stops waiting and does
+not guarantee the remote process stopped. Disconnects may leave unknown outcomes;
+writes and commands are never automatically retried. Interactive terminals are
+not yet supported.
+
+Single-item selection, context menus, Ctrl+C/X/V, F2, Delete and Ctrl+Shift+N work
+remotely. Copy regular files or move files/directories within the same server.
+Upload/Download transfer files/directories recursively with current-file progress;
+double-clicking a regular file opens download selection. Transfers and renames
+refuse existing destinations and never merge directories. Download then upload to
+copy a directory. Local/remote transfers use explicit buttons; system clipboard,
+drag/drop and cross-server copies are not supported yet. Unsafe Windows destination
+names are rejected. Recursive transfers do not follow symlinks or reparse points.
+Deletion requires permanent-delete confirmation, never uses the Windows Recycle
+Bin, and does not follow symlinks. Failures may partially complete directory
+operations; refresh to check. Listings are bounded at 10000 entries; recursion at
+32 levels/10000 items. Limits produce errors rather than truncated views. Network
+waits are normally 30 seconds; command waits at most 30 minutes. DNS resolution
+and cancellation delays are also subject to the Windows networking stack.
+Remote paths allow up to 2007 UTF-16 code units; local transfer/key paths up to 259 characters.
+
+Builds additionally require the same MinGW toolchain's OpenSSL headers and static
+`libcrypto.a` (MSYS2 MINGW64: `pacman -S mingw-w64-x86_64-openssl`). libssh2 is
+vendored and libcrypto is linked statically; no OpenSSL DLL is required at runtime.
+Run `deployment/test-ssh.bat` for rules/storage tests and to build the protocol test.
+Optionally run `python tests/ssh_fixture.py build/ssh-client-test.exe` with Python
+and Paramiko installed. It uses only loopback, temporary keys, accounts and files.
 
 ## Batch tasks
 

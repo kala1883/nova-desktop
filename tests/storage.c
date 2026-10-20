@@ -21,18 +21,21 @@ static void test_local_state(const wchar_t *parent){
     assert(store_set_int(L"app",L"Nova",L"Language",1));assert(store_set_int(L"files",L"Pane0",L"Count",2));
     BYTE before[8192],after[8192],local_before[8192];DWORD length=read_file(shared_path,before,sizeof(before));WIN32_FILE_ATTRIBUTE_DATA attributes,updated;
     assert(GetFileAttributesExW(shared_path,GetFileExInfoStandard,&attributes));
-    assert(store_begin());assert(store_set_int(L"app",L"Nova",L"Active",1)&&store_set_int(L"files",L"Pane0",L"Selected",1));assert(store_end(TRUE));
+    assert(store_int(L"files",L"Pane0",L"ServerMode",0)==0);
+    assert(store_begin());assert(store_set_int(L"app",L"Nova",L"Active",1)&&store_set_int(L"files",L"Pane0",L"Selected",1)&&store_set_int(L"files",L"Pane0",L"ServerMode",1));assert(store_end(TRUE));
     assert(read_file(shared_path,after,sizeof(after))==length&&!memcmp(before,after,length));assert(GetFileAttributesExW(shared_path,GetFileExInfoStandard,&updated));assert(!CompareFileTime(&attributes.ftLastWriteTime,&updated.ftLastWriteTime));
     DWORD local_length=read_file(local_path,local_before,sizeof(local_before));
     HANDLE lock=CreateFileW(shared_path,GENERIC_READ,FILE_SHARE_READ,NULL,OPEN_EXISTING,0,NULL);assert(lock!=INVALID_HANDLE_VALUE);
     assert(store_begin());assert(store_set_int(L"app",L"Nova",L"Active",2)&&store_set_int(L"app",L"Fixture",L"Shared",7));assert(!store_end(TRUE));CloseHandle(lock);
     assert(store_int(L"app",L"Nova",L"Active",-1)==1&&store_int(L"app",L"Fixture",L"Shared",-1)==-1);
     assert(read_file(local_path,after,sizeof(after))==local_length&&!memcmp(local_before,after,local_length));
-    assert(store_set_int(L"files",L"Pane0",L"Count",1));store_close();assert(store_open(directory));assert(store_int(L"files",L"Pane0",L"Selected",-1)==0&&store_int(L"app",L"Nova",L"Language",0)==1);store_close();
+    assert(store_set_int(L"files",L"Pane0",L"Count",1));store_close();assert(store_open(directory));assert(store_int(L"files",L"Pane0",L"Selected",-1)==0&&store_int(L"app",L"Nova",L"Language",0)==1&&store_int(L"files",L"Pane0",L"ServerMode",-1)==1);store_close();
+    const char *invalid_mode="{\"version\":1,\"application\":\"NOVA Desktop\",\"initialized\":true,\"settings\":[{\"scope\":\"files\",\"section\":\"Pane0\",\"key\":\"ServerMode\",\"value\":\"2\"}],\"workspaces\":[],\"items\":[]}";
+    write_text_file(local_path,invalid_mode);assert(!store_open(directory));assert(read_file(local_path,after,sizeof(after))==strlen(invalid_mode)&&!memcmp(after,invalid_mode,strlen(invalid_mode)));
     write_text_file(local_path,"{\"version\":1,\"application\":\"NOVA Desktop\",\"initialized\":true,\"settings\":[{\"scope\":\"batch_tasks\",\"section\":\"Collection\",\"key\":\"Count\",\"value\":\"0\"}],\"workspaces\":[],\"items\":[]}");
     assert(!store_open(directory));assert(read_file(shared_path,after,sizeof(after))>0);
     DeleteFileW(shared_path);remove_local_files(directory);assert(RemoveDirectoryW(directory));
-    puts("PASS local-only state leaves shared JSON and its timestamp unchanged; two-file rollback, stale selection reset and local scope refusal");
+    puts("PASS local-only state and pane modes preserve shared JSON/timestamp, roundtrip and reject invalid modes; two-file rollback, stale selection reset and scope refusal");
 }
 static void refused_json(const wchar_t *directory,const char *text){
     wchar_t path[MAX_PATH];swprintf(path,MAX_PATH,L"%ls\\nova.json",directory);write_text_file(path,text);

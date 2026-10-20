@@ -15,6 +15,7 @@ try {
         throw 'No valid executable to publish / 没有可更新的有效程序。'
     }
     New-Item -ItemType Directory -Path $packageRoot -Force | Out-Null
+    Copy-Item -LiteralPath (Join-Path $repoRoot 'THIRD_PARTY_NOTICES.txt') -Destination $packageRoot
     $latestConfig = Join-Path $packageRoot 'config'
     New-Item -ItemType Directory -Path $latestConfig -Force | Out-Null
     Copy-Item -LiteralPath (Join-Path $repoRoot 'config\nova.json') -Destination (Join-Path $latestConfig 'nova.json')

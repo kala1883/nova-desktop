@@ -24,6 +24,24 @@ Caption controls share a single 30 logical px title bar: settings, desktop fence
 
 Validation: inspect the rendered Windows surface and keyboard/control names; core import/persistence/startup tests use isolated state, and window integration verifies topmost on/off without changing geometry.
 
+SSH servers use an on-demand Servers toolbar button. The native dialog saves up
+to 16 profiles and opens a remote tab in the active pane. Tabs identify the server
+and folder; restoring tabs never connects automatically. A single-selection native
+SFTP list sits above an embedded command/output area, with explicit connection,
+upload/download, current-file progress and cancellation controls that wrap in
+narrow panes. Remote commands always target their own tab and never invoke local
+Windows presets. Results show server/port, working directory, exit status and
+truncation. Permanent remote deletion requires confirmation; transfers refuse
+existing destinations. First-use host trust is a separate default-deny fingerprint
+confirmation. Shared settings never contain authentication secrets or key paths.
+
+Each pane's tab strip includes a Local / Servers mode menu beside the add-tab
+button. Server mode highlights the selector and makes `+` / Ctrl+T open a native
+saved-server picker, followed by authentication for the chosen profile. Cancellation
+does not create a tab. Existing tabs survive mode switches; local mode creates a
+local tab even when a remote tab is currently selected. Narrow panes use a mode
+icon and expose tab closing in the mode menu. Mode preferences are local-only.
+
 Batch tasks expose an Add to workspace action in the header. A native popup lists only ordinary workspaces. Task launch items use the NOVA icon, their current saved name, and a tooltip with command, mode and folder count. Double-click, Enter and Launch all share the internal task dispatcher. Launch all distinguishes accepted asynchronous tasks from completed app launches; duplicate active/pending task requests are ignored. Removing a task shortcut leaves the saved task intact.
 
 Run selected and Cancel selected sit above the subtask table alongside Add subtask, Edit and Delete. Cancel selected is enabled only for a separately started active row, changes to Cancelling during its cancellation, and stops that row without cancelling other rows or clearing the task queue. After completion the row becomes editable and runnable again. Run selected requires a selected idle row, saves pending edits, then runs only that row. During single-row execution, other idle rows remain runnable, editable and deletable, and subtasks can be added. Each run starts independently of the task's sequential/parallel setting. Active rows reject edits, deletion and duplicate launches. Name, default command, mode and task switching stay locked until all runs finish; whole-task execution locks all editing and single-row launches. Cancel all at the bottom stops every active command and clears the task queue. Status and captured output stay on the source row, including after other rows are deleted. Completed rows (success, failure or cancellation) open output on double-click; the explicit Edit action remains available for editing them. Other unchanged rows retain their results.

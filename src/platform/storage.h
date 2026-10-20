@@ -4,6 +4,7 @@
 #include "../core/batch_task.h"
 #include "../core/file_command.h"
 #include "../core/workspace.h"
+#include "../core/server_profile.h"
 /* Single UI-thread in-memory connection; all persisted configuration is JSON. */
 BOOL store_open(const wchar_t *directory);
 BOOL store_open_from(const wchar_t *directory,const wchar_t *legacy_directory);
@@ -29,5 +30,7 @@ BOOL store_load_batch_tasks(BatchTaskList *tasks);
 BOOL store_save_batch_tasks(BatchTaskList *tasks);
 BOOL store_load_file_commands(FileCommandList *commands);
 BOOL store_save_file_commands(const FileCommandList *commands);
+BOOL store_load_ssh_servers(SshServers *servers);
+BOOL store_save_ssh_servers(const SshServers *servers);
 BOOL store_backup(void);
 #endif

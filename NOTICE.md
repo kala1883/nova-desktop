@@ -16,6 +16,9 @@ material changes and avoid misleading users about their origin.
 - SQLite 3.53.4 is included in `third_party/sqlite` and statically linked.
   SQLite is dedicated to the public domain. Provenance and source hashes are
   recorded in `third_party/sqlite/README.md`.
+- libssh2 1.11.1 (BSD-3-Clause) is vendored and statically linked. OpenSSL
+  libcrypto (Apache-2.0) is statically linked from the build toolchain. Complete
+  redistribution licenses are in `THIRD_PARTY_NOTICES.txt`, included in packages.
 - Windows, Win32, PowerShell, and related product names are trademarks of
   Microsoft Corporation. NOVA Desktop is not affiliated with or endorsed by
   Microsoft.
@@ -33,7 +36,10 @@ Adding an item records its path; it
 does not copy, move, upload, or claim rights in the user's files. The project
 includes no analytics, advertising SDK, or cloud synchronization service.
 The primary JSON is available to Git; reviewing or publishing it may disclose
-saved names, paths and command text. NOVA itself does not upload this data.
+saved names, paths and command text. NOVA does not automatically upload this data.
+Explicit SSH/SFTP operations transfer selected files to the chosen server and run
+commands there only when requested. Passwords, key passphrases and key paths are
+not saved in JSON; host pins use the current user's Windows Credential Manager.
 
 For the Chinese version, see [NOTICE.zh-CN.md](NOTICE.zh-CN.md).
 
