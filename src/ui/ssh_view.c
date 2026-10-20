@@ -19,6 +19,7 @@
 #include "ssh_view.h"
 #include "terminal_view.h"
 #include "../platform/storage.h"
+#include "../platform/ssh_credentials.h"
 #include "../i18n.h"
 
 #define VIEW_CLASS L"NovaSshView"
@@ -26,7 +27,7 @@
 #define PROGRESS (WM_APP+81)
 #define TERMINAL_OUTPUT (WM_APP+82)
 #define TERMINAL_ENDED (WM_APP+83)
-enum { S_LIST=5100,S_NAME,S_HOST,S_PORT,S_USER,S_DIR,S_KEY,S_SECRET,S_NEW,S_SAVE,S_REMOVE,S_CONNECT,S_KEY_PICK };
+enum { S_LIST=5100,S_NAME,S_HOST,S_PORT,S_USER,S_DIR,S_KEY,S_SECRET,S_NEW,S_SAVE,S_REMOVE,S_CONNECT,S_KEY_PICK,S_FORGET };
 enum { V_CONNECT=5200,V_DISCONNECT,V_UPLOAD,V_DOWNLOAD,V_CANCEL,V_LIST=5208,V_STATUS,V_FILES,V_TERMINAL };
 enum { J_CONNECT=1,J_LIST,J_MKDIR,J_RENAME,J_DELETE,J_UPLOAD,J_DOWNLOAD,J_COPY,J_MOVE,J_TERMINAL };
 typedef struct EmptyDialog { DLGTEMPLATE dialog; WORD menu,window_class,title; } EmptyDialog;
@@ -52,24 +53,66 @@ static void center_dialog(HWND h,int width,int height){
     SetWindowPos(h,NULL,area.left+(area.right-area.left-width)/2,area.top+(area.bottom-area.top-height)/2,width,height,SWP_NOZORDER);
     BOOL dark=TRUE;DwmSetWindowAttribute(h,20,&dark,sizeof(dark));
 }
-typedef struct ServerDialog { SshServers servers; SshLogin *out; int selected; BOOL fixed; HFONT font; HBRUSH brush; } ServerDialog;
+typedef struct ServerDialog {
+    SshServers servers;SshLogin *out;int selected;BOOL fixed,loading_fields,loaded_login;
+    const SshCredentialStore *credential_store;HFONT font;HBRUSH brush;
+} ServerDialog;
+enum { SERVER_SAVE_OK,SERVER_SAVE_CONFIG_ERROR,SERVER_SAVE_LOGIN_ERROR,SERVER_SAVE_ROLLBACK_ERROR };
+static void credential_error(HWND h,DWORD error){
+    wchar_t text[256];swprintf(text,256,nova_text(L"无法保存或清除本机登录信息（Windows 错误 %lu）。请重试。",L"Unable to save or clear local login details (Windows error %lu). Try again."),(unsigned long)error);
+    MessageBoxW(h,text,nova_text(L"SSH 登录信息",L"SSH login details"),MB_OK|MB_ICONERROR);
+}
+static int persist_server_change(ServerDialog *d,const SshServers *next,const SshLogin *login,int64_t removed_id,DWORD *error){
+    *error=0;
+    if(!ssh_servers_valid(next)){store_save_ssh_servers(next);return SERVER_SAVE_CONFIG_ERROR;}
+    int64_t id=login?login->server.id:removed_id;SshCredentialSnapshot previous;
+    if(!ssh_credentials_snapshot(id,&previous,error,d->credential_store))return SERVER_SAVE_LOGIN_ERROR;
+    BOOL ok=login?ssh_credentials_save(login,error,d->credential_store):ssh_credentials_delete(id,error,d->credential_store);
+    int result=SERVER_SAVE_LOGIN_ERROR;
+    if(ok){
+        if(store_save_ssh_servers(next)){d->servers=*next;result=SERVER_SAVE_OK;}
+        else result=ssh_credentials_restore(id,&previous,error,d->credential_store)?SERVER_SAVE_CONFIG_ERROR:SERVER_SAVE_ROLLBACK_ERROR;
+    }
+    SecureZeroMemory(&previous,sizeof(previous));return result;
+}
+static BOOL save_result(HWND h,int result,DWORD error){
+    if(result==SERVER_SAVE_OK)return TRUE;
+    if(result==SERVER_SAVE_LOGIN_ERROR)credential_error(h,error);
+    else if(result==SERVER_SAVE_ROLLBACK_ERROR){
+        wchar_t text[768];swprintf(text,768,nova_text(L"%ls\n\n原登录信息恢复失败（Windows 错误 %lu），请重新保存此服务器的登录信息。",L"%ls\n\nPrevious login details could not be restored (Windows error %lu). Save this server's login details again."),store_error(),(unsigned long)error);
+        MessageBoxW(h,text,nova_text(L"SSH 保存失败",L"SSH save failed"),MB_OK|MB_ICONERROR);
+    }else MessageBoxW(h,store_error(),L"NOVA Desktop",MB_OK|MB_ICONWARNING);
+    return FALSE;
+}
 static void server_list(HWND h,ServerDialog *d){
     SendDlgItemMessageW(h,S_LIST,LB_RESETCONTENT,0,0);for(int i=0;i<d->servers.count;i++)SendDlgItemMessageW(h,S_LIST,LB_ADDSTRING,0,(LPARAM)d->servers.items[i].name);
     SendDlgItemMessageW(h,S_LIST,LB_SETCURSEL,d->selected,0);
     EnableWindow(GetDlgItem(h,S_NEW),!d->fixed&&d->servers.count<SSH_SERVER_LIMIT);EnableWindow(GetDlgItem(h,S_REMOVE),!d->fixed&&d->selected>=0);
     EnableWindow(GetDlgItem(h,S_CONNECT),d->selected>=0);
+    EnableWindow(GetDlgItem(h,S_FORGET),d->selected>=0);
 }
 static void server_fields(HWND h,ServerDialog *d){
     SshServer empty={0};SshServer *s=d->selected>=0?&d->servers.items[d->selected]:&empty;wchar_t port[16];swprintf(port,16,L"%d",s->port?s->port:22);
+    d->loading_fields=TRUE;d->loaded_login=FALSE;
     SetDlgItemTextW(h,S_NAME,s->name);SetDlgItemTextW(h,S_HOST,s->host);SetDlgItemTextW(h,S_PORT,port);SetDlgItemTextW(h,S_USER,s->user);SetDlgItemTextW(h,S_DIR,s->directory[0]?s->directory:L"/");
-    SetDlgItemTextW(h,S_SECRET,L"");SetDlgItemTextW(h,S_KEY,L"");server_list(h,d);
+    SshLogin login={0};login.server=*s;DWORD error=0;BOOL found=FALSE,ok=TRUE;
+    if(s->id>0&&s->host[0]&&s->user[0])ok=ssh_credentials_load(&login,&found,&error,d->credential_store);
+    SetDlgItemTextW(h,S_SECRET,login.secret);SetDlgItemTextW(h,S_KEY,login.key_file);d->loaded_login=found;
+    SecureZeroMemory(&login,sizeof(login));d->loading_fields=FALSE;server_list(h,d);
+    if(ok)SetDlgItemTextW(h,5410,nova_text(L"保存会记住此 Windows 用户的私钥路径和密码/口令。首次连接需核验主机指纹。",L"Save remembers the key path and password/passphrase for this Windows user. Verify the host fingerprint on first use."));
+    else {wchar_t text[256];swprintf(text,256,nova_text(L"无法读取本机登录信息（Windows 错误 %lu）。原保存内容未被覆盖，可清除后重新填写。",L"Unable to read local login details (Windows error %lu). Saved data is unchanged; clear it to enter new details."),(unsigned long)error);SetDlgItemTextW(h,5410,text);}
 }
 static BOOL save_server(HWND h,ServerDialog *d){
     if(d->selected<0)return TRUE;
     SshServers *next=malloc(sizeof(*next));if(!next)return FALSE;*next=d->servers;SshServer *s=&next->items[d->selected];wchar_t port[24],*end;
     GetDlgItemTextW(h,S_NAME,s->name,SSH_NAME_CAP);GetDlgItemTextW(h,S_HOST,s->host,256);GetDlgItemTextW(h,S_USER,s->user,128);GetDlgItemTextW(h,S_DIR,s->directory,SSH_PATH_CAP);GetDlgItemTextW(h,S_PORT,port,24);
     long n=wcstol(port,&end,10);s->port=port[0]&&!*end&&n>=1&&n<=65535?(int)n:0;
-    BOOL ok=store_save_ssh_servers(next);if(ok)d->servers=*next;else MessageBoxW(h,store_error(),L"NOVA Desktop",MB_OK|MB_ICONWARNING);free(next);if(ok)server_list(h,d);return ok;
+    SshLogin login={0};login.server=*s;GetDlgItemTextW(h,S_SECRET,login.secret,512);GetDlgItemTextW(h,S_KEY,login.key_file,MAX_PATH);DWORD error=0;
+    int result=persist_server_change(d,next,&login,0,&error);BOOL ok=save_result(h,result,error);
+    if(ok){d->loaded_login=login.secret[0]||login.key_file[0];server_list(h,d);SetDlgItemTextW(h,5410,d->loaded_login?
+        nova_text(L"服务器与登录信息已保存。密码/口令仅为当前 Windows 用户保存到本机。",L"Server and login details saved. Passwords/passphrases are stored locally for this Windows user."):
+        nova_text(L"服务器已保存，登录信息已清除。",L"Server saved; login details cleared."));}
+    SecureZeroMemory(&login,sizeof(login));free(next);return ok;
 }
 static INT_PTR CALLBACK server_proc(HWND h,UINT message,WPARAM wp,LPARAM lp){
     ServerDialog *d=(ServerDialog*)GetWindowLongPtrW(h,DWLP_USER);
@@ -77,12 +120,13 @@ static INT_PTR CALLBACK server_proc(HWND h,UINT message,WPARAM wp,LPARAM lp){
         d->brush=CreateSolidBrush(RGB(22,29,42));d->font=CreateFontW(-dpi_scale(14),0,0,0,FW_NORMAL,FALSE,FALSE,FALSE,DEFAULT_CHARSET,0,0,CLEARTYPE_QUALITY,0,L"Microsoft YaHei UI");
         control(h,L"LISTBOX",nova_text(L"已保存服务器",L"Saved servers"),WS_TABSTOP|WS_BORDER|WS_VSCROLL|LBS_NOTIFY,S_LIST,16,18,192,414,d->font);
         control(h,L"BUTTON",nova_text(L"新建",L"New"),WS_TABSTOP,S_NEW,16,446,90,32,d->font);control(h,L"BUTTON",nova_text(L"移除",L"Remove"),WS_TABSTOP,S_REMOVE,116,446,92,32,d->font);
-        const int ids[]={S_NAME,S_HOST,S_PORT,S_USER,S_DIR,S_KEY,S_SECRET};const wchar_t *labels[]={nova_text(L"名称",L"Name"),nova_text(L"主机",L"Host"),nova_text(L"端口",L"Port"),nova_text(L"用户名",L"Username"),nova_text(L"初始目录",L"Initial directory"),nova_text(L"私钥文件（不选 .pub；留空用密码）",L"Private key (not .pub; empty: password)"),nova_text(L"密码 / 私钥口令（不保存）",L"Password / key passphrase (not saved)")};
+        const int ids[]={S_NAME,S_HOST,S_PORT,S_USER,S_DIR,S_KEY,S_SECRET};const wchar_t *labels[]={nova_text(L"名称",L"Name"),nova_text(L"主机",L"Host"),nova_text(L"端口",L"Port"),nova_text(L"用户名",L"Username"),nova_text(L"初始目录",L"Initial directory"),nova_text(L"私钥文件（不选 .pub；留空用密码）",L"Private key (not .pub; empty: password)"),nova_text(L"密码 / 私钥口令（本机保存）",L"Password / key passphrase (saved locally)")};
         const int caps[]={SSH_NAME_CAP,256,6,128,SSH_PATH_CAP,MAX_PATH,512};
         for(int i=0;i<7;i++){int y=16+i*61;control(h,L"STATIC",labels[i],0,5400+i,230,y,530,22,d->font);HWND edit=control(h,L"EDIT",L"",WS_TABSTOP|WS_BORDER|ES_AUTOHSCROLL|(ids[i]==S_SECRET?ES_PASSWORD:0),ids[i],230,y+24,ids[i]==S_KEY?440:530,30,d->font);SendMessageW(edit,EM_SETLIMITTEXT,caps[i]-1,0);}
         control(h,L"BUTTON",nova_text(L"浏览…",L"Browse…"),WS_TABSTOP,S_KEY_PICK,680,16+5*61+24,80,30,d->font);
-        control(h,L"STATIC",nova_text(L"文件操作通过 SFTP，命令在服务器上执行。首次连接需核验主机指纹。",L"Files use SFTP; commands run on the server. Verify the host fingerprint on first connection."),0,5410,230,451,530,42,d->font);
+        control(h,L"STATIC",L"",0,5410,230,451,530,42,d->font);
         control(h,L"BUTTON",nova_text(L"保存",L"Save"),WS_TABSTOP,S_SAVE,464,505,90,34,d->font);control(h,L"BUTTON",nova_text(L"连接",L"Connect"),WS_TABSTOP|BS_DEFPUSHBUTTON,S_CONNECT,564,505,90,34,d->font);control(h,L"BUTTON",nova_text(L"关闭",L"Close"),WS_TABSTOP,IDCANCEL,664,505,96,34,d->font);
+        control(h,L"BUTTON",nova_text(L"清除登录信息",L"Forget login"),WS_TABSTOP,S_FORGET,16,505,192,34,d->font);
         if(!d->servers.count&&!d->fixed){d->servers.count=1;d->selected=0;SshServer *s=&d->servers.items[0];s->id=store_new_id();s->port=22;lstrcpyW(s->name,nova_text(L"服务器 1",L"Server 1"));lstrcpyW(s->directory,L"/");}
         EnableWindow(GetDlgItem(h,S_LIST),!d->fixed);server_fields(h,d);return TRUE;
     }
@@ -90,13 +134,18 @@ static INT_PTR CALLBACK server_proc(HWND h,UINT message,WPARAM wp,LPARAM lp){
     switch(message){
     case WM_DRAWITEM:return draw_ssh_button((DRAWITEMSTRUCT*)lp);
     case WM_COMMAND:
+        if(HIWORD(wp)==EN_CHANGE&&!d->loading_fields&&d->loaded_login&&(LOWORD(wp)==S_HOST||LOWORD(wp)==S_PORT||LOWORD(wp)==S_USER)){
+            d->loaded_login=FALSE;SetDlgItemTextW(h,S_SECRET,L"");SetDlgItemTextW(h,S_KEY,L"");SetDlgItemTextW(h,5410,nova_text(L"连接目标已改变，请重新填写此服务器的私钥或密码/口令后保存。",L"Connection target changed. Enter this server's key or password/passphrase before saving."));return TRUE;
+        }
         if(LOWORD(wp)==S_LIST&&HIWORD(wp)==LBN_SELCHANGE){int index=(int)SendDlgItemMessageW(h,S_LIST,LB_GETCURSEL,0,0);if(index!=d->selected){if(save_server(h,d)){d->selected=index;server_fields(h,d);}else server_list(h,d);}return TRUE;}
         switch(LOWORD(wp)){
         case S_NEW:if(d->servers.count<SSH_SERVER_LIMIT&&save_server(h,d)){d->selected=d->servers.count++;SshServer *s=&d->servers.items[d->selected];ZeroMemory(s,sizeof(*s));s->id=store_new_id();s->port=22;swprintf(s->name,SSH_NAME_CAP,nova_text(L"服务器 %d",L"Server %d"),d->servers.count);lstrcpyW(s->directory,L"/");server_fields(h,d);}return TRUE;
         case S_SAVE:save_server(h,d);return TRUE;
-        case S_REMOVE:if(d->selected>=0&&MessageBoxW(h,nova_text(L"移除此连接配置？服务器上的文件不会被删除。",L"Remove this connection profile? No server files will be deleted."),L"NOVA Desktop",MB_YESNO|MB_DEFBUTTON2|MB_ICONQUESTION)==IDYES){
+        case S_FORGET:if(d->selected>=0){DWORD error=0;if(ssh_credentials_delete(d->servers.items[d->selected].id,&error,d->credential_store)){d->loaded_login=FALSE;SetDlgItemTextW(h,S_SECRET,L"");SetDlgItemTextW(h,S_KEY,L"");SetDlgItemTextW(h,5410,nova_text(L"已清除本机登录信息，下次连接需重新填写。",L"Local login details cleared. Enter them again to reconnect."));}else credential_error(h,error);}return TRUE;
+        case S_REMOVE:if(d->selected>=0&&MessageBoxW(h,nova_text(L"移除此连接配置及本机登录信息？服务器上的文件不会被删除。",L"Remove this connection profile and its local login details? No server files will be deleted."),L"NOVA Desktop",MB_YESNO|MB_DEFBUTTON2|MB_ICONQUESTION)==IDYES){
             SshServers *next=malloc(sizeof(*next));if(!next)return TRUE;*next=d->servers;memmove(&next->items[d->selected],&next->items[d->selected+1],(size_t)(next->count-d->selected-1)*sizeof(SshServer));next->count--;
-            if(store_save_ssh_servers(next)){d->servers=*next;d->selected=next->count?min(d->selected,next->count-1):-1;server_fields(h,d);}else MessageBoxW(h,store_error(),L"NOVA Desktop",MB_OK|MB_ICONWARNING);free(next);}return TRUE;
+            DWORD error=0;int result=persist_server_change(d,next,NULL,d->servers.items[d->selected].id,&error);
+            if(save_result(h,result,error)){d->selected=next->count?min(d->selected,next->count-1):-1;server_fields(h,d);}free(next);}return TRUE;
         case S_KEY_PICK:{wchar_t path[MAX_PATH]=L"";OPENFILENAMEW dialog={0};dialog.lStructSize=sizeof(dialog);dialog.hwndOwner=h;dialog.lpstrFile=path;dialog.nMaxFile=MAX_PATH;dialog.Flags=OFN_FILEMUSTEXIST|OFN_NOCHANGEDIR;dialog.lpstrTitle=nova_text(L"选择 SSH 私钥",L"Select SSH private key");if(GetOpenFileNameW(&dialog))SetDlgItemTextW(h,S_KEY,path);return TRUE;}
         case IDOK:case S_CONNECT:
             GetDlgItemTextW(h,S_SECRET,d->out->secret,512);GetDlgItemTextW(h,S_KEY,d->out->key_file,MAX_PATH);
@@ -119,7 +168,7 @@ BOOL ssh_choose_server(HWND owner,int64_t fixed_id,SshLogin *login){
     INT_PTR result=DialogBoxIndirectParamW(GetModuleHandleW(NULL),&empty.dialog,GetAncestor(owner,GA_ROOT),server_proc,(LPARAM)d);
     if(d->font)DeleteObject(d->font);
     if(d->brush)DeleteObject(d->brush);
-    SecureZeroMemory(d,sizeof(*d));free(d);return result==IDOK;
+    SecureZeroMemory(d,sizeof(*d));free(d);if(result!=IDOK)SecureZeroMemory(login,sizeof(*login));return result==IDOK;
 }
 BOOL ssh_pick_server(HWND owner,HWND anchor,SshLogin *login){
     SshServers *servers=calloc(1,sizeof(*servers));if(!servers)return FALSE;

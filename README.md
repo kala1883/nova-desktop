@@ -237,7 +237,16 @@ that pane, or the user folder if none exists. Modes live only in `config/local.j
 
 Use **Servers** in the file-manager toolbar to save a name, host, SSH port,
 username and absolute initial directory, then open a remote tab with a password
-or private key, including encrypted OpenSSH Ed25519 keys. Passwords, passphrases
+or private key, including encrypted OpenSSH Ed25519 keys. **Save** and **Connect**
+remember the private-key path and password/passphrase in the current user's
+Windows Credential Manager on this computer. Reopening or selecting the server
+fills these fields automatically; the password remains masked. Keep the original
+private-key file in place: NOVA remembers its path and does not copy its contents.
+Changing the host, port or username clears recalled login fields. **Forget login**,
+removing the server, or saving with both login fields empty removes its saved login.
+Credentials do not move with Git or a portable package; enter them once on another
+computer or Windows account. Credential-save failures are reported, and failed
+configuration writes restore the previous login details. Passwords, passphrases
 and key paths are never written to JSON. Independently verify the SHA256 host
 fingerprint on first connection. Pins use the current user's Windows Credential
 Manager, keyed by host/port; changed pins block connections.

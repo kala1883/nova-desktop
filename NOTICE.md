@@ -42,7 +42,10 @@ The primary JSON is available to Git; reviewing or publishing it may disclose
 saved names, paths and command text. NOVA does not automatically upload this data.
 Explicit SSH/SFTP operations transfer selected files to the chosen server and run
 commands there only when requested. Passwords, key passphrases and key paths are
-not saved in JSON; host pins use the current user's Windows Credential Manager.
+not saved in JSON. Save/Connect remembers login secrets and key paths in the current
+user's Windows Credential Manager on this computer. Key contents are not copied;
+Forget login or removing the profile deletes its saved login. Host pins remain
+separate entries in the same user's Credential Manager.
 
 For the Chinese version, see [NOTICE.zh-CN.md](NOTICE.zh-CN.md).
 

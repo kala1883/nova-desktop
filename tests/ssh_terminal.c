@@ -3,6 +3,7 @@
 #include "../src/ui/ssh_view.c"
 #include "../src/ui/terminal_view.c"
 #include <assert.h>
+#include "ssh_saved_login.h"
 BOOL nova_english=FALSE;
 static HWND preview_view;
 static LRESULT CALLBACK fixture_proc(HWND window,UINT message,WPARAM wp,LPARAM lp){
@@ -22,6 +23,7 @@ static BOOL wait_text(RemoteView *v,const char *expected){
 int wmain(int argc,wchar_t **argv){
     assert(argc>=5&&SUCCEEDED(OleInitialize(NULL)));BOOL preview=argc==6&&!wcsncmp(argv[5],L"--preview",9);nova_english=preview&&wcsstr(argv[5],L"-en")!=NULL;
     INITCOMMONCONTROLSEX controls={sizeof(controls),ICC_LISTVIEW_CLASSES};InitCommonControlsEx(&controls);
+    test_saved_login_dialog(argv[2]);
     WNDCLASSW wc={0};wc.lpfnWndProc=fixture_proc;wc.hInstance=GetModuleHandleW(NULL);wc.lpszClassName=L"NovaTerminalFixture";wc.hCursor=LoadCursorW(NULL,IDC_ARROW);RegisterClassW(&wc);
     HWND parent=CreateWindowExW(0,wc.lpszClassName,L"NOVA SSH terminal · isolated loopback preview",WS_OVERLAPPEDWINDOW,60,60,1000,720,NULL,NULL,wc.hInstance,NULL);assert(parent);
     HFONT font=CreateFontW(-dpi_scale(15),0,0,0,FW_NORMAL,FALSE,FALSE,FALSE,DEFAULT_CHARSET,OUT_DEFAULT_PRECIS,CLIP_DEFAULT_PRECIS,CLEARTYPE_QUALITY,DEFAULT_PITCH,L"Microsoft YaHei UI");assert(font);

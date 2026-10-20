@@ -33,7 +33,13 @@ narrow panes. Remote commands always target their own tab and never invoke local
 Windows presets. Terminal status identifies the server; operation errors remain
 copyable there. Permanent remote deletion requires confirmation; transfers refuse
 existing destinations. First-use host trust is a separate default-deny fingerprint
-confirmation. Shared settings never contain authentication secrets or key paths.
+confirmation. Save/Connect remembers each server's key path and masked
+password/passphrase in the current Windows user's local Credential Manager.
+Reopening or switching servers restores those fields; changing host, port or user
+clears recalled credentials. Forget login sits below New/Remove in the server
+library. Key files stay in place; secrets and key paths never enter shared settings.
+Credential-write failures remain visible, and a failed JSON save restores the
+previous login record.
 
 Each pane's tab strip includes a Local / Servers mode menu beside the add-tab
 button. Server mode highlights the selector and makes `+` / Ctrl+T open a native
