@@ -12,6 +12,7 @@ $originalPath = $env:PATH
 Initialize-NovaToolchain
 $toolchainPath = $env:PATH
 $originalToolchainOverride = $env:NOVA_MINGW_BIN
+$originalOpenSSLOverride = $env:NOVA_OPENSSL_ROOT
 $compiler = (Get-Command gcc -ErrorAction Stop).Source
 
 function Check($condition, [string]$message) { if (-not $condition) { throw $message } }
@@ -64,6 +65,14 @@ int main(int argc,char **argv){
     Copy-Item -LiteralPath (Join-Path $fixtureTools 'gcc.exe') -Destination (Join-Path $fixtureTools 'windres.exe')
     $env:PATH = "$fixtureTools;$toolchainPath"
     $env:NOVA_MINGW_BIN = $null
+    $fixtureOpenSSL = Join-Path $fixtureRoot 'openssl with spaces'
+    New-Item -ItemType Directory -Path (Join-Path $fixtureOpenSSL 'include/openssl'),(Join-Path $fixtureOpenSSL 'lib') -Force | Out-Null
+    foreach ($name in @('opensslconf.h','crypto.h','opensslv.h')) {
+        Set-Content -LiteralPath (Join-Path $fixtureOpenSSL "include/openssl/$name") -Value '/* fixture */' -Encoding ASCII
+    }
+    Set-Content -LiteralPath (Join-Path $fixtureOpenSSL 'include/openssl/opensslv.h') -Value '# define OPENSSL_VERSION_MAJOR 3' -Encoding ASCII
+    Set-Content -LiteralPath (Join-Path $fixtureOpenSSL 'lib/libcrypto.a') -Value 'fixture' -Encoding ASCII
+    $env:NOVA_OPENSSL_ROOT = $fixtureOpenSSL
     Invoke-FixtureGit -gitArgs @('init','--bare',$fixtureRemote)
     Invoke-FixtureGit -gitArgs @('init','-b','main',$fixtureRepo)
     Invoke-FixtureGit -gitArgs @('-C',$fixtureRepo,'config','user.name','NOVA deployment test')
@@ -74,6 +83,18 @@ int main(int argc,char **argv){
     Check (-not (Invoke-FixtureGit -gitArgs @('-C',$fixtureRepo,'diff','--cached','--name-only'))) 'Toolchain failure staged source changes'
     Check (-not (Invoke-FixtureGit -gitArgs @('--git-dir',$fixtureRemote,'for-each-ref','--format=%(refname)'))) 'Toolchain failure pushed a commit'
     Check ((PackageCount) -eq 0) 'Toolchain failure produced a package'
+    $env:NOVA_MINGW_BIN = $fixtureTools
+    $env:NOVA_OPENSSL_ROOT = Join-Path $fixtureRoot 'missing openssl'
+    Deploy 'test: missing OpenSSL' $false
+    Check (-not (Invoke-FixtureGit -gitArgs @('-C',$fixtureRepo,'diff','--cached','--name-only'))) 'OpenSSL failure staged source changes'
+    Check (-not (Invoke-FixtureGit -gitArgs @('--git-dir',$fixtureRemote,'for-each-ref','--format=%(refname)'))) 'OpenSSL failure pushed a commit'
+    Check ((PackageCount) -eq 0) 'OpenSSL failure produced a package'
+    $env:NOVA_OPENSSL_ROOT = $fixtureOpenSSL
+    $env:NOVA_DEPLOY_TEST_BUILD_FAIL = '1'
+    Deploy 'test: incompatible OpenSSL link' $false
+    Check (-not (Invoke-FixtureGit -gitArgs @('-C',$fixtureRepo,'diff','--cached','--name-only'))) 'Failed OpenSSL probe staged source changes'
+    Check (-not (Invoke-FixtureGit -gitArgs @('--git-dir',$fixtureRemote,'for-each-ref','--format=%(refname)'))) 'Failed OpenSSL probe pushed a commit'
+    Remove-Item Env:NOVA_DEPLOY_TEST_BUILD_FAIL
     # An explicit toolchain directory must work even when it is absent from PATH.
     $env:NOVA_MINGW_BIN = $fixtureTools
     $env:PATH = $originalPath
@@ -185,6 +206,7 @@ int main(int argc,char **argv){
 finally {
     $env:PATH = $originalPath
     $env:NOVA_MINGW_BIN = $originalToolchainOverride
+    $env:NOVA_OPENSSL_ROOT = $originalOpenSSLOverride
     $env:NOVA_DEPLOY_TEST_PAYLOAD = $null
     Remove-Item Env:NOVA_DEPLOY_TEST_BUILD_FAIL -ErrorAction SilentlyContinue
     Pop-Location

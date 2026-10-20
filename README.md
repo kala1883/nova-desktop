@@ -44,7 +44,7 @@ required.
 
 - Windows 7 or later
 - MinGW-w64 GCC and `windres` to build from source
-- OpenSSL headers and static `libcrypto.a` from the same MinGW toolchain
+- OpenSSL 3 headers and static `libcrypto.a` from the same MinGW toolchain
   (MSYS2 MINGW64: `pacman -S mingw-w64-x86_64-openssl`)
 - PowerShell for the build and test scripts
 
@@ -65,6 +65,18 @@ $env:NOVA_MINGW_BIN = 'C:\msys64\mingw64\bin'
 
 The selected directory must contain both `gcc.exe` and `windres.exe`. Scripts
 adjust their own process environment; they do not change the system/user PATH.
+
+OpenSSL is detected under the selected compiler's prefix (`include/openssl` and
+`lib/libcrypto.a`), including the `opt` subdirectory used by some MinGW packages.
+For a separate compatible MinGW build, set `$env:NOVA_OPENSSL_ROOT` to its prefix
+(the directory containing `include` and `lib`). Build/test scripts add those paths
+only to their own process environment. Deployment compiles and links a small
+OpenSSL probe before staging or pushing; missing headers, a missing static library,
+or an incompatible library stop deployment at that point.
+Older OpenSSL releases are rejected to preserve the documented Ed25519 support
+and the bundled OpenSSL license. A local prefix at `build/deps/openssl` is also
+recognized when its `compiler.txt` contains the full path to the selected
+`gcc.exe`; dependencies stay ignored by Git and must be prepared on each machine.
 
 ```powershell
 .\deployment\build.bat
@@ -269,7 +281,7 @@ waits are normally 30 seconds; command waits at most 30 minutes. DNS resolution
 and cancellation delays are also subject to the Windows networking stack.
 Remote paths allow up to 2007 UTF-16 code units; local transfer/key paths up to 259 characters.
 
-Builds additionally require the same MinGW toolchain's OpenSSL headers and static
+Builds additionally require the same MinGW toolchain's OpenSSL 3 headers and static
 `libcrypto.a` (MSYS2 MINGW64: `pacman -S mingw-w64-x86_64-openssl`). libssh2 is
 vendored and libcrypto is linked statically; no OpenSSL DLL is required at runtime.
 Run `deployment/test-ssh.bat` for rules/storage tests and to build the protocol test.

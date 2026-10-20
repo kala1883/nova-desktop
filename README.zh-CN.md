@@ -32,12 +32,21 @@ NOVA Desktop 是一个使用纯 C 和原生 Win32 API 编写的轻量 Windows �
 
 - Windows 7 或更高版本
 - 从源码构建需要 MinGW-w64 GCC 和 `windres`
-- SSH 构建还需要同一 MinGW 工具链的 OpenSSL 开发头文件与静态 `libcrypto.a`
+- SSH 构建还需要同一 MinGW 工具链的 OpenSSL 3 开发头文件与静态 `libcrypto.a`
   （MSYS2 MINGW64：`pacman -S mingw-w64-x86_64-openssl`）；最终程序不依赖 OpenSSL DLL。
 - 构建与测试脚本需要 PowerShell
 
 项目已在 `third_party/sqlite` 中固定 SQLite 3.53.4 并静态链接。首次构建完成后
 无需联网。SQLite 用作内存事务、JSON 解析和旧数据库迁移；新配置以 JSON 保存。
+
+脚本会在选中编译器的前缀下查找 `include/openssl` 和 `lib/libcrypto.a`，
+也支持部分 MinGW 包使用的 `opt` 子目录。独立安装的兼容 MinGW OpenSSL 可用
+`$env:NOVA_OPENSSL_ROOT` 指向包含 `include`、`lib` 的前缀目录。
+构建、测试只修改自身进程的搜索路径。部署会在暂存、推送之前编译并链接一个
+OpenSSL 探针；缺少头文件、静态库或库不兼容时，会先停止部署。
+旧版 OpenSSL 会被拒绝，以保留已声明的 Ed25519 支持并与随包许可证一致。
+也支持本机的 `build/deps/openssl` 前缀，条件是其 `compiler.txt` 包含选中
+`gcc.exe` 的完整路径；构建依赖被 Git 忽略，需要在每台电脑分别准备。
 
 ## 构建与运行
 

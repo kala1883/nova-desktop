@@ -12,7 +12,12 @@ changes were made to the upstream sources.
 
 License: BSD-3-Clause, see COPYING and the notices retained in individual files.
 `deployment/build-ssh.bat` builds a static relocatable object with the OpenSSL
-backend. MinGW-w64 OpenSSL development headers and libcrypto.a are build
+backend. MinGW-w64 OpenSSL 3 development headers and libcrypto.a are build
 dependencies; libcrypto is linked statically. The server needs SSH, SFTP and a
 POSIX shell, with no NOVA agent. Disabled legacy algorithms are explicit in the
 build script. Dependency updates must update this provenance and run SSH tests.
+
+The build resolves OpenSSL from the selected MinGW prefix, its `opt` directory,
+or `NOVA_OPENSSL_ROOT`. It adds the matching include/library paths to the build
+process and uses `-nostdlib -r` for the relocatable object, excluding executable
+startup code. The object cache tracks the compiler, OpenSSL prefix and headers.

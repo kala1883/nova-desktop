@@ -10,6 +10,7 @@ $repoRoot = Split-Path -Parent $PSScriptRoot
 $pushed = $false
 . (Join-Path $PSScriptRoot 'configuration_info.ps1')
 . (Join-Path $PSScriptRoot 'toolchain.ps1')
+. (Join-Path $PSScriptRoot 'openssl.ps1')
 
 function Invoke-Git {
     param([string[]]$Arguments)
@@ -20,6 +21,8 @@ function Invoke-Git {
 Push-Location -LiteralPath $repoRoot
 try {
     Initialize-NovaToolchain
+    Initialize-NovaOpenSSL
+    Test-NovaOpenSSLLink
     foreach ($tool in @('git', 'gcc', 'windres')) {
         if (-not (Get-Command $tool -ErrorAction SilentlyContinue)) { throw "Missing tool / 缺少工具：$tool" }
     }
