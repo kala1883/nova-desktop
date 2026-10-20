@@ -85,49 +85,67 @@
       "scope": "batch_tasks",
       "section": "Task1",
       "key": "Directory0",
-      "value": "D:\\MyProjects\\MyApps\\transportandai"
-    },
-    {
-      "scope": "batch_tasks",
-      "section": "Task1",
-      "key": "Directory1",
-      "value": "D:\\MyProjects\\MyApps\\sleeping"
-    },
-    {
-      "scope": "batch_tasks",
-      "section": "Task1",
-      "key": "Directory2",
-      "value": "D:\\MyProjects\\MyApps\\LearningApp"
-    },
-    {
-      "scope": "batch_tasks",
-      "section": "Task1",
-      "key": "Directory3",
-      "value": "D:\\MyProjects\\MyApps\\mygomuku"
-    },
-    {
-      "scope": "batch_tasks",
-      "section": "Task1",
-      "key": "Directory4",
-      "value": "D:\\MyProjects\\MyApps\\mylocalllm"
-    },
-    {
-      "scope": "batch_tasks",
-      "section": "Task1",
-      "key": "Directory5",
-      "value": "D:\\MyProjects\\MyApps\\LocalWebGPT"
-    },
-    {
-      "scope": "batch_tasks",
-      "section": "Task1",
-      "key": "Directory6",
       "value": "D:\\MyProjects\\MyApps\\mydesktop"
     },
     {
       "scope": "batch_tasks",
       "section": "Task1",
+      "key": "Directory1",
+      "value": "D:\\MyProjects\\MyApps\\transportandai"
+    },
+    {
+      "scope": "batch_tasks",
+      "section": "Task1",
+      "key": "Directory2",
+      "value": "D:\\MyProjects\\MyApps\\sleeping"
+    },
+    {
+      "scope": "batch_tasks",
+      "section": "Task1",
+      "key": "Directory3",
+      "value": "D:\\MyProjects\\MyApps\\LearningApp"
+    },
+    {
+      "scope": "batch_tasks",
+      "section": "Task1",
+      "key": "Directory4",
+      "value": "D:\\MyProjects\\MyApps\\mygomuku"
+    },
+    {
+      "scope": "batch_tasks",
+      "section": "Task1",
+      "key": "Directory5",
+      "value": "D:\\MyProjects\\MyApps\\TransportDataAgent"
+    },
+    {
+      "scope": "batch_tasks",
+      "section": "Task1",
+      "key": "Directory6",
+      "value": "D:\\MyProjects\\MyApps\\TransportModelingAgent"
+    },
+    {
+      "scope": "batch_tasks",
+      "section": "Task1",
+      "key": "Directory7",
+      "value": "D:\\MyProjects\\MyApps\\mylocalllm"
+    },
+    {
+      "scope": "batch_tasks",
+      "section": "Task1",
+      "key": "Directory8",
+      "value": "D:\\MyProjects\\MyApps\\LocalWebGPT"
+    },
+    {
+      "scope": "batch_tasks",
+      "section": "Task1",
+      "key": "Directory9",
+      "value": "D:\\MyProjects\\MyApps\\3dhuman"
+    },
+    {
+      "scope": "batch_tasks",
+      "section": "Task1",
       "key": "DirectoryCount",
-      "value": "7"
+      "value": "10"
     },
     {
       "scope": "batch_tasks",
@@ -188,6 +206,24 @@
       "section": "Task1",
       "key": "StepCommand6",
       "value": "git pull origin main"
+    },
+    {
+      "scope": "batch_tasks",
+      "section": "Task1",
+      "key": "StepCommand7",
+      "value": "git pull origin main"
+    },
+    {
+      "scope": "batch_tasks",
+      "section": "Task1",
+      "key": "StepCommand8",
+      "value": "git pull origin main"
+    },
+    {
+      "scope": "batch_tasks",
+      "section": "Task1",
+      "key": "StepCommand9",
+      "value": ".\\拉取.cmd"
     },
     {
       "scope": "batch_tasks",
@@ -277,13 +313,13 @@
       "scope": "files",
       "section": "Pane0",
       "key": "Count",
-      "value": "5"
+      "value": "9"
     },
     {
       "scope": "files",
       "section": "Pane0",
       "key": "Tab0",
-      "value": "D:\\MyWork\\YanchengUrbanOperationCockpit\\@项目管理\\重要信息&项目管理&运营&运维\\@运维\\20261008域名ssl证书续费"
+      "value": "D:\\MyWork\\YanchengUrbanOperationCockpit\\@项目管理\\重要信息&项目管理&运营&运维\\@运维"
     },
     {
       "scope": "files",
@@ -295,31 +331,49 @@
       "scope": "files",
       "section": "Pane0",
       "key": "Tab2",
-      "value": "D:\\MyWork\\YanchengUrbanOperationCockpit\\@项目管理\\合同&采购&请款付款\\请款\\02-初验款\\电信"
+      "value": "D:\\MyWork\\others\\工资奖金\\@报销\\1未报销\\2026.09.08-盐城费用\\20260915礼物"
     },
     {
       "scope": "files",
       "section": "Pane0",
       "key": "Tab3",
-      "value": "D:\\MyWork\\YanchengUrbanOperationCockpit\\@项目管理\\@外审\\20260731外审意见整改\\附件\\4数据保密协议"
+      "value": "D:\\MyWork\\YanchengUrbanOperationCockpit\\@项目管理\\合同&采购&请款付款\\采购"
     },
     {
       "scope": "files",
       "section": "Pane0",
       "key": "Tab4",
-      "value": "D:\\MyWork\\YanchengUrbanOperationCockpit\\@项目管理\\@外审\\20260731外审意见整改\\附件\\运维巡检2604-10"
+      "value": "D:\\MyWork\\YanchengUrbanOperationCockpit\\@项目管理\\重要信息&项目管理&运营&运维\\@外审\\20260731外审意见整改\\附件\\4数据保密协议"
     },
     {
       "scope": "files",
       "section": "Pane0",
       "key": "Tab5",
-      "value": "D:\\MyWork\\haikoumaas\\1MaaS初设"
+      "value": "D:\\MyWork\\YanchengUrbanOperationCockpit\\@项目管理\\重要信息&项目管理&运营&运维\\@外审\\20260731外审意见整改\\附件\\运维巡检2604-10"
+    },
+    {
+      "scope": "files",
+      "section": "Pane0",
+      "key": "Tab6",
+      "value": "D:\\MyWork\\YanchengUrbanOperationCockpit\\@项目管理\\合同&采购&请款付款\\请款\\03-终验"
+    },
+    {
+      "scope": "files",
+      "section": "Pane0",
+      "key": "Tab7",
+      "value": "D:\\MyWork\\haikoumaas\\3项目交付管理\\20260713深化响应设计"
+    },
+    {
+      "scope": "files",
+      "section": "Pane0",
+      "key": "Tab8",
+      "value": "D:\\MyWork\\YanchengUrbanOperationCockpit\\@项目管理\\重要信息&项目管理&运营&运维\\@运维"
     },
     {
       "scope": "files",
       "section": "Pane1",
       "key": "Count",
-      "value": "5"
+      "value": "6"
     },
     {
       "scope": "files",
@@ -337,25 +391,25 @@
       "scope": "files",
       "section": "Pane1",
       "key": "Tab2",
-      "value": "D:\\MyProjects\\MyApps\\maas\\business_service"
+      "value": "D:\\MyWork\\nanjingtransportmonitoringsys\\签合同\\20261019采购报名"
     },
     {
       "scope": "files",
       "section": "Pane1",
       "key": "Tab3",
-      "value": "D:\\MyWork\\nanjingtransportmonitoringsys\\签合同"
+      "value": "D:\\MyWork\\others\\researchwork"
     },
     {
       "scope": "files",
       "section": "Pane1",
       "key": "Tab4",
-      "value": "D:\\MyWork\\xuzhoumtroline6passengervolumes\\@手机信令"
+      "value": "D:\\MyWork\\others\\researchwork\\20261016碳排放规范\\送审稿——发专家2026年10月"
     },
     {
       "scope": "files",
       "section": "Pane1",
       "key": "Tab5",
-      "value": "D:\\MyProjects\\MyApps\\TransportDataAgent"
+      "value": "D:\\MyWork\\xuzhoumtroline6passengervolumes\\@地铁公交刷卡"
     },
     {
       "scope": "files",
@@ -367,25 +421,25 @@
       "scope": "files",
       "section": "Pane2",
       "key": "Count",
-      "value": "5"
+      "value": "9"
     },
     {
       "scope": "files",
       "section": "Pane2",
       "key": "Tab0",
-      "value": "D:\\MyProjects\\MyApps\\mydesktop"
+      "value": "D:\\MyProjects\\MyApps\\LearningApp"
     },
     {
       "scope": "files",
       "section": "Pane2",
       "key": "Tab1",
-      "value": "D:\\MyProjects\\MyApps\\transportandai"
+      "value": "D:\\MyProjects\\MyApps\\TransportModelingAgent"
     },
     {
       "scope": "files",
       "section": "Pane2",
       "key": "Tab2",
-      "value": "D:\\MyProjects\\MyApps\\LearningApp"
+      "value": "D:\\MyProjects\\MyApps\\maas\\business_service"
     },
     {
       "scope": "files",
@@ -397,37 +451,43 @@
       "scope": "files",
       "section": "Pane2",
       "key": "Tab4",
-      "value": "D:\\MyProjects\\MyApps\\TransportDataAgent"
+      "value": "D:\\MyProjects\\MyApps\\3dhuman"
     },
     {
       "scope": "files",
       "section": "Pane2",
       "key": "Tab5",
-      "value": "D:\\MyProjects\\MyApps\\sleeping-health-webview-rendering"
+      "value": "D:\\MyProjects\\MyApps\\transportandai"
     },
     {
       "scope": "files",
       "section": "Pane2",
       "key": "Tab6",
-      "value": "D:\\MyProjects\\MyApps"
+      "value": "D:\\MyProjects\\MyApps\\TransportDataAgent"
     },
     {
       "scope": "files",
       "section": "Pane2",
       "key": "Tab7",
-      "value": "D:\\MyProjects\\MyApps\\TransportDataAgent"
+      "value": "D:\\MyProjects\\MyApps\\LocalWebGPT"
+    },
+    {
+      "scope": "files",
+      "section": "Pane2",
+      "key": "Tab8",
+      "value": "D:\\MyProjects\\MyApps\\mydesktop"
     },
     {
       "scope": "files",
       "section": "Pane3",
       "key": "Count",
-      "value": "3"
+      "value": "4"
     },
     {
       "scope": "files",
       "section": "Pane3",
       "key": "Tab0",
-      "value": "D:\\MyLife\\myhealth\\我"
+      "value": "D:\\MyLife\\myhealth"
     },
     {
       "scope": "files",
@@ -445,7 +505,13 @@
       "scope": "files",
       "section": "Pane3",
       "key": "Tab3",
-      "value": "D:\\MyProjects\\icanbeanaiexpert\\AIUsing\\myagentteams"
+      "value": "D:\\MyProjects\\icanmakeameaningfulcareer"
+    },
+    {
+      "scope": "files",
+      "section": "Pane3",
+      "key": "Tab4",
+      "value": "D:\\MyProjects\\MyApps\\TransportDataAgent\\systems"
     }
   ],
   "workspaces": [
@@ -521,95 +587,102 @@
       "target": "nova-batch:7987518378906657662"
     },
     {
-      "id": "6255728511945100573",
+      "id": "1116558357515455817",
       "workspace_id": "6969818039083397288",
       "position": 3,
+      "name": "ChatGPT",
+      "target": "D:\\programfiles3\\ChatGPT.lnk"
+    },
+    {
+      "id": "6914680770371065798",
+      "workspace_id": "6969818039083397288",
+      "position": 4,
+      "name": "有道云笔记",
+      "target": "C:\\ProgramData\\Microsoft\\Windows\\Start Menu\\Programs\\有道云笔记.lnk"
+    },
+    {
+      "id": "6580304493495951618",
+      "workspace_id": "6969818039083397288",
+      "position": 5,
+      "name": "Google Chrome",
+      "target": "C:\\ProgramData\\Microsoft\\Windows\\Start Menu\\Programs\\Google Chrome.lnk"
+    },
+    {
+      "id": "6255728511945100573",
+      "workspace_id": "6969818039083397288",
+      "position": 6,
       "name": "微信",
       "target": "C:\\ProgramData\\Microsoft\\Windows\\Start Menu\\Programs\\微信\\微信.lnk"
     },
     {
       "id": "5741496140277305786",
       "workspace_id": "6969818039083397288",
-      "position": 4,
+      "position": 7,
       "name": "云之家",
       "target": "C:\\Users\\mj\\AppData\\Roaming\\Microsoft\\Windows\\Start Menu\\Programs\\云之家\\云之家.lnk"
     },
     {
       "id": "2527702173819322240",
       "workspace_id": "6969818039083397288",
-      "position": 5,
+      "position": 8,
       "name": "钉钉",
       "target": "C:\\ProgramData\\Microsoft\\Windows\\Start Menu\\Programs\\钉钉\\钉钉.lnk"
     },
     {
       "id": "1449645203546609090",
       "workspace_id": "6969818039083397288",
-      "position": 6,
+      "position": 9,
       "name": "Telegram",
       "target": "C:\\Users\\mj\\AppData\\Roaming\\Microsoft\\Windows\\Start Menu\\Programs\\Telegram Desktop\\Telegram.lnk"
     },
     {
-      "id": "1116558357515455817",
-      "workspace_id": "6969818039083397288",
-      "position": 7,
-      "name": "ChatGPT",
-      "target": "D:\\programfiles3\\ChatGPT.lnk"
-    },
-    {
-      "id": "6580304493495951618",
-      "workspace_id": "6969818039083397288",
-      "position": 8,
-      "name": "Google Chrome",
-      "target": "C:\\ProgramData\\Microsoft\\Windows\\Start Menu\\Programs\\Google Chrome.lnk"
-    },
-    {
-      "id": "6914680770371065798",
-      "workspace_id": "6969818039083397288",
-      "position": 9,
-      "name": "有道云笔记",
-      "target": "C:\\ProgramData\\Microsoft\\Windows\\Start Menu\\Programs\\有道云笔记.lnk"
-    },
-    {
-      "id": "4302892563378620187",
-      "workspace_id": "6969818039083397288",
-      "position": 10,
-      "name": "LocalSend",
-      "target": "C:\\ProgramData\\Microsoft\\Windows\\Start Menu\\Programs\\LocalSend.lnk"
-    },
-    {
       "id": "3569885870074066773",
       "workspace_id": "6969818039083397288",
-      "position": 11,
+      "position": 10,
       "name": "PowerPoint",
       "target": "C:\\ProgramData\\Microsoft\\Windows\\Start Menu\\Programs\\PowerPoint.lnk"
     },
     {
       "id": "5550529118529490085",
       "workspace_id": "6969818039083397288",
-      "position": 12,
+      "position": 11,
       "name": "Word",
       "target": "C:\\ProgramData\\Microsoft\\Windows\\Start Menu\\Programs\\Word.lnk"
     },
     {
       "id": "225502693743477985",
       "workspace_id": "6969818039083397288",
-      "position": 13,
+      "position": 12,
       "name": "Docker Desktop",
       "target": "C:\\Users\\mj\\AppData\\Roaming\\Microsoft\\Windows\\Start Menu\\Programs\\Docker Desktop.lnk"
     },
     {
       "id": "3630829652492954164",
       "workspace_id": "6969818039083397288",
-      "position": 14,
+      "position": 13,
       "name": "ToDesk",
       "target": "C:\\ProgramData\\Microsoft\\Windows\\Start Menu\\Programs\\ToDesk\\ToDesk.lnk"
     },
     {
       "id": "6045670457429403639",
       "workspace_id": "6969818039083397288",
-      "position": 15,
+      "position": 14,
       "name": "GameViewer",
       "target": "D:\\programfiles3\\GameViewer\\GameViewer.exe"
+    },
+    {
+      "id": "2122695343368922213",
+      "workspace_id": "6969818039083397288",
+      "position": 15,
+      "name": "百度网盘",
+      "target": "C:\\Users\\mj\\AppData\\Roaming\\Microsoft\\Windows\\Start Menu\\Programs\\百度网盘\\百度网盘.lnk"
+    },
+    {
+      "id": "4302892563378620187",
+      "workspace_id": "6969818039083397288",
+      "position": 16,
+      "name": "LocalSend",
+      "target": "C:\\ProgramData\\Microsoft\\Windows\\Start Menu\\Programs\\LocalSend.lnk"
     }
   ]
 }
