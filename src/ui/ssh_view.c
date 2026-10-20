@@ -13,7 +13,6 @@
 #include <dwmapi.h>
 #include <uxtheme.h>
 #include <wincred.h>
-#include <oleacc.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <wchar.h>
@@ -28,8 +27,8 @@
 #define TERMINAL_OUTPUT (WM_APP+82)
 #define TERMINAL_ENDED (WM_APP+83)
 enum { S_LIST=5100,S_NAME,S_HOST,S_PORT,S_USER,S_DIR,S_KEY,S_SECRET,S_NEW,S_SAVE,S_REMOVE,S_CONNECT,S_KEY_PICK };
-enum { V_CONNECT=5200,V_DISCONNECT,V_UPLOAD,V_DOWNLOAD,V_CANCEL,V_EXECUTE,V_INPUT,V_OUTPUT,V_LIST,V_STATUS,V_FILES,V_TERMINAL };
-enum { J_CONNECT=1,J_LIST,J_MKDIR,J_RENAME,J_DELETE,J_UPLOAD,J_DOWNLOAD,J_COPY,J_MOVE,J_EXEC,J_TERMINAL };
+enum { V_CONNECT=5200,V_DISCONNECT,V_UPLOAD,V_DOWNLOAD,V_CANCEL,V_LIST=5208,V_STATUS,V_FILES,V_TERMINAL };
+enum { J_CONNECT=1,J_LIST,J_MKDIR,J_RENAME,J_DELETE,J_UPLOAD,J_DOWNLOAD,J_COPY,J_MOVE,J_TERMINAL };
 typedef struct EmptyDialog { DLGTEMPLATE dialog; WORD menu,window_class,title; } EmptyDialog;
 static int dpi_scale(int value){HDC dc=GetDC(NULL);int dpi=dc?GetDeviceCaps(dc,LOGPIXELSX):96;if(dc)ReleaseDC(NULL,dc);return MulDiv(value,dpi,96);}
 static HWND ssh_hot_button;
@@ -152,12 +151,11 @@ static INT_PTR CALLBACK text_proc(HWND h,UINT msg,WPARAM wp,LPARAM lp){
 static BOOL ask_text(HWND owner,const wchar_t *title,wchar_t *text,int cap){TextDialog data={title,text,cap,NULL};data.brush=CreateSolidBrush(RGB(22,29,42));EmptyDialog empty={0};empty.dialog.style=WS_POPUP|WS_CAPTION|WS_SYSMENU|DS_MODALFRAME;empty.dialog.cx=280;empty.dialog.cy=90;INT_PTR result=DialogBoxIndirectParamW(GetModuleHandleW(NULL),&empty.dialog,GetAncestor(owner,GA_ROOT),text_proc,(LPARAM)&data);DeleteObject(data.brush);return result==IDOK;}
 
 typedef struct RemoteView {
-    HWND window,list,status,input,output,buttons[7];HFONT font;HBRUSH brush;
+    HWND window,list,status,buttons[6];HFONT font;HBRUSH brush;
     HWND terminal,modes[2];BOOL terminal_mode,terminal_running,terminal_opened;
     CRITICAL_SECTION terminal_lock;char terminal_input[65536],terminal_output[65536];size_t input_length,output_length;BOOL output_posted;
     int terminal_columns,terminal_rows;BOOL terminal_resize;
-    IAccPropServices *accessibility;
-    int64_t server_id;wchar_t path[SSH_PATH_CAP],request_path[SSH_PATH_CAP],other[SSH_PATH_CAP],local[MAX_PATH],script[SSH_PATH_CAP];
+    int64_t server_id;wchar_t path[SSH_PATH_CAP],request_path[SSH_PATH_CAP],other[SSH_PATH_CAP],local[MAX_PATH],pending_command[SSH_PATH_CAP];
     SshLogin login;SshEntry *entries;int count,job;BOOL busy,connected,runtime;volatile LONG stopping;
     HANDLE thread,event,cancel,input_event;SshResult result;
 } RemoteView;
@@ -172,14 +170,24 @@ static void show_terminal_status(RemoteView *v){
     wchar_t text[1024];swprintf(text,1024,nova_text(L"%ls@%ls:%d · 交互终端\r\nCtrl+C 中断 · Ctrl+Shift+C/V 复制/粘贴 · Ctrl+Shift+T 切换视图",L"%ls@%ls:%d · Terminal\r\nCtrl+C interrupt · Ctrl+Shift+C/V copy/paste · Ctrl+Shift+T switch view"),v->login.server.user,v->login.server.host,v->login.server.port);show_status(v,text);
 }
 static void controls_enabled(RemoteView *v){
-    for(int i=0;i<7;i++)EnableWindow(v->buttons[i],i==4?v->busy:i==1?v->thread!=NULL:!v->busy&&(i==0||v->connected));
-    EnableWindow(v->list,!v->busy&&v->connected);EnableWindow(v->input,!v->busy&&v->connected);
+    for(int i=0;i<6;i++)EnableWindow(v->buttons[i],i==4?v->busy:i==1?v->thread!=NULL:!v->busy&&(i==0||v->connected));
+    EnableWindow(v->list,!v->busy&&v->connected);
     terminal_view_enable_input(v->terminal,v->connected&&v->terminal_running);
 }
 static BOOL terminal_send(void *context,const char *data,size_t length){
     RemoteView *v=context;if(!v->connected||!v->terminal_running)return FALSE;
     EnterCriticalSection(&v->terminal_lock);BOOL ok=length<=sizeof(v->terminal_input)-v->input_length;
     if(ok){memcpy(v->terminal_input+v->input_length,data,length);v->input_length+=length;}LeaveCriticalSection(&v->terminal_lock);if(ok)SetEvent(v->input_event);return ok;
+}
+static BOOL send_terminal_command(RemoteView *v,const wchar_t *command){
+    char bytes[SSH_PATH_CAP*4+1];int n=WideCharToMultiByte(CP_UTF8,WC_ERR_INVALID_CHARS,command,-1,bytes,sizeof(bytes)-1,NULL,NULL);if(n<=0)return FALSE;
+    bytes[n-1]='\r';BOOL ok=terminal_send(v,bytes,(size_t)n);SecureZeroMemory(bytes,sizeof(bytes));
+    if(!ok)show_status(v,nova_text(L"命令未发送，请稍后重试。",L"The command was not sent; try again shortly."));
+    return ok;
+}
+static void terminal_details(RemoteView *v,const wchar_t *details){
+    char encoded[(SSH_PATH_CAP+4096)*4];int n=WideCharToMultiByte(CP_UTF8,0,details,-1,encoded,sizeof(encoded),NULL,NULL);
+    if(n>0){terminal_view_feed(v->terminal,"\r\n",2);terminal_view_feed(v->terminal,encoded,(size_t)n-1);terminal_view_feed(v->terminal,"\r\n",2);}
 }
 static void terminal_resize(void *context,int columns,int rows){RemoteView *v=context;EnterCriticalSection(&v->terminal_lock);v->terminal_columns=columns;v->terminal_rows=rows;v->terminal_resize=TRUE;LeaveCriticalSection(&v->terminal_lock);SetEvent(v->input_event);}
 static void terminal_drain(RemoteView *v){
@@ -220,7 +228,6 @@ static DWORD WINAPI remote_worker(void *context){
         case J_DELETE:ssh_client_delete(client,v->other,r);break;
         case J_UPLOAD:case J_DOWNLOAD:ssh_client_transfer(client,v->job==J_UPLOAD,v->local,v->other,r);break;
         case J_COPY:ssh_client_copy(client,v->other,v->request_path,r);break;
-        case J_EXEC:ssh_client_exec(client,v->request_path,v->script,r);break;
         case J_TERMINAL:
             EnterCriticalSection(&v->terminal_lock);columns=v->terminal_columns;rows=v->terminal_rows;v->terminal_resize=FALSE;LeaveCriticalSection(&v->terminal_lock);
             terminal=ssh_client_terminal_open(client,v->request_path,columns,rows,r);activity=TRUE;break;
@@ -243,6 +250,7 @@ static BOOL submit(RemoteView *v,int job){
 static void stop_worker(RemoteView *v){
     if(v->thread){InterlockedExchange(&v->stopping,TRUE);SetEvent(v->cancel);SetEvent(v->event);WaitForSingleObject(v->thread,INFINITE);CloseHandle(v->thread);v->thread=NULL;worker_count--;InterlockedExchange(&v->stopping,FALSE);}
     v->busy=v->connected=v->terminal_running=FALSE;controls_enabled(v);ssh_result_dispose(&v->result);SecureZeroMemory(v->login.secret,sizeof(v->login.secret));SecureZeroMemory(v->login.key_file,sizeof(v->login.key_file));
+    SecureZeroMemory(v->pending_command,sizeof(v->pending_command));
     terminal_drain(v);EnterCriticalSection(&v->terminal_lock);SecureZeroMemory(v->terminal_input,sizeof(v->terminal_input));v->input_length=0;LeaveCriticalSection(&v->terminal_lock);
     MSG message;while(PeekMessageW(&message,v->window,DONE,TERMINAL_ENDED,PM_REMOVE)){if(message.message==TERMINAL_ENDED)free((void*)message.lParam);}controls_enabled(v);
 }
@@ -275,24 +283,19 @@ static void finish(RemoteView *v,BOOL connected){
         wchar_t *details=calloc(SSH_PATH_CAP+4096,sizeof(wchar_t));
         if(details){wchar_t methods[256]=L"";MultiByteToWideChar(CP_UTF8,0,r->auth_methods,-1,methods,256);
             swprintf(details,SSH_PATH_CAP+4096,nova_text(L"服务器：%ls:%d\r\n目录：%ls\r\n失败阶段：%ls\r\nWindows 错误：%d\r\nSSH 错误：%d\r\nSFTP 错误：%lu\r\n服务器支持的认证方式：%ls\r\n\r\n%ls",L"Server: %ls:%d\r\nDirectory: %ls\r\nFailed stage: %ls\r\nWindows error: %d\r\nSSH error: %d\r\nSFTP error: %lu\r\nServer authentication methods: %ls\r\n\r\n%ls"),v->login.server.host,v->login.server.port,v->request_path,ssh_phase_name(r->phase),r->native_error,r->ssh_error,r->sftp_error,methods[0]?methods:nova_text(L"尚未取得",L"Not obtained"),r->error[0]?r->error:nova_text(L"操作失败；请检查连接和权限。",L"Operation failed; check the connection and permissions."));
-            SetWindowTextW(v->output,details);
-            if(v->terminal_mode){char encoded[(SSH_PATH_CAP+4096)*4];int n=WideCharToMultiByte(CP_UTF8,0,details,-1,encoded,sizeof(encoded),NULL,NULL);if(n>0){terminal_view_feed(v->terminal,"\r\n",2);terminal_view_feed(v->terminal,encoded,(size_t)n-1);}}
+            terminal_details(v,details);
             if(v->job==J_CONNECT&&!r->cancelled)MessageBoxW(GetAncestor(v->window,GA_ROOT),details,nova_text(L"SSH 连接失败 · 完整错误详情",L"SSH connection failed · full error details"),MB_OK|MB_ICONERROR);
             free(details);
         }
-        show_status(v,nova_text(L"操作失败；完整错误详情已保留在命令输出区，可选择并复制。",L"Operation failed; full error details are retained in the output area and can be selected and copied."));
+        show_status(v,nova_text(L"操作失败；完整错误详情已保留在终端视图，可切换查看并复制。",L"Operation failed; switch to Terminal to view and copy the retained error details."));
     }
     else if(v->job==J_TERMINAL){
         v->terminal_opened=v->terminal_running=TRUE;
         show_terminal_status(v);
-    }else if(v->job==J_EXEC){
-        wchar_t *output=calloc(SSH_OUTPUT_CAP+4096,sizeof(wchar_t));if(output){int n=r->output?MultiByteToWideChar(CP_UTF8,0,r->output,(int)r->output_length,output+4096,SSH_OUTPUT_CAP-1):0;
-            for(int i=0;i<n;i++)if(!output[4096+i])output[4096+i]=L' ';
-            wchar_t header[SSH_PATH_CAP+768];swprintf(header,SSH_PATH_CAP+768,nova_text(L"服务器：%ls:%d\r\n目录：%ls\r\n退出码：%d%ls\r\n\r\n",L"Server: %ls:%d\r\nDirectory: %ls\r\nExit code: %d%ls\r\n\r\n"),v->login.server.host,v->login.server.port,v->request_path,r->exit_code,r->output_truncated?nova_text(L"（仅保留末尾 64 KiB）",L" (last 64 KiB only)"):L"");
-            size_t prefix=wcslen(header);memmove(output+prefix,output+4096,((size_t)max(n,0)+1)*sizeof(wchar_t));wmemcpy(output,header,prefix);SetWindowTextW(v->output,output);free(output);}
-        show_status(v,nova_text(L"远程命令已结束。每次执行使用当前目录和新的非交互 Shell。",L"Remote command finished. Each run uses the current directory and a new non-interactive shell."));
     }else {if(r->entries)populate(v,r);show_status(v,nova_text(L"SSH 已连接。文件操作遵循服务器权限；上传和下载不会覆盖已有目标。",L"SSH connected. Server permissions apply; uploads and downloads do not overwrite existing destinations."));}
     SecureZeroMemory(v->login.secret,sizeof(v->login.secret));SecureZeroMemory(v->login.key_file,sizeof(v->login.key_file));int job=v->job;BOOL success=!r->code;ssh_result_dispose(r);controls_enabled(v);
+    if(success&&job==J_TERMINAL&&v->pending_command[0]){send_terminal_command(v,v->pending_command);SecureZeroMemory(v->pending_command,sizeof(v->pending_command));}
+    if(!success)SecureZeroMemory(v->pending_command,sizeof(v->pending_command));
     if(v->connected&&v->terminal_mode&&!v->terminal_opened&&job!=J_TERMINAL)set_view_mode(v,TRUE);
     if(success&&job==J_TERMINAL&&v->terminal_mode&&IsChild(v->window,GetFocus()))SetFocus(v->terminal);
     if(success&&job!=J_TERMINAL&&v->terminal_mode&&v->terminal_running&&!v->busy)show_terminal_status(v);
@@ -307,9 +310,16 @@ BOOL ssh_view_navigate(HWND window,const wchar_t *location){
     lstrcpyW(v->request_path,path);return submit(v,J_LIST);
 }
 BOOL ssh_view_has_directory(HWND window,const wchar_t *name){RemoteView *v=view_state(window);if(!v)return FALSE;for(int i=0;i<v->count;i++)if((v->entries[i].directory||v->entries[i].link)&&!wcscmp(v->entries[i].name,name))return TRUE;return FALSE;}
-BOOL ssh_view_run(HWND window,const wchar_t *command){RemoteView *v=view_state(window);if(!v||v->busy||!command[0]||wcslen(command)>=SSH_PATH_CAP)return FALSE;
-    if(v->terminal_mode){char bytes[SSH_PATH_CAP*4+1];int n=WideCharToMultiByte(CP_UTF8,WC_ERR_INVALID_CHARS,command,-1,bytes,sizeof(bytes)-1,NULL,NULL);if(n<=0)return FALSE;bytes[n-1]='\r';BOOL ok=terminal_send(v,bytes,(size_t)n);if(ok)SetFocus(v->terminal);return ok;}
-    lstrcpyW(v->script,command);lstrcpyW(v->request_path,v->path);if(!submit(v,J_EXEC))return FALSE;SetWindowTextW(v->input,command);SetWindowTextW(v->output,nova_text(L"正在服务器上执行… 可取消等待；远端进程可能继续运行。",L"Running on the server… You may cancel waiting; the remote process may continue."));return TRUE;}
+BOOL ssh_view_run(HWND window,const wchar_t *command){
+    RemoteView *v=view_state(window);if(!v||v->busy||!v->connected||!v->terminal||!command||!command[0]||wcslen(command)>=SSH_PATH_CAP)return FALSE;
+    if(!WideCharToMultiByte(CP_UTF8,WC_ERR_INVALID_CHARS,command,-1,NULL,0,NULL,NULL))return FALSE;
+    if(v->terminal_running){set_view_mode(v,TRUE);BOOL ok=send_terminal_command(v,command);if(ok)SetFocus(v->terminal);return ok;}
+    /* Only this explicitly submitted command may wait for PTY startup. Clear it
+       on failure, cancellation or disconnect; never replay it after reconnect. */
+    lstrcpyW(v->pending_command,command);set_view_mode(v,TRUE);
+    if(v->busy&&v->job==J_TERMINAL)return TRUE;
+    SecureZeroMemory(v->pending_command,sizeof(v->pending_command));return FALSE;
+}
 static BOOL choose_folder(HWND owner,wchar_t *path){BROWSEINFOW info={0};info.hwndOwner=owner;info.lpszTitle=nova_text(L"选择本地文件夹（不会覆盖同名目标）",L"Choose a local folder (existing destinations are not overwritten)");info.ulFlags=BIF_RETURNONLYFSDIRS|BIF_NEWDIALOGSTYLE;PIDLIST_ABSOLUTE id=SHBrowseForFolderW(&info);if(!id)return FALSE;BOOL ok=SHGetPathFromIDListW(id,path);CoTaskMemFree(id);return ok;}
 static void transfer_dialog(RemoteView *v,BOOL upload){
     if(v->busy||!v->connected)return;
@@ -323,7 +333,7 @@ static void transfer_dialog(RemoteView *v,BOOL upload){
 }
 void ssh_view_action(HWND window,int action){
     RemoteView *v=view_state(window);if(!v||v->busy)return;
-    if(action==SSH_COMMAND){SetFocus(v->terminal_mode?v->terminal:v->input);return;}
+    if(action==SSH_COMMAND){if(v->terminal)set_view_mode(v,TRUE);return;}
     if(v->terminal_mode&&action!=SSH_REFRESH&&action!=SSH_UP){show_status(v,nova_text(L"请切换到文件夹视图后选择文件并操作。",L"Switch to Files to select and operate on files."));return;}
     if(action==SSH_REFRESH){refresh_remote(v);return;}
     if(action==SSH_UP){wchar_t parent[SSH_PATH_CAP];lstrcpyW(parent,v->path);wchar_t *slash=wcsrchr(parent,L'/');if(slash==parent)parent[1]=0;else if(slash)*slash=0;ssh_view_navigate(window,parent);return;}
@@ -340,8 +350,8 @@ void ssh_view_action(HWND window,int action){
 static void set_view_mode(RemoteView *v,BOOL terminal){
     v->terminal_mode=terminal;
     for(int i=0;i<2;i++){if(i==(terminal?1:0))SetPropW(v->modes[i],L"NovaSelected",(HANDLE)1);else RemovePropW(v->modes[i],L"NovaSelected");InvalidateRect(v->modes[i],NULL,TRUE);}
-    ShowWindow(v->terminal,terminal?SW_SHOW:SW_HIDE);ShowWindow(v->list,terminal?SW_HIDE:SW_SHOW);ShowWindow(v->input,terminal?SW_HIDE:SW_SHOW);ShowWindow(v->output,terminal?SW_HIDE:SW_SHOW);
-    for(int i=2;i<7;i++)ShowWindow(v->buttons[i],terminal?SW_HIDE:SW_SHOW);
+    ShowWindow(v->terminal,terminal?SW_SHOW:SW_HIDE);ShowWindow(v->list,terminal?SW_HIDE:SW_SHOW);
+    for(int i=2;i<6;i++)ShowWindow(v->buttons[i],terminal?SW_HIDE:SW_SHOW);
     layout_view(v);
     if(terminal){
         if(v->connected&&!v->busy&&!v->terminal_opened){lstrcpyW(v->request_path,v->path);submit(v,J_TERMINAL);}
@@ -362,10 +372,9 @@ static void layout_view(RemoteView *v){
         MoveWindow(v->terminal,gap,top,max(1,width-2*gap),max(1,height-top-status_height-gap),TRUE);
         MoveWindow(v->status,gap,max(top,height-status_height),max(1,width-2*gap),status_height,TRUE);return;}
     for(int i=0;i<6;i++)MoveWindow(v->buttons[i],gap+(i%columns)*(button_width+gap),toolbar_y+(i/columns)*dpi_scale(33),button_width,dpi_scale(28),TRUE);
-    int bottom=min(dpi_scale(172),height/2),top=toolbar_y+rows*dpi_scale(33),list_height=max(1,height-top-bottom-dpi_scale(40));MoveWindow(v->list,gap,top,max(1,width-2*gap),list_height,TRUE);
+    int top=toolbar_y+rows*dpi_scale(33),list_height=max(1,height-top-dpi_scale(36));MoveWindow(v->list,gap,top,max(1,width-2*gap),list_height,TRUE);
     ListView_SetColumnWidth(v->list,0,max(dpi_scale(80),width-dpi_scale(190)));ListView_SetColumnWidth(v->list,1,dpi_scale(110));ListView_SetColumnWidth(v->list,2,dpi_scale(60));
-    int y=top+list_height+gap;MoveWindow(v->input,gap,y,max(1,width-dpi_scale(72)),dpi_scale(28),TRUE);MoveWindow(v->buttons[6],max(gap,width-dpi_scale(62)),y,dpi_scale(56),dpi_scale(28),TRUE);
-    y+=dpi_scale(33);MoveWindow(v->output,gap,y,max(1,width-2*gap),max(1,height-y-dpi_scale(36)),TRUE);MoveWindow(v->status,gap,height-dpi_scale(32),max(1,width-2*gap),dpi_scale(30),TRUE);
+    MoveWindow(v->status,gap,height-dpi_scale(32),max(1,width-2*gap),dpi_scale(30),TRUE);
 }
 static LRESULT CALLBACK ssh_list_proc(HWND h,UINT msg,WPARAM wp,LPARAM lp,UINT_PTR id,DWORD_PTR data){
     (void)id;(void)data;if(msg==WM_NOTIFY&&((NMHDR*)lp)->code==NM_CUSTOMDRAW)return SendMessageW(GetParent(h),WM_NOTIFY,wp,lp);return DefSubclassProc(h,msg,wp,lp);
@@ -375,17 +384,14 @@ static LRESULT CALLBACK remote_proc(HWND h,UINT msg,WPARAM wp,LPARAM lp){
     switch(msg){
     case WM_DRAWITEM:return draw_ssh_button((DRAWITEMSTRUCT*)lp);
     case WM_CREATE:{
-        v->brush=CreateSolidBrush(RGB(22,29,42));const int ids[]={V_CONNECT,V_DISCONNECT,V_UPLOAD,V_DOWNLOAD,V_CANCEL,SSH_REFRESH,V_EXECUTE};const wchar_t *names[]={nova_text(L"连接",L"Connect"),nova_text(L"断开",L"Disconnect"),nova_text(L"上传",L"Upload"),nova_text(L"下载",L"Download"),nova_text(L"取消",L"Cancel"),nova_text(L"刷新",L"Refresh"),nova_text(L"执行",L"Run")};
-        for(int i=0;i<7;i++)v->buttons[i]=control(h,L"BUTTON",names[i],WS_TABSTOP,ids[i],0,0,1,1,v->font);
+        v->brush=CreateSolidBrush(RGB(22,29,42));const int ids[]={V_CONNECT,V_DISCONNECT,V_UPLOAD,V_DOWNLOAD,V_CANCEL,SSH_REFRESH};const wchar_t *names[]={nova_text(L"连接",L"Connect"),nova_text(L"断开",L"Disconnect"),nova_text(L"上传",L"Upload"),nova_text(L"下载",L"Download"),nova_text(L"取消",L"Cancel"),nova_text(L"刷新",L"Refresh")};
+        for(int i=0;i<6;i++)v->buttons[i]=control(h,L"BUTTON",names[i],WS_TABSTOP,ids[i],0,0,1,1,v->font);
         v->modes[0]=control(h,L"BUTTON",nova_text(L"文件夹",L"Files"),WS_TABSTOP,V_FILES,0,0,1,1,v->font);
         v->modes[1]=control(h,L"BUTTON",nova_text(L"终端",L"Terminal"),WS_TABSTOP,V_TERMINAL,0,0,1,1,v->font);SetPropW(v->modes[0],L"NovaSelected",(HANDLE)1);
         v->terminal=terminal_view_create(h,terminal_send,terminal_resize,v);EnableWindow(v->modes[1],v->terminal!=NULL);
         v->list=control(h,WC_LISTVIEWW,nova_text(L"远程文件列表",L"Remote file list"),WS_TABSTOP|WS_BORDER|LVS_REPORT|LVS_SINGLESEL|LVS_SHOWSELALWAYS,V_LIST,0,0,1,1,v->font);ListView_SetExtendedListViewStyle(v->list,LVS_EX_FULLROWSELECT|LVS_EX_DOUBLEBUFFER);ListView_SetBkColor(v->list,RGB(22,29,42));ListView_SetTextBkColor(v->list,RGB(22,29,42));ListView_SetTextColor(v->list,RGB(236,241,249));
         SetWindowSubclass(v->list,ssh_list_proc,1,0);
         const wchar_t *columns[]={nova_text(L"名称",L"Name"),nova_text(L"字节 / 类型",L"Bytes / type"),nova_text(L"权限",L"Mode")};for(int i=0;i<3;i++){LVCOLUMNW col={0};col.mask=LVCF_TEXT|LVCF_WIDTH;col.cx=100;col.pszText=(LPWSTR)columns[i];ListView_InsertColumn(v->list,i,&col);}
-        v->input=control(h,L"EDIT",L"pwd",WS_TABSTOP|WS_BORDER|ES_AUTOHSCROLL,V_INPUT,0,0,1,1,v->font);SendMessageW(v->input,EM_SETLIMITTEXT,SSH_PATH_CAP-1,0);SendMessageW(v->input,EM_SETCUEBANNER,TRUE,(LPARAM)nova_text(L"在当前服务器目录执行命令",L"Run a command in the current server directory"));
-        v->output=control(h,L"EDIT",L"",WS_TABSTOP|WS_BORDER|WS_VSCROLL|ES_MULTILINE|ES_AUTOVSCROLL|ES_READONLY,V_OUTPUT,0,0,1,1,v->font);SendMessageW(v->output,EM_SETLIMITTEXT,SSH_OUTPUT_CAP+4096,0);SetWindowTextW(v->output,nova_text(L"命令输出显示在此处。执行目标始终是此标签的服务器和目录。",L"Command output appears here. The target is always this tab's server and directory."));
-        if(SUCCEEDED(CoCreateInstance(&CLSID_AccPropServices,NULL,CLSCTX_INPROC_SERVER,&IID_IAccPropServices,(void**)&v->accessibility))){IAccPropServices_SetHwndPropStr(v->accessibility,v->input,OBJID_CLIENT,CHILDID_SELF,PROPID_ACC_NAME,nova_text(L"当前远程目录中的命令",L"Command in the current remote directory"));IAccPropServices_SetHwndPropStr(v->accessibility,v->output,OBJID_CLIENT,CHILDID_SELF,PROPID_ACC_NAME,nova_text(L"远程命令输出与执行目标",L"Remote command output and execution target"));}
         v->status=control(h,L"STATIC",nova_text(L"尚未连接。恢复标签不会自动连接或执行命令。",L"Disconnected. Restoring tabs never connects or runs commands automatically."),0,V_STATUS,0,0,1,1,v->font);controls_enabled(v);layout_view(v);return 0;}
     case WM_SIZE:layout_view(v);return 0;
     case DONE:finish(v,wp!=0);return 0;
@@ -402,9 +408,8 @@ static LRESULT CALLBACK remote_proc(HWND h,UINT msg,WPARAM wp,LPARAM lp){
         case V_CONNECT:{SshLogin *login=calloc(1,sizeof(*login));if(login){if(ssh_choose_server(h,v->server_id,login))ssh_view_connect(h,login);SecureZeroMemory(login,sizeof(*login));free(login);}return 0;}
         case V_DISCONNECT:stop_worker(v);show_status(v,nova_text(L"已断开。远端运行中的命令可能继续执行。",L"Disconnected. Commands already running remotely may continue."));return 0;
         case V_UPLOAD:transfer_dialog(v,TRUE);return 0;case V_DOWNLOAD:transfer_dialog(v,FALSE);return 0;
-        case V_CANCEL:SetEvent(v->cancel);show_status(v,nova_text(L"正在取消等待；请随后刷新确认远端状态。",L"Cancelling waiting; refresh afterwards to check remote state."));return 0;
+        case V_CANCEL:SecureZeroMemory(v->pending_command,sizeof(v->pending_command));SetEvent(v->cancel);show_status(v,nova_text(L"正在取消等待；请随后刷新确认远端状态。",L"Cancelling waiting; refresh afterwards to check remote state."));return 0;
         case SSH_REFRESH:refresh_remote(v);return 0;
-        case V_EXECUTE:{wchar_t text[SSH_PATH_CAP];GetWindowTextW(v->input,text,SSH_PATH_CAP);ssh_view_run(h,text);return 0;}
         }break;
     case WM_NOTIFY:
         if(((NMHDR*)lp)->hwndFrom==ListView_GetHeader(v->list)&&((NMHDR*)lp)->code==NM_CUSTOMDRAW){NMCUSTOMDRAW *draw=(NMCUSTOMDRAW*)lp;if(draw->dwDrawStage==CDDS_PREPAINT)return CDRF_NOTIFYITEMDRAW;if(draw->dwDrawStage==CDDS_ITEMPREPAINT){FillRect(draw->hdc,&draw->rc,v->brush);RECT area=draw->rc;area.left+=dpi_scale(6);SetBkMode(draw->hdc,TRANSPARENT);SetTextColor(draw->hdc,RGB(236,241,249));HFONT old=SelectObject(draw->hdc,v->font);const wchar_t *label=draw->dwItemSpec==0?nova_text(L"名称",L"Name"):draw->dwItemSpec==1?nova_text(L"字节 / 类型",L"Bytes / type"):nova_text(L"权限",L"Mode");DrawTextW(draw->hdc,label,-1,&area,DT_SINGLELINE|DT_VCENTER|DT_END_ELLIPSIS);SelectObject(draw->hdc,old);return CDRF_SKIPDEFAULT;}}
@@ -414,7 +419,7 @@ static LRESULT CALLBACK remote_proc(HWND h,UINT msg,WPARAM wp,LPARAM lp){
         }break;
     case WM_CTLCOLORSTATIC:case WM_CTLCOLOREDIT:SetTextColor((HDC)wp,RGB(236,241,249));SetBkColor((HDC)wp,RGB(22,29,42));return (LRESULT)v->brush;
     case WM_ERASEBKGND:{RECT r;GetClientRect(h,&r);FillRect((HDC)wp,&r,v->brush);return 1;}
-    case WM_DESTROY:stop_worker(v);free(v->entries);if(v->accessibility){MSAAPROPID name=PROPID_ACC_NAME;IAccPropServices_ClearHwndProps(v->accessibility,v->input,OBJID_CLIENT,CHILDID_SELF,&name,1);IAccPropServices_ClearHwndProps(v->accessibility,v->output,OBJID_CLIENT,CHILDID_SELF,&name,1);IAccPropServices_Release(v->accessibility);}CloseHandle(v->event);CloseHandle(v->cancel);CloseHandle(v->input_event);DeleteCriticalSection(&v->terminal_lock);DeleteObject(v->brush);if(v->runtime)ssh_runtime_release();SetWindowLongPtrW(h,GWLP_USERDATA,0);SecureZeroMemory(v,sizeof(*v));free(v);return 0;
+    case WM_DESTROY:stop_worker(v);free(v->entries);CloseHandle(v->event);CloseHandle(v->cancel);CloseHandle(v->input_event);DeleteCriticalSection(&v->terminal_lock);DeleteObject(v->brush);if(v->runtime)ssh_runtime_release();SetWindowLongPtrW(h,GWLP_USERDATA,0);SecureZeroMemory(v,sizeof(*v));free(v);return 0;
     }
     return DefWindowProcW(h,msg,wp,lp);
 }
@@ -433,7 +438,6 @@ BOOL ssh_view_message(HWND window,MSG *message){
     if(message->message==WM_KEYDOWN&&(GetKeyState(VK_CONTROL)&0x8000)&&(GetKeyState(VK_SHIFT)&0x8000)&&message->wParam=='T'&&v->terminal){set_view_mode(v,!v->terminal_mode);return TRUE;}
     if(v->terminal_mode&&terminal_view_message(v->terminal,message))return TRUE;
     if(message->message!=WM_KEYDOWN)return FALSE;
-    if(message->hwnd==v->input&&message->wParam==VK_RETURN){SendMessageW(window,WM_COMMAND,V_EXECUTE,0);return TRUE;}
     if(message->hwnd!=v->list)return FALSE;
     BOOL ctrl=(GetKeyState(VK_CONTROL)&0x8000)!=0;int action=0;
     if(ctrl&&message->wParam=='C')action=SSH_COPY;else if(ctrl&&message->wParam=='X')action=SSH_CUT;else if(ctrl&&message->wParam=='V')action=SSH_PASTE;else if(message->wParam==VK_F2)action=SSH_RENAME;else if(message->wParam==VK_DELETE)action=SSH_DELETE;else if(ctrl&&(GetKeyState(VK_SHIFT)&0x8000)&&message->wParam=='N')action=SSH_NEWFOLDER;

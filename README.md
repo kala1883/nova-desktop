@@ -246,7 +246,7 @@ The server holds your public key; select the matching local private key, such as
 this release does not automatically use SSH Agent or other clients' credentials.
 Public keys, PPK and UTF-16 files get specific guidance, without modifying files.
 Connection failures show a full error dialog and retain copyable stage, native/SSH/SFTP
-error codes and details in the output area.
+error codes and details in the Terminal view.
 
 The server needs SSH exec, SFTP and POSIX `sh`, with no NOVA agent or extra listening
 port. This release targets Linux/POSIX servers. Save up to 16 profiles and use at
@@ -257,15 +257,15 @@ committing it. Removing a profile never deletes server files.
 
 Remote tabs share layouts, history, favorites, refresh and parent navigation, with
 case-sensitive paths. Enter absolute/relative directories, or `> command` to force
-execution in the current remote directory. Plain text containing spaces also runs
+execution in the remote terminal. Plain text containing spaces also runs
 remotely; a single word navigates relatively. Prefix relative paths containing
-spaces with `./`; names of listed directories also navigate first. Use the embedded command field for
-single-word commands such as `pwd`. The remote command button focuses this field,
-without using Windows presets. Each command gets a new non-interactive `sh`, with
-no previous `cd` or environment changes. Completion shows the target, directory,
-exit code and at most the final 64 KiB of output. Cancel stops waiting and does
-not guarantee the remote process stopped. Disconnects may leave unknown outcomes;
-writes and commands are never automatically retried.
+spaces with `./`; names of listed directories also navigate first. Files mode
+uses the content area for the file list. The remote command button opens
+**Terminal**; commands entered in the address bar also switch to Terminal and run
+in its shell, including single-word commands entered as `> pwd`. If the terminal
+needs to start, only the explicitly submitted command waits for startup; failure
+or disconnection discards it. Commands are never automatically retried.
+Disconnecting does not guarantee a remote process has stopped.
 
 Choose **Terminal** in a remote tab, or press `Ctrl+Shift+T`, to replace the file
 list with an interactive SSH terminal. It starts your server's shell in the
@@ -295,7 +295,7 @@ Deletion requires permanent-delete confirmation, never uses the Windows Recycle
 Bin, and does not follow symlinks. Failures may partially complete directory
 operations; refresh to check. Listings are bounded at 10000 entries; recursion at
 32 levels/10000 items. Limits produce errors rather than truncated views. Network
-waits are normally 30 seconds; one-shot command waits at most 30 minutes; interactive terminals have no idle deadline. DNS resolution
+waits are normally 30 seconds; interactive terminals have no idle deadline. DNS resolution
 and cancellation delays are also subject to the Windows networking stack.
 Remote paths allow up to 2007 UTF-16 code units; local transfer/key paths up to 259 characters.
 

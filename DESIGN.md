@@ -27,11 +27,11 @@ Validation: inspect the rendered Windows surface and keyboard/control names; cor
 SSH servers use an on-demand Servers toolbar button. The native dialog saves up
 to 16 profiles and opens a remote tab in the active pane. Tabs identify the server
 and folder; restoring tabs never connects automatically. A single-selection native
-SFTP list sits above an embedded command/output area, with explicit connection,
+SFTP list fills Files mode, with explicit connection,
 upload/download, current-file progress and cancellation controls that wrap in
 narrow panes. Remote commands always target their own tab and never invoke local
-Windows presets. Results show server/port, working directory, exit status and
-truncation. Permanent remote deletion requires confirmation; transfers refuse
+Windows presets. Terminal status identifies the server; operation errors remain
+copyable there. Permanent remote deletion requires confirmation; transfers refuse
 existing destinations. First-use host trust is a separate default-deny fingerprint
 confirmation. Shared settings never contain authentication secrets or key paths.
 
@@ -51,8 +51,9 @@ Batch task redesign: a 232 logical px task library groups New task above the lis
 Subtask rows support a 350 ms left-button hold followed by vertical dragging, with a bright insertion line and edge scrolling. Release saves the reordered folders and commands transactionally and moves their results and selection together. Escape, capture loss, focus loss or an outside drop cancels. Sorting stays disabled during execution so worker row indices remain stable.
 
 Remote tabs offer adjacent Files / Terminal view buttons, with a filled primary
-selection and Ctrl+Shift+T switching. Terminal mode replaces the list and one-shot
-command controls with a full-height native Consolas terminal in the existing dark
+selection and Ctrl+Shift+T switching. Files dedicates the content area to its list.
+The command button and address-bar commands open the terminal view. Terminal mode
+replaces the list with a full-height native Consolas terminal in the existing dark
 palette; Connect and Disconnect remain visible. Narrow panes wrap these actions.
 The shell starts in the current file-view directory and survives view/tab changes.
 Terminal keys go to the PTY; Ctrl+Shift+C/V handle text copy/paste. Selection,

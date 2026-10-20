@@ -112,7 +112,7 @@ UI 依赖 controller 与 core 的只读视图；controller 依赖 core 和平台
   libssh2 1.11.1 保持 upstream 原样，OpenSSL 静态开发库来自构建工具链，许可证随包发布。
   协商排除旧 RSA-SHA1、弱 KEX 和 SHA1 MAC。RSA-SHA1 解析代码仍编译，因为 upstream
   1.11.1 需要它解析 RSA 公钥 blob；不代表允许协商旧签名。
-- `ui/ssh_view.[ch]` 拥有连接对话框、远程 ListView 和命令/输出区域。file_manager
+- `ui/ssh_view.[ch]` 拥有连接对话框、远程文件列表和独立的交互终端视图。file_manager
   本地 Tab 继续持有 IExplorerBrowser，远程 Tab 持有独立原生子窗口，共用导航与保存。
   远程命令绝不回退到本机执行。本地 Shell 操作不变。
   每个 Pane 独立持有 ServerMode，只决定新标签的选择流程，不改变已有 Tab 的类型和
@@ -128,9 +128,10 @@ UI 依赖 controller 与 core 的只读视图；controller 依赖 core 和平台
 - 密码/口令只在内存中存在，认证完成或取消后清除；私钥经有界 Unicode Win32 API
   读取后调用 from-memory 认证。指纹由用户核验后按主机/端口存入 Windows 凭据管理器，
   变化时拒绝连接。共享 JSON 不含密码、口令、私钥路径或信任记录。测试不写真实凭据库。
-  连接错误带明确阶段和原始 Windows/SSH/SFTP 错误码；输出区保留完整可复制详情，
+  连接错误带明确阶段和原始 Windows/SSH/SFTP 错误码；终端视图保留完整可复制详情，
   连接失败弹出提示。私钥载入区分公钥、PPK、UTF-16 与支持的私钥，不修改用户密钥。
-- exec request 为固定 POSIX bootstrap；目录以单独的八进制 stdin 行传输，随后是用户
+- platform 层保留非交互 exec 接口用于协议回归，UI 命令统一进入 PTY。
+  exec request 为固定 POSIX bootstrap；目录以单独的八进制 stdin 行传输，随后是用户
   明确输入的脚本。路径不拼入 Shell 字符串，哨兵保留末尾换行。无 PTY，发送脚本后 EOF；
   持续排空 stdout/stderr，保留最多末尾 64 KiB，显示截断与退出码。取消、超时、断线
   不承诺杀死远端进程，也不自动重试写操作或命令。
@@ -152,7 +153,9 @@ UI 依赖 controller 与 core 的只读视图；controller 依赖 core 和平台
   bootstrap 读取时关闭回显及规范行缓冲，随后 `stty sane` 并启动用户的交互 Shell。
   支持 ANSI、UTF-8、备用屏幕、终端键盘输入和窗口尺寸通知。切换视图保留 Shell；
   文件目录与 Shell 目录在启动后独立。断开/关闭会取消并 join 同一个工作线程，
-  EOF 或终端错误关闭连接且不自动重试。会话、屏幕和模式只在内存中保留。
+  EOF 或终端错误关闭连接且不自动重试。地址栏命令会切换到终端；PTY 启动期间仅暂存
+  一条明确提交的命令，启动成功后发送一次，失败、取消或断开时清除，重连不重放。
+  文件夹模式只保留文件列表及文件操作控件。会话、屏幕和模式只在内存中保留。
 
 `test-ssh.bat` 验证规则和事务；`tests/ssh_fixture.py` 以临时目录/密钥、仅监听
 127.0.0.1 的 Paramiko 服务器验证实际协议及命令 stdin 帧，不连接用户服务器。
