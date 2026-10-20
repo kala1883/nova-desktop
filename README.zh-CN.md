@@ -80,7 +80,9 @@ $env:NOVA_MINGW_BIN = 'C:\msys64\mingw64\bin'
 
 每次成功编译还会更新 `build/packages/nova-desktop.exe` 和
 `build/packages/config/nova.json`。固定 exe 覆盖之前的副本，编译失败时保留旧副本。
-如果正在运行这份 exe，请先关闭再编译。
+如果正在运行这份 exe，建议先关闭再编译。若 Windows 允许在运行中替换，
+被占用的旧 exe 备份会保留，后续构建重试清理，不会因此中断编译或 ZIP 打包。
+真正无法替换 exe 时，构建仍会停止。
 
 按顺序提交、推送、编译并打包本地便携版：
 

@@ -4,6 +4,8 @@ powershell.exe -NoLogo -NoProfile -ExecutionPolicy Bypass -File "%~dp0..\tests\t
 if errorlevel 1 exit /b %errorlevel%
 powershell.exe -NoLogo -NoProfile -ExecutionPolicy Bypass -File "%~dp0..\tests\openssl.ps1"
 if errorlevel 1 exit /b %errorlevel%
+powershell.exe -NoLogo -NoProfile -ExecutionPolicy Bypass -File "%~dp0..\tests\publish_latest.ps1"
+if errorlevel 1 exit /b %errorlevel%
 powershell.exe -NoLogo -NoProfile -ExecutionPolicy Bypass -File "%~dp0..\tests\config_merge.ps1"
 if errorlevel 1 exit /b %errorlevel%
 powershell.exe -NoLogo -NoProfile -ExecutionPolicy Bypass -File "%~dp0..\tests\config_sync.ps1"

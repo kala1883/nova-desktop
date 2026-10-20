@@ -97,7 +97,10 @@ to the repository (or an absolute path), useful when the normal exe is running:
 
 Every successful build also updates `build/packages/nova-desktop.exe` and
 `build/packages/config/nova.json`. The fixed executable replaces the previous
-copy; failed builds preserve it. If this copy is running, close it before building.
+copy; failed builds preserve it. Close a running copy before building when possible.
+If Windows permits replacement while it runs, an occupied old-executable backup
+is retained for cleanup by a later build; this does not fail the build or ZIP
+packaging. A failure to replace the executable itself still stops the build.
 
 For a local commit, push, build, and portable package, run:
 

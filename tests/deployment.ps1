@@ -14,6 +14,7 @@ $toolchainPath = $env:PATH
 $originalToolchainOverride = $env:NOVA_MINGW_BIN
 $originalOpenSSLOverride = $env:NOVA_OPENSSL_ROOT
 $compiler = (Get-Command gcc -ErrorAction Stop).Source
+$runningFixture = $null
 
 function Check($condition, [string]$message) { if (-not $condition) { throw $message } }
 function Invoke-FixtureGit([string[]]$gitArgs) {
@@ -201,9 +202,32 @@ int main(int argc,char **argv){
     Check (@($resolved.Data.settings | Where-Object {$_.key -eq 'Selected'})[0].value -eq '0') 'Stashed local selection was lost'
     Check (@(Invoke-FixtureGit -gitArgs @('-C',$clone,'stash','list')).Count -eq 1) 'Safety stash was removed'
     Write-Host 'PASS direct diagnostics, blocked pull preservation, scoped stash/pull/apply and semantic restoration of both sides'
+    # Reproduce Windows' image lock through the complete deploy/build/ZIP path.
+    & $compiler -std=c11 -Wall -Wextra -Werror -municode (Join-Path $sourceRoot 'tests/fixtures/hold_executable.c') -o $latestExe
+    Check ($LASTEXITCODE -eq 0) 'Could not build running-image deployment fixture'
+    $ready=Join-Path $fixtureRoot 'running-ready';$quit=Join-Path $fixtureRoot 'running-quit'
+    $runningFixture=Start-Process -FilePath $latestExe -ArgumentList @('"'+$ready+'"','"'+$quit+'"') -WindowStyle Hidden -PassThru
+    $deadline=[DateTime]::UtcNow.AddSeconds(10)
+    while(-not (Test-Path -LiteralPath $ready) -and [DateTime]::UtcNow -lt $deadline -and -not $runningFixture.HasExited){Start-Sleep -Milliseconds 25}
+    Check ((Test-Path -LiteralPath $ready) -and -not $runningFixture.HasExited) 'Running-image fixture did not become ready'
+    $archivesBefore=PackageCount
+    Deploy 'test: running executable cleanup' $true
+    Check ((PackageCount) -eq $archivesBefore+1) 'Deferred cleanup prevented ZIP creation'
+    Check (-not $runningFixture.HasExited) 'Deployment terminated the running executable'
+    Check ([IO.File]::ReadAllText($latestExe) -ceq $env:NOVA_DEPLOY_TEST_PAYLOAD) 'Deployment did not replace the running image name'
+    Check (@(Get-ChildItem -LiteralPath (Split-Path -Parent $latestExe) -Filter '.nova-previous-*.tmp').Count -eq 1) 'Locked old image was not retained'
+    [IO.File]::WriteAllText($quit,'quit')
+    Check ($runningFixture.WaitForExit(10000)) 'Running-image fixture did not exit'
+    $runningFixture.Dispose();$runningFixture=$null
+    Write-Host 'PASS full deployment with running executable: latest replaced, backup retained, process untouched and ZIP created'
     Write-Host 'PASS deployment: external cwd with spaces, commit/push, clean rerun, archive, rejected push and failed build'
 }
 finally {
+    if ($runningFixture) {
+        [IO.File]::WriteAllText((Join-Path $fixtureRoot 'running-quit'),'quit')
+        if (-not $runningFixture.WaitForExit(10000)) { $runningFixture.Kill();$runningFixture.WaitForExit() }
+        $runningFixture.Dispose()
+    }
     $env:PATH = $originalPath
     $env:NOVA_MINGW_BIN = $originalToolchainOverride
     $env:NOVA_OPENSSL_ROOT = $originalOpenSSLOverride

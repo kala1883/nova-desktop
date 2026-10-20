@@ -10,11 +10,27 @@ $latest = Join-Path $packageRoot 'nova-desktop.exe'
 $source = [IO.Path]::GetFullPath($Executable)
 $temporary = Join-Path $packageRoot ('.nova-latest-' + [guid]::NewGuid().ToString('N') + '.tmp')
 $previous = Join-Path $packageRoot ('.nova-previous-' + [guid]::NewGuid().ToString('N') + '.tmp')
+function Remove-NovaPublicationTemporary([string]$Path) {
+    # A running image may be renamed successfully but remain undeletable until
+    # its process exits. Cleanup must not change the publication result.
+    try { if (Test-Path -LiteralPath $Path -PathType Leaf) { [IO.File]::Delete($Path) } }
+    catch {
+        Write-Host ("Temporary cleanup deferred; file retained / 临时文件暂无法清理，已保留：$Path") -ForegroundColor Yellow
+    }
+}
+function Remove-NovaPreviousExecutables {
+    try { $files = @(Get-ChildItem -LiteralPath $packageRoot -Filter '.nova-previous-*.tmp' -File -ErrorAction Stop) }
+    catch { return }
+    foreach ($file in $files) {
+        if ($file.Name -cmatch '^\.nova-previous-[0-9a-f]{32}\.tmp$') { Remove-NovaPublicationTemporary $file.FullName }
+    }
+}
 try {
     if (-not (Test-Path -LiteralPath $source -PathType Leaf) -or (Get-Item -LiteralPath $source).Length -eq 0) {
         throw 'No valid executable to publish / 没有可更新的有效程序。'
     }
     New-Item -ItemType Directory -Path $packageRoot -Force | Out-Null
+    Remove-NovaPreviousExecutables
     Copy-Item -LiteralPath (Join-Path $repoRoot 'THIRD_PARTY_NOTICES.txt') -Destination $packageRoot
     $latestConfig = Join-Path $packageRoot 'config'
     New-Item -ItemType Directory -Path $latestConfig -Force | Out-Null
@@ -32,6 +48,6 @@ catch {
     exit 1
 }
 finally {
-    if (Test-Path -LiteralPath $temporary) { [IO.File]::Delete($temporary) }
-    if (Test-Path -LiteralPath $previous) { [IO.File]::Delete($previous) }
+    Remove-NovaPublicationTemporary $temporary
+    Remove-NovaPublicationTemporary $previous
 }
