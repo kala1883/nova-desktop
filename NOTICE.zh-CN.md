@@ -15,6 +15,8 @@ MIT 协议允许复制、修改和再分发，但不代表修改版是官方版�
 - libssh2 1.11.1 以 BSD-3-Clause 协议随源码提供并静态链接；OpenSSL libcrypto
   以 Apache-2.0 协议从构建工具链静态链接。完整许可证见随包提供的
   `THIRD_PARTY_NOTICES.txt`。
+- libvterm 0.3.3 按 MIT 协议随源码提供并静态链接，用于原生 SSH 终端。
+  来源与哈希见 `third_party/libvterm/README.md`，许可证及 wcwidth 声明随包提供。
 - Windows、Win32、PowerShell 等名称是 Microsoft Corporation 的商标。
   NOVA Desktop 与 Microsoft 不存在隶属、合作或背书关系。
 - 项目仅使用 Q-Dir 一词描述用户熟悉的多窗格文件管理工作流。NOVA Desktop

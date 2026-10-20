@@ -49,3 +49,12 @@ Run selected and Cancel selected sit above the subtask table alongside Add subta
 Batch task redesign: a 232 logical px task library groups New task above the list and Delete task below it. Save task and Add to workspace sit in the detail header. Name, execution mode and a default command precede a Folder / Command / Status table, whose Run selected / Cancel selected / Add subtask / Edit / Delete actions sit immediately above it. The inline editor below the table changes the selected folder and its independent command; Apply changes commits both transactionally. Pending row edits are also validated before selection changes, save, run and close. New rows copy the default command; legacy rows with empty overrides inherit it. The native window starts at 1120 x 800 and fits the monitor work area, with a 1000 x 720 logical minimum. Maximize/restore returns the main window to a centered size capped at 1100 x 760 logical pixels and the current work area.
 
 Subtask rows support a 350 ms left-button hold followed by vertical dragging, with a bright insertion line and edge scrolling. Release saves the reordered folders and commands transactionally and moves their results and selection together. Escape, capture loss, focus loss or an outside drop cancels. Sorting stays disabled during execution so worker row indices remain stable.
+
+Remote tabs offer adjacent Files / Terminal view buttons, with a filled primary
+selection and Ctrl+Shift+T switching. Terminal mode replaces the list and one-shot
+command controls with a full-height native Consolas terminal in the existing dark
+palette; Connect and Disconnect remain visible. Narrow panes wrap these actions.
+The shell starts in the current file-view directory and survives view/tab changes.
+Terminal keys go to the PTY; Ctrl+Shift+C/V handle text copy/paste. Selection,
+scrollback and copying remain available after disconnection. An explicit status
+explains exit or connection failure, and reconnect never replays commands.

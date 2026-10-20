@@ -19,6 +19,18 @@ from cryptography.hazmat.primitives.serialization import Encoding, PrivateFormat
 
 class Session(paramiko.ServerInterface):
     allowed_key = b''
+    def __init__(self):
+        self.ptys = {}
+    def check_channel_pty_request(self, channel, term, width, height, pixelwidth, pixelheight, modes):
+        assert term == b'xterm-256color' and width >= 2 and height >= 2
+        assert modes == bytes([51, 0, 0, 0, 0, 53, 0, 0, 0, 0, 0])
+        if width == 499:  # Deliberate PTY refusal for the failure-path test.
+            return False
+        self.ptys[channel.get_id()] = [width, height]
+        return True
+    def check_channel_window_change_request(self, channel, width, height, pixelwidth, pixelheight):
+        self.ptys[channel.get_id()] = [width, height]
+        return True
     def check_auth_password(self, username, password):
         return paramiko.AUTH_SUCCESSFUL if (username, password) == ('fixture', 'fixture-password') else paramiko.AUTH_FAILED
     def get_allowed_auths(self, username):
@@ -29,6 +41,55 @@ class Session(paramiko.ServerInterface):
         return paramiko.OPEN_SUCCEEDED if kind == 'session' else paramiko.OPEN_FAILED_ADMINISTRATIVELY_PROHIBITED
     def check_channel_exec_request(self, channel, command):
         expected = b'sh -c \'IFS= read -r nova_dir || exit 125; nova_dir=$(printf "%b_" "$nova_dir") || exit 125; nova_dir=${nova_dir%_}; CDPATH= cd "$nova_dir" || exit 125; exec sh -s\''
+        terminal = b'sh -c \'IFS= read -r nova_dir || exit 125; nova_dir=$(printf "%b_" "$nova_dir") || exit 125; nova_dir=${nova_dir%_}; CDPATH= cd "$nova_dir" || exit 125; stty sane || exit 125; exec "${SHELL:-/bin/sh}" -i\''
+        if command == terminal:
+            assert channel.get_id() in self.ptys
+            def interactive():
+                try:
+                    data = b''
+                    while b'\n' not in data:
+                        data += channel.recv(8192)
+                    encoded, data = data.split(b'\n', 1)
+                    assert len(encoded) % 5 == 0
+                    directory = bytes(int(encoded[i+2:i+5], 8) for i in range(0, len(encoded), 5))
+                    channel.sendall(b'\x1b[32mfixture terminal\x1b[0m\r\n$ ')
+                    while not channel.closed:
+                        if not data:
+                            data = channel.recv(8192)
+                            if not data:
+                                break
+                        if b'\x03' in data:
+                            channel.sendall(b'^C\r\n$ ')
+                            data = b''
+                            continue
+                        if b'\r' not in data:
+                            data += channel.recv(8192)
+                            continue
+                        line, data = data.split(b'\r', 1)
+                        if line.startswith(b'cd '):
+                            directory = line[3:]
+                        elif line == b'pwd':
+                            channel.sendall(directory + b'\r\n')
+                        elif line == b'size':
+                            channel.sendall(('%d %d\r\n' % tuple(self.ptys[channel.get_id()])).encode())
+                        elif line == b'utf8':
+                            for part in [b'\xe4\xb8', b'\xad\xe6', b'\x96\x87\r\n']:
+                                channel.sendall(part)
+                        elif line == b'floodterm':
+                            while not channel.closed:
+                                channel.sendall(b'terminal flood\r\n' * 512)
+                            return
+                        elif line in (b'exit', b'exit7'):
+                            channel.send_exit_status(7 if line == b'exit7' else 0)
+                            channel.close()
+                            return
+                        else:
+                            channel.sendall(b'input:' + line + b'\r\n')
+                        channel.sendall(b'$ ')
+                except (OSError, EOFError):
+                    pass
+            threading.Thread(target=interactive, daemon=True).start()
+            return True
         if command != expected:
             return False
         def execute():
@@ -173,6 +234,9 @@ def main():
             thread.start()
             try:
                 result = subprocess.run([str(Path(sys.argv[1]).resolve()), str(port), str(local), str(key_file), str(refused_port)], timeout=90).returncode
+                ui_test = Path(sys.argv[1]).resolve().with_name('ssh-terminal-test.exe')
+                if not result and ui_test.exists():
+                    result = subprocess.run([str(ui_test), str(port), str(local), str(key_file), str(refused_port)] + sys.argv[2:], timeout=330).returncode
                 if result:
                     print('\n'.join(log.getvalue().splitlines()[-24:]))
                 return result

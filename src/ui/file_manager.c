@@ -1029,6 +1029,9 @@ BOOL file_manager_message(MSG *msg){
            msg->message==WM_LBUTTONDOWN||msg->message==WM_RBUTTONDOWN||msg->message==WM_MBUTTONDOWN)activate(p);
         break;
     }
+    Tab *t=current(p);IShellView *view=NULL;
+    /* The PTY owns Ctrl+C/W/T, Tab, arrows and function keys while focused. */
+    if(t&&t->remote&&t->host&&ssh_view_message(t->host,msg))return TRUE;
     if(msg->message==WM_KEYDOWN||msg->message==WM_SYSKEYDOWN){
         BOOL ctrl=(GetKeyState(VK_CONTROL)&0x8000)!=0,alt=(GetKeyState(VK_MENU)&0x8000)!=0;
         int id=0;
@@ -1044,8 +1047,6 @@ BOOL file_manager_message(MSG *msg){
         else if(msg->wParam==VK_F5)id=C_REFRESH;
         if(id){command(p,id);return TRUE;}
     }
-    Tab *t=current(p);IShellView *view=NULL;
-    if(t&&t->remote&&t->host&&(msg->hwnd==t->host||IsChild(t->host,msg->hwnd))&&ssh_view_message(t->host,msg))return TRUE;
     if(msg->message>=WM_KEYFIRST&&msg->message<=WM_KEYLAST&&t&&t->browser&&IsChild(t->host,msg->hwnd)&&SUCCEEDED(IExplorerBrowser_GetCurrentView(t->browser,&IID_IShellView,(void**)&view))){
         HRESULT hr=IShellView_TranslateAccelerator(view,msg);IShellView_Release(view);if(hr==S_OK)return TRUE;
     }

@@ -11,6 +11,14 @@
 BOOL nova_english=FALSE;
 typedef struct CancelRun {SshClient *client;SshResult result;const wchar_t *command;} CancelRun;
 static DWORD WINAPI run_cancel(void *value){CancelRun *run=value;ssh_client_exec(run->client,L"/",run->command,&run->result);return 0;}
+static void terminal_write(SshClient *client,const char *data){
+    SshResult result={0};size_t length=strlen(data),offset=0;ULONGLONG until=GetTickCount64()+5000;
+    while(offset<length&&GetTickCount64()<until){size_t n;assert(ssh_client_terminal_write(client,data+offset,length-offset,&n,&result));offset+=n;if(!n)Sleep(5);}assert(offset==length);
+}
+static void terminal_expect(SshClient *client,const char *expected){
+    char output[16384]={0};size_t length=0;ULONGLONG until=GetTickCount64()+5000;SshResult result={0};
+    while(GetTickCount64()<until){size_t received;BOOL ended;assert(ssh_client_terminal_read(client,output+length,sizeof(output)-length-1,&received,&ended,&result));length+=received;output[length]=0;if(strstr(output,expected))return;assert(!ended&&length<sizeof(output)-1);Sleep(5);}fprintf(stderr,"Missing terminal output: %s; received: %s\n",expected,output);assert(0);
+}
 int wmain(int argc,wchar_t **argv){
     assert(argc==5&&ssh_runtime_acquire());HANDLE cancel=CreateEventW(NULL,TRUE,FALSE,NULL);assert(cancel);
     const char public_key[]="ssh-ed25519 AAAATEST fixture",putty_key[]="PuTTY-User-Key-File-3: ssh-rsa",private_header[]="-----BEGIN OPENSSH PRIVATE KEY-----";
@@ -36,6 +44,12 @@ int wmain(int argc,wchar_t **argv){
     assert(ssh_client_transfer(client,TRUE,tree,L"/tree",&result));swprintf(copied_tree,MAX_PATH,L"%ls\\tree-copy",argv[2]);assert(ssh_client_transfer(client,FALSE,copied_tree,L"/tree",&result));wcscpy(deep,copied_tree);for(int depth=0;depth<30;depth++)wcscat(deep,L"\\n");wcscat(deep,L"\\leaf.txt");assert(GetFileAttributesW(deep)!=INVALID_FILE_ATTRIBUTES);assert(ssh_client_delete(client,L"/tree",&result));
     assert(ssh_client_exec(client,L"/",L"fail",&result)&&result.exit_code==7&&strstr(result.output,"fixture error"));ssh_result_dispose(&result);
     assert(ssh_client_exec(client,L"/",L"large",&result)&&result.output_truncated&&result.output_length==SSH_OUTPUT_CAP-1);ssh_result_dispose(&result);
+    assert(ssh_client_terminal_open(client,L"/中文 ' $(x)",80,24,&result));terminal_expect(client,"fixture terminal");terminal_write(client,"pwd\r");terminal_expect(client,"/\xe4\xb8\xad\xe6\x96\x87 ' $(x)");
+    terminal_write(client,"cd /persistent\r");terminal_expect(client,"$ ");terminal_write(client,"pwd\r");terminal_expect(client,"/persistent");
+    assert(ssh_client_terminal_resize(client,101,37,&result));terminal_write(client,"size\r");terminal_expect(client,"101 37");terminal_write(client,"\x03");terminal_expect(client,"^C");terminal_write(client,"utf8\r");terminal_expect(client,"\xe4\xb8\xad\xe6\x96\x87");
+    assert(ssh_client_list(client,L"/",&result));ssh_result_dispose(&result);terminal_write(client,"pwd\r");terminal_expect(client,"/persistent");
+    terminal_write(client,"exit7\r");BOOL terminal_ended=FALSE;ULONGLONG terminal_until=GetTickCount64()+5000;while(!terminal_ended&&GetTickCount64()<terminal_until){char bytes[4096];size_t received;assert(ssh_client_terminal_read(client,bytes,sizeof(bytes),&received,&terminal_ended,&result));Sleep(5);}assert(terminal_ended&&result.exit_code==7);
+    SshClient *denied=ssh_client_connect(login,cancel,&result);assert(denied);assert(!ssh_client_terminal_open(denied,L"/",499,24,&result)&&result.code==1&&result.phase==SSH_PHASE_COMMAND);ssh_client_close(denied);ssh_result_dispose(&result);
     assert(ssh_client_delete(client,L"/中文 ' $(x)",&result));assert(!ssh_client_delete(client,L"/",&result));ssh_result_dispose(&result);
     CancelRun run={client,{0},L"wait"};HANDLE thread=CreateThread(NULL,0,run_cancel,&run,0,NULL);assert(thread);Sleep(150);SetEvent(cancel);assert(WaitForSingleObject(thread,5000)==WAIT_OBJECT_0&&run.result.code==3);CloseHandle(thread);ssh_result_dispose(&run.result);ssh_client_close(client);ResetEvent(cancel);
     login->fingerprint[0]=login->fingerprint[0]=='0'?'1':'0';assert(!ssh_client_connect(login,cancel,&result)&&result.code==1);ssh_result_dispose(&result);

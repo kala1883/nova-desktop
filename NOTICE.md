@@ -19,6 +19,9 @@ material changes and avoid misleading users about their origin.
 - libssh2 1.11.1 (BSD-3-Clause) is vendored and statically linked. OpenSSL
   libcrypto (Apache-2.0) is statically linked from the build toolchain. Complete
   redistribution licenses are in `THIRD_PARTY_NOTICES.txt`, included in packages.
+- libvterm 0.3.3 (MIT) is vendored and statically linked for the native SSH
+  terminal. Provenance and hashes are in `third_party/libvterm/README.md`;
+  its license and the wcwidth notice are also included in packages.
 - Windows, Win32, PowerShell, and related product names are trademarks of
   Microsoft Corporation. NOVA Desktop is not affiliated with or endorsed by
   Microsoft.

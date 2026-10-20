@@ -32,6 +32,9 @@ static void test_pane_modes(Pane *p,const wchar_t *local_directory){
     int local_runs=fm.command_runs;fm.test_mode=TRUE;
     assert(add_tab(p,L"nova-ssh:123:/Case sensitive"));Tab *remote=current(p);assert(remote->remote&&remote->host&&!remote->browser);
     assert(!run_command(remote,L"echo must-never-run-locally")&&fm.command_runs==local_runs);
+    BYTE old_keys[256],keys[256]={0};GetKeyboardState(old_keys);keys[VK_CONTROL]=keys[VK_SHIFT]=0x80;SetKeyboardState(keys);
+    MSG toggle={p->address,WM_KEYDOWN,'T',0,0,{0,0}};assert(file_manager_message(&toggle));HWND terminal=FindWindowExW(remote->host,NULL,L"NovaSshTerminal",NULL);assert(terminal&&GetPropW(GetDlgItem(remote->host,5211),L"NovaSelected"));
+    keys[VK_SHIFT]=0;SetKeyboardState(keys);int tabs_before=p->count;MSG shell_key={terminal,WM_KEYDOWN,'W',0,0,{0,0}};assert(file_manager_message(&shell_key)&&p->count==tabs_before);SetKeyboardState(old_keys);SendMessageW(remote->host,WM_COMMAND,5210,0);
     lstrcpyW(remote->location,L"nova-ssh:123:/Case sensitive");record_history(remote);lstrcpyW(remote->location,L"nova-ssh:123:/case sensitive");record_history(remote);assert(remote->history_count==2);
     fm.server_picker=pick_test_server;fm.server_connector=connect_test_server;
     int original_tabs=p->count;command(p,C_PANE_SERVER);assert(p->server_mode&&!fm.panes[1].server_mode&&current(p)==remote);

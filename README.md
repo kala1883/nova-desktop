@@ -265,8 +265,23 @@ without using Windows presets. Each command gets a new non-interactive `sh`, wit
 no previous `cd` or environment changes. Completion shows the target, directory,
 exit code and at most the final 64 KiB of output. Cancel stops waiting and does
 not guarantee the remote process stopped. Disconnects may leave unknown outcomes;
-writes and commands are never automatically retried. Interactive terminals are
-not yet supported.
+writes and commands are never automatically retried.
+
+Choose **Terminal** in a remote tab, or press `Ctrl+Shift+T`, to replace the file
+list with an interactive SSH terminal. It starts your server's shell in the
+folder currently shown by the file view. The server must allow PTY allocation
+and provide `stty`. The same shell retains `cd`, environment variables and
+command history when switching back to **Files** or another tab. File navigation
+and the running shell's directory remain independent after startup. ANSI colors,
+UTF-8, Tab completion, arrow keys, Ctrl+C and alternate screens are supported.
+While the terminal has focus, its keyboard shortcuts go to the server; use the
+view buttons or `Ctrl+Shift+T` to return to file operations. Drag to select text;
+`Ctrl+Shift+C` copies the selection (or visible screen), and `Ctrl+Shift+V` /
+`Shift+Insert` pastes up to 8192 characters. Mouse wheel and the scrollbar browse
+up to 1000 retained lines. Resizing updates the remote PTY. Closing, disconnecting,
+exiting the shell or changing interface language ends the session; use **Connect**
+to reopen it. Sessions and terminal contents are not saved or replayed at startup.
+The terminal uses statically linked libvterm; it needs no local terminal process.
 
 Single-item selection, context menus, Ctrl+C/X/V, F2, Delete and Ctrl+Shift+N work
 remotely. Copy regular files or move files/directories within the same server.
@@ -280,7 +295,7 @@ Deletion requires permanent-delete confirmation, never uses the Windows Recycle
 Bin, and does not follow symlinks. Failures may partially complete directory
 operations; refresh to check. Listings are bounded at 10000 entries; recursion at
 32 levels/10000 items. Limits produce errors rather than truncated views. Network
-waits are normally 30 seconds; command waits at most 30 minutes. DNS resolution
+waits are normally 30 seconds; one-shot command waits at most 30 minutes; interactive terminals have no idle deadline. DNS resolution
 and cancellation delays are also subject to the Windows networking stack.
 Remote paths allow up to 2007 UTF-16 code units; local transfer/key paths up to 259 characters.
 

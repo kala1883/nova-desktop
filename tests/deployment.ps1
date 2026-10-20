@@ -46,6 +46,8 @@ try {
     Set-Content -LiteralPath (Join-Path $fixtureRepo 'third_party\sqlite\sqlite3.c') -Value '/* fixture */' -Encoding ASCII
     New-Item -ItemType Directory -Path (Join-Path $fixtureRepo 'third_party/libssh2/src'), (Join-Path $fixtureRepo 'third_party/libssh2/include') -Force | Out-Null
     Set-Content -LiteralPath (Join-Path $fixtureRepo 'third_party/libssh2/src/fixture.c') -Value '/* fixture */' -Encoding ASCII
+    New-Item -ItemType Directory -Path (Join-Path $fixtureRepo 'third_party/libvterm/src'), (Join-Path $fixtureRepo 'third_party/libvterm/include') -Force | Out-Null
+    Set-Content -LiteralPath (Join-Path $fixtureRepo 'third_party/libvterm/src/fixture.c') -Value '/* fixture */' -Encoding ASCII
     $stubSource = Join-Path $fixtureRoot 'compiler.c'
     @'
 #include <stdio.h>

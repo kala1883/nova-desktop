@@ -6,3 +6,9 @@
 *.bat text eol=crlf
 *.ico binary
 *.png binary
+
+# Preserve upstream libvterm bytes, including existing end-of-line spaces.
+# Keep every other whitespace check, and all first-party checks, enabled.
+third_party/libvterm/include/vterm_keycodes.h whitespace=-blank-at-eol
+third_party/libvterm/src/parser.c whitespace=-blank-at-eol
+third_party/libvterm/src/unicode.c whitespace=-blank-at-eol

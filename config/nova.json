@@ -313,7 +313,7 @@
       "scope": "files",
       "section": "Pane0",
       "key": "Count",
-      "value": "9"
+      "value": "5"
     },
     {
       "scope": "files",
@@ -337,37 +337,37 @@
       "scope": "files",
       "section": "Pane0",
       "key": "Tab3",
-      "value": "D:\\MyWork\\YanchengUrbanOperationCockpit\\@项目管理\\合同&采购&请款付款\\采购"
-    },
-    {
-      "scope": "files",
-      "section": "Pane0",
-      "key": "Tab4",
       "value": "D:\\MyWork\\YanchengUrbanOperationCockpit\\@项目管理\\重要信息&项目管理&运营&运维\\@外审\\20260731外审意见整改\\附件\\4数据保密协议"
     },
     {
       "scope": "files",
       "section": "Pane0",
-      "key": "Tab5",
+      "key": "Tab4",
       "value": "D:\\MyWork\\YanchengUrbanOperationCockpit\\@项目管理\\重要信息&项目管理&运营&运维\\@外审\\20260731外审意见整改\\附件\\运维巡检2604-10"
     },
     {
       "scope": "files",
       "section": "Pane0",
+      "key": "Tab5",
+      "value": "nova-ssh:2221145730825772895:/"
+    },
+    {
+      "scope": "files",
+      "section": "Pane0",
       "key": "Tab6",
-      "value": "D:\\MyWork\\YanchengUrbanOperationCockpit\\@项目管理\\合同&采购&请款付款\\请款\\03-终验"
+      "value": "nova-ssh:2221145730825772895:/"
     },
     {
       "scope": "files",
       "section": "Pane0",
       "key": "Tab7",
-      "value": "D:\\MyWork\\haikoumaas\\3项目交付管理\\20260713深化响应设计"
+      "value": "nova-ssh:6643498456803929125:/home/ubuntu"
     },
     {
       "scope": "files",
       "section": "Pane0",
       "key": "Tab8",
-      "value": "D:\\MyWork\\YanchengUrbanOperationCockpit\\@项目管理\\重要信息&项目管理&运营&运维\\@运维"
+      "value": "nova-ssh:6643498456803929125:/home/ubuntu"
     },
     {
       "scope": "files",
@@ -427,19 +427,19 @@
       "scope": "files",
       "section": "Pane2",
       "key": "Tab0",
-      "value": "D:\\MyProjects\\MyApps\\LearningApp"
+      "value": "nova-ssh:6643498456803929125:/home/ubuntu"
     },
     {
       "scope": "files",
       "section": "Pane2",
       "key": "Tab1",
-      "value": "D:\\MyProjects\\MyApps\\TransportModelingAgent"
+      "value": "nova-ssh:2221145730825772895:/"
     },
     {
       "scope": "files",
       "section": "Pane2",
       "key": "Tab2",
-      "value": "D:\\MyProjects\\MyApps\\maas\\business_service"
+      "value": "D:\\MyProjects\\MyApps\\LearningApp"
     },
     {
       "scope": "files",
@@ -463,13 +463,13 @@
       "scope": "files",
       "section": "Pane2",
       "key": "Tab6",
-      "value": "D:\\MyProjects\\MyApps\\TransportDataAgent"
+      "value": "D:\\MyProjects\\MyApps\\mydesktop"
     },
     {
       "scope": "files",
       "section": "Pane2",
       "key": "Tab7",
-      "value": "D:\\MyProjects\\MyApps\\LocalWebGPT"
+      "value": "D:\\MyProjects\\MyApps\\TransportDataAgent\\workspace\\tasks\\地铁刷卡数据分析任务归档\\20261012_metro_2025_monthly_ridership\\run"
     },
     {
       "scope": "files",
@@ -512,6 +512,90 @@
       "section": "Pane3",
       "key": "Tab4",
       "value": "D:\\MyProjects\\MyApps\\TransportDataAgent\\systems"
+    },
+    {
+      "scope": "ssh_servers",
+      "section": "Server0",
+      "key": "Directory",
+      "value": "/home/ubuntu"
+    },
+    {
+      "scope": "ssh_servers",
+      "section": "Server0",
+      "key": "Host",
+      "value": "111.231.56.235"
+    },
+    {
+      "scope": "ssh_servers",
+      "section": "Server0",
+      "key": "Id",
+      "value": "6643498456803929125"
+    },
+    {
+      "scope": "ssh_servers",
+      "section": "Server0",
+      "key": "Name",
+      "value": "Server 1"
+    },
+    {
+      "scope": "ssh_servers",
+      "section": "Server0",
+      "key": "Port",
+      "value": "22"
+    },
+    {
+      "scope": "ssh_servers",
+      "section": "Server0",
+      "key": "User",
+      "value": "ubuntu"
+    },
+    {
+      "scope": "ssh_servers",
+      "section": "Server1",
+      "key": "Directory",
+      "value": "/"
+    },
+    {
+      "scope": "ssh_servers",
+      "section": "Server1",
+      "key": "Host",
+      "value": "113.44.176.155"
+    },
+    {
+      "scope": "ssh_servers",
+      "section": "Server1",
+      "key": "Id",
+      "value": "2221145730825772895"
+    },
+    {
+      "scope": "ssh_servers",
+      "section": "Server1",
+      "key": "Name",
+      "value": "Server 2"
+    },
+    {
+      "scope": "ssh_servers",
+      "section": "Server1",
+      "key": "Port",
+      "value": "22"
+    },
+    {
+      "scope": "ssh_servers",
+      "section": "Server1",
+      "key": "User",
+      "value": "root"
+    },
+    {
+      "scope": "ssh_servers",
+      "section": "Servers",
+      "key": "Count",
+      "value": "2"
+    },
+    {
+      "scope": "ssh_servers",
+      "section": "Servers",
+      "key": "Version",
+      "value": "1"
     }
   ],
   "workspaces": [

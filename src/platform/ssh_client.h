@@ -35,5 +35,11 @@ BOOL ssh_client_delete(SshClient *client,const wchar_t *path,SshResult *result);
 BOOL ssh_client_transfer(SshClient *client,BOOL upload,const wchar_t *local,const wchar_t *remote,SshResult *result);
 BOOL ssh_client_copy(SshClient *client,const wchar_t *from,const wchar_t *to,SshResult *result);
 BOOL ssh_client_exec(SshClient *client,const wchar_t *directory,const wchar_t *command,SshResult *result);
+/* Called only by the connection's owning worker. read/write never wait for input. */
+BOOL ssh_client_terminal_open(SshClient *client,const wchar_t *directory,int columns,int rows,SshResult *result);
+BOOL ssh_client_terminal_read(SshClient *client,char *data,size_t capacity,size_t *length,BOOL *ended,SshResult *result);
+BOOL ssh_client_terminal_write(SshClient *client,const char *data,size_t length,size_t *written,SshResult *result);
+BOOL ssh_client_terminal_resize(SshClient *client,int columns,int rows,SshResult *result);
+DWORD ssh_client_terminal_wait(SshClient *client,HANDLE request,HANDLE input,DWORD timeout);
 void ssh_result_dispose(SshResult *result);
 #endif

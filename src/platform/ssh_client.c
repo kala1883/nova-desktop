@@ -14,7 +14,7 @@
 #include "ssh_client.h"
 #include "../i18n.h"
 
-struct SshClient { SOCKET socket; LIBSSH2_SESSION *session; LIBSSH2_SFTP *sftp; HANDLE cancel; ULONGLONG deadline,last_progress; int visited,native_error; SshPhase phase;SshProgress progress;void *progress_context; };
+struct SshClient { SOCKET socket; LIBSSH2_SESSION *session; LIBSSH2_SFTP *sftp; LIBSSH2_CHANNEL *terminal; WSAEVENT terminal_event; HANDLE cancel; ULONGLONG deadline,last_progress; int visited,native_error; SshPhase phase;SshProgress progress;void *progress_context; };
 const wchar_t *ssh_phase_name(SshPhase phase){
     switch(phase){
     case SSH_PHASE_RESOLVE:return nova_text(L"解析主机地址",L"Resolve host address");
@@ -152,6 +152,8 @@ void ssh_client_close(SshClient *c){
     if(!c)return;
     /* Closing the socket makes nonblocking cleanup finite, including error paths. */
     if(c->socket!=INVALID_SOCKET){shutdown(c->socket,SD_BOTH);closesocket(c->socket);c->socket=INVALID_SOCKET;}
+    if(c->terminal_event)WSACloseEvent(c->terminal_event);
+    if(c->terminal)libssh2_channel_free(c->terminal);
     if(c->sftp)libssh2_sftp_shutdown(c->sftp);
     if(c->session)libssh2_session_free(c->session);
     free(c);
@@ -296,5 +298,63 @@ BOOL ssh_client_exec(SshClient *c,const wchar_t *directory,const wchar_t *comman
     if(ok){RETRY(c,rc,libssh2_channel_close(channel));ok=!rc;if(ok){r->exit_code=libssh2_channel_get_exit_status(channel);char *signal=NULL;if(!libssh2_channel_get_exit_signal(channel,&signal,NULL,NULL,NULL,NULL,NULL)&&signal){r->exit_code=255;libssh2_free(c->session,signal);}}}
     if(!ok){failed(c,r,nova_text(L"远程命令（不自动重试）",L"Remote command (never retried automatically)"));}
     RETRY(c,rc,libssh2_channel_free(channel));return ok;
+}
+BOOL ssh_client_terminal_open(SshClient *c,const wchar_t *directory,int columns,int rows,SshResult *r){
+    begin(c);c->phase=SSH_PHASE_COMMAND;
+    if(c->terminal||columns<2||columns>500||rows<2||rows>200)return failed(c,r,nova_text(L"终端尺寸或状态无效",L"Invalid terminal size or state"));
+    char path[SSH_PATH_CAP*4];if(!path_bytes(c,directory,path,r))return FALSE;
+    size_t capacity=strlen(path)*5+2;char *payload=malloc(capacity);
+    if(!payload||!ssh_directory_payload((unsigned char*)path,strlen(path),payload,capacity)){free(payload);return failed(c,r,nova_text(L"准备终端目录",L"Prepare terminal directory"));}
+    LIBSSH2_CHANNEL *channel;
+    do{channel=libssh2_channel_open_session(c->session);}while(!channel&&libssh2_session_last_errno(c->session)==LIBSSH2_ERROR_EAGAIN&&waiting(c));
+    if(!channel){free(payload);return failed(c,r,nova_text(L"打开终端通道",L"Open terminal channel"));}
+    /* RFC 4254: ICANON=51, ECHO=53. Disable both until the data-only directory
+       frame is consumed: long paths must not hit the PTY canonical line limit,
+       and neither paths nor terminal input may be echoed during bootstrap. */
+    static const char modes[]={51,0,0,0,0,53,0,0,0,0,0};
+    int rc;RETRY(c,rc,libssh2_channel_request_pty_ex(channel,"xterm-256color",14,modes,sizeof(modes),columns,rows,0,0));
+    static const char bootstrap[]="sh -c 'IFS= read -r nova_dir || exit 125; nova_dir=$(printf \"%b_\" \"$nova_dir\") || exit 125; nova_dir=${nova_dir%_}; CDPATH= cd \"$nova_dir\" || exit 125; stty sane || exit 125; exec \"${SHELL:-/bin/sh}\" -i'";
+    BOOL ok=rc==0;
+    if(ok){RETRY(c,rc,libssh2_channel_exec(channel,bootstrap));ok=rc==0;}
+    if(ok)ok=channel_write(c,channel,payload,strlen(payload));
+    free(payload);
+    if(!ok){failed(c,r,nova_text(L"启动交互终端",L"Start interactive terminal"));/* Failed partial channels are freed with their session. */c->terminal=channel;return FALSE;}
+    c->terminal=channel;c->terminal_event=WSACreateEvent();
+    if(!c->terminal_event||WSAEventSelect(c->socket,c->terminal_event,FD_READ|FD_WRITE|FD_CLOSE)){c->native_error=WSAGetLastError();return failed(c,r,nova_text(L"监听终端连接",L"Watch terminal connection"));}
+    return TRUE;
+}
+BOOL ssh_client_terminal_read(SshClient *c,char *data,size_t capacity,size_t *length,BOOL *ended,SshResult *r){
+    *length=0;*ended=FALSE;begin(c);c->phase=SSH_PHASE_COMMAND;
+    if(WaitForSingleObject(c->cancel,0)==WAIT_OBJECT_0)return failed(c,r,nova_text(L"终端已取消",L"Terminal cancelled"));
+    if(!c->terminal)return failed(c,r,nova_text(L"终端未启动",L"Terminal is not running"));
+    for(int stream=0;stream<2;stream++){
+        ssize_t n=libssh2_channel_read_ex(c->terminal,stream,data,capacity);
+        if(n>0){*length=(size_t)n;return TRUE;}
+        if(n<0&&n!=LIBSSH2_ERROR_EAGAIN)return failed(c,r,nova_text(L"读取终端",L"Read terminal"));
+    }
+    if(libssh2_channel_eof(c->terminal)){
+        int rc=libssh2_channel_wait_closed(c->terminal);if(rc==LIBSSH2_ERROR_EAGAIN)return TRUE;
+        if(rc<0)return failed(c,r,nova_text(L"等待终端退出",L"Wait for terminal exit"));
+        *ended=TRUE;r->exit_code=libssh2_channel_get_exit_status(c->terminal);
+    }
+    return TRUE;
+}
+BOOL ssh_client_terminal_write(SshClient *c,const char *data,size_t length,size_t *written,SshResult *r){
+    *written=0;begin(c);c->phase=SSH_PHASE_COMMAND;
+    if(!c->terminal)return failed(c,r,nova_text(L"终端未启动",L"Terminal is not running"));
+    ssize_t n=libssh2_channel_write(c->terminal,data,length);
+    if(n==LIBSSH2_ERROR_EAGAIN)return TRUE;
+    if(n<0)return failed(c,r,nova_text(L"发送终端输入",L"Send terminal input"));
+    *written=(size_t)n;return TRUE;
+}
+BOOL ssh_client_terminal_resize(SshClient *c,int columns,int rows,SshResult *r){
+    begin(c);c->phase=SSH_PHASE_COMMAND;
+    if(!c->terminal||columns<2||columns>500||rows<2||rows>200)return failed(c,r,nova_text(L"终端尺寸无效",L"Invalid terminal size"));
+    int rc;RETRY(c,rc,libssh2_channel_request_pty_size(c->terminal,columns,rows));
+    return rc==0||failed(c,r,nova_text(L"调整终端尺寸",L"Resize terminal"));
+}
+DWORD ssh_client_terminal_wait(SshClient *c,HANDLE request,HANDLE input,DWORD timeout){
+    HANDLE events[]={request,input,c->cancel,c->terminal_event};DWORD wake=WaitForMultipleObjects(4,events,FALSE,timeout);
+    if(wake==WAIT_OBJECT_0+3){WSANETWORKEVENTS network;WSAEnumNetworkEvents(c->socket,c->terminal_event,&network);}return wake;
 }
 void ssh_result_dispose(SshResult *r){if(!r)return;free(r->entries);free(r->output);ZeroMemory(r,sizeof(*r));}
