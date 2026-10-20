@@ -91,18 +91,11 @@
       "scope": "batch_tasks",
       "section": "Task1",
       "key": "Directory1",
-      "value": "D:\\MyProjects\\MyApps\\mydesktop"
-    },
-    {
-      "scope": "batch_tasks",
-      "section": "Task1",
-      "key": "Directory1",
       "value": "D:\\MyProjects\\MyApps\\transportandai"
     },
     {
       "scope": "batch_tasks",
       "section": "Task1",
-      "key": "Directory2",
       "key": "Directory2",
       "value": "D:\\MyProjects\\MyApps\\sleeping"
     },
@@ -110,25 +103,11 @@
       "scope": "batch_tasks",
       "section": "Task1",
       "key": "Directory3",
-      "key": "Directory3",
       "value": "D:\\MyProjects\\MyApps\\LearningApp"
     },
     {
       "scope": "batch_tasks",
       "section": "Task1",
-      "key": "Directory4",
-      "value": "D:\\MyProjects\\MyApps\\TransportDataAgent"
-    },
-    {
-      "scope": "batch_tasks",
-      "section": "Task1",
-      "key": "Directory5",
-      "value": "D:\\MyProjects\\MyApps\\TransportModelingAgent"
-    },
-    {
-      "scope": "batch_tasks",
-      "section": "Task1",
-      "key": "Directory6",
       "key": "Directory4",
       "value": "D:\\MyProjects\\MyApps\\mygomuku"
     },
@@ -148,13 +127,11 @@
       "scope": "batch_tasks",
       "section": "Task1",
       "key": "Directory7",
-      "key": "Directory7",
       "value": "D:\\MyProjects\\MyApps\\mylocalllm"
     },
     {
       "scope": "batch_tasks",
       "section": "Task1",
-      "key": "Directory8",
       "key": "Directory8",
       "value": "D:\\MyProjects\\MyApps\\LocalWebGPT"
     },
@@ -163,14 +140,11 @@
       "section": "Task1",
       "key": "Directory9",
       "value": "D:\\MyProjects\\MyApps\\3dhuman"
-      "key": "Directory9",
-      "value": "D:\\MyProjects\\MyApps\\3dhuman"
     },
     {
       "scope": "batch_tasks",
       "section": "Task1",
       "key": "DirectoryCount",
-      "value": "10"
       "value": "10"
     },
     {
@@ -232,24 +206,6 @@
       "section": "Task1",
       "key": "StepCommand6",
       "value": "git pull origin main"
-    },
-    {
-      "scope": "batch_tasks",
-      "section": "Task1",
-      "key": "StepCommand7",
-      "value": "git pull origin main"
-    },
-    {
-      "scope": "batch_tasks",
-      "section": "Task1",
-      "key": "StepCommand8",
-      "value": "git pull origin main"
-    },
-    {
-      "scope": "batch_tasks",
-      "section": "Task1",
-      "key": "StepCommand9",
-      "value": ".\\拉取.cmd"
     },
     {
       "scope": "batch_tasks",
@@ -369,7 +325,7 @@
       "scope": "files",
       "section": "Pane0",
       "key": "Tab1",
-      "value": "D:\\MyDocuments\\1个人信息资料\\2毕业证学位证"
+      "value": "D:\\MyWork\\others\\工资奖金\\@报销\\1未报销\\2026.10.09-AI token"
     },
     {
       "scope": "files",
@@ -423,7 +379,7 @@
       "scope": "files",
       "section": "Pane1",
       "key": "Tab0",
-      "value": "D:\\"
+      "value": "D:\\MyWork\\haikoumaas\\3项目交付管理\\20260929海口投标"
     },
     {
       "scope": "files",
@@ -478,7 +434,6 @@
       "section": "Pane2",
       "key": "Tab1",
       "value": "D:\\MyProjects\\MyApps\\TransportModelingAgent"
-      "value": "D:\\MyProjects\\MyApps\\TransportModelingAgent"
     },
     {
       "scope": "files",
@@ -490,7 +445,7 @@
       "scope": "files",
       "section": "Pane2",
       "key": "Tab3",
-      "value": "D:\\MyProjects\\MyApps\\3dhuman"
+      "value": "D:\\MyProjects\\MyApps\\sleeping"
     },
     {
       "scope": "files",
@@ -503,13 +458,12 @@
       "section": "Pane2",
       "key": "Tab5",
       "value": "D:\\MyProjects\\MyApps\\transportandai"
-      "value": "D:\\MyProjects\\MyApps\\transportandai"
     },
     {
       "scope": "files",
       "section": "Pane2",
       "key": "Tab6",
-      "value": "D:\\MyProjects\\MyApps\\TransportDataAgent\\mydesktop"
+      "value": "D:\\MyProjects\\MyApps\\TransportDataAgent"
     },
     {
       "scope": "files",
@@ -528,13 +482,11 @@
       "section": "Pane3",
       "key": "Count",
       "value": "4"
-      "value": "4"
     },
     {
       "scope": "files",
       "section": "Pane3",
       "key": "Tab0",
-      "value": "D:\\MyLife\\myhealth"
       "value": "D:\\MyLife\\myhealth"
     },
     {
@@ -684,38 +636,9 @@
       "target": "C:\\Users\\mj\\AppData\\Roaming\\Microsoft\\Windows\\Start Menu\\Programs\\Telegram Desktop\\Telegram.lnk"
     },
     {
-      "id": "6580304493495951618",
-      "workspace_id": "6969818039083397288",
-      "position": 4,
-      "name": "Google Chrome",
-      "target": "C:\\ProgramData\\Microsoft\\Windows\\Start Menu\\Programs\\Google Chrome.lnk"
-    },
-    {
-      "id": "6914680770371065798",
-      "workspace_id": "6969818039083397288",
-      "position": 5,
-      "name": "有道云笔记",
-      "target": "C:\\ProgramData\\Microsoft\\Windows\\Start Menu\\Programs\\有道云笔记.lnk"
-    },
-    {
-      "id": "4375655893897816085",
-      "workspace_id": "6969818039083397288",
-      "position": 6,
-      "name": "Codex",
-      "target": "C:\\Users\\Administrator\\Desktop\\Codex.lnk"
-    },
-    {
-      "id": "3558839495169918222",
-      "workspace_id": "6969818039083397288",
-      "position": 7,
-      "name": "百度网盘",
-      "target": "C:\\Users\\Administrator\\Desktop\\百度网盘.lnk"
-    },
-    {
       "id": "3569885870074066773",
       "workspace_id": "6969818039083397288",
       "position": 10,
-      "position": 8,
       "name": "PowerPoint",
       "target": "C:\\ProgramData\\Microsoft\\Windows\\Start Menu\\Programs\\PowerPoint.lnk"
     },
@@ -723,12 +646,11 @@
       "id": "5550529118529490085",
       "workspace_id": "6969818039083397288",
       "position": 11,
-      "position": 9,
       "name": "Word",
       "target": "C:\\ProgramData\\Microsoft\\Windows\\Start Menu\\Programs\\Word.lnk"
     },
     {
-      "id": "1249931362877143957",
+      "id": "225502693743477985",
       "workspace_id": "6969818039083397288",
       "position": 12,
       "name": "Docker Desktop",
@@ -738,38 +660,15 @@
       "id": "3630829652492954164",
       "workspace_id": "6969818039083397288",
       "position": 13,
-      "position": 10,
       "name": "ToDesk",
       "target": "C:\\ProgramData\\Microsoft\\Windows\\Start Menu\\Programs\\ToDesk\\ToDesk.lnk"
     },
     {
-      "id": "5633617172492545708",
+      "id": "6045670457429403639",
       "workspace_id": "6969818039083397288",
       "position": 14,
-      "position": 11,
       "name": "GameViewer",
-      "target": "D:\\programfiles1\\GameViewer\\GameViewer.lnk"
-    },
-    {
-      "id": "3257815740895167368",
-      "workspace_id": "6969818039083397288",
-      "position": 12,
-      "name": "QQ音乐",
-      "target": "C:\\ProgramData\\Microsoft\\Windows\\Start Menu\\Programs\\腾讯软件\\QQ音乐\\QQ音乐.lnk"
-    },
-    {
-      "id": "1895324448016155694",
-      "workspace_id": "6969818039083397288",
-      "position": 13,
-      "name": "Docker Desktop",
-      "target": "C:\\ProgramData\\Microsoft\\Windows\\Start Menu\\Docker Desktop.lnk"
-    },
-    {
-      "id": "8004621553570496260",
-      "workspace_id": "6969818039083397288",
-      "position": 14,
-      "name": "LocalSend",
-      "target": "C:\\ProgramData\\Microsoft\\Windows\\Start Menu\\Programs\\LocalSend.lnk"
+      "target": "D:\\programfiles3\\GameViewer\\GameViewer.exe"
     },
     {
       "id": "2122695343368922213",
