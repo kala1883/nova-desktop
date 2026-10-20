@@ -102,6 +102,48 @@ UI 依赖 controller 与 core 的只读视图；controller 依赖 core 和平台
 
 ## 本轮已实施与后续顺序
 
+### 已实施：原生 SSH/SFTP
+
+- `core/server_profile.[ch]` 是不依赖 Win32 的连接、稳定 ID、远程地址和路径规则。
+  `ssh_servers` scope Version=1 通过 JSON 事务整体保存最多 16 条配置；启动时拒绝
+  缺失/超限字段、未知版本、重复名称/ID、无效端口。标签保存 `nova-ssh:<id>:/path`，
+  远程路径区分大小写，恢复时保持断开。
+- `platform/ssh_client.[ch]` 封装 libssh2/OpenSSL、Winsock、SFTP 与 exec。
+  libssh2 1.11.1 保持 upstream 原样，OpenSSL 静态开发库来自构建工具链，许可证随包发布。
+  协商排除旧 RSA-SHA1、弱 KEX 和 SHA1 MAC。RSA-SHA1 解析代码仍编译，因为 upstream
+  1.11.1 需要它解析 RSA 公钥 blob；不代表允许协商旧签名。
+- `ui/ssh_view.[ch]` 拥有连接对话框、远程 ListView 和命令/输出区域。file_manager
+  本地 Tab 继续持有 IExplorerBrowser，远程 Tab 持有独立原生子窗口，共用导航与保存。
+  远程命令绝不回退到本机执行。本地 Shell 操作不变。
+  每个 Pane 独立持有 ServerMode，只决定新标签的选择流程，不改变已有 Tab 的类型和
+  命令目标。服务器模式由原生菜单选择稳定服务器 ID，再认证并创建标签；取消或满容量
+  不创建视图/连接。本地模式从此窗格已有的本地目录创建标签，没有时使用用户目录。
+  `files/PaneN/ServerMode` 作为 0/1 本机偏好写入 local.json，并纳入加载边界校验，
+  不改变共享目录数据；旧配置缺省为本地模式，恢复模式不会发起连接。
+- 每个使用网络的远程标签按需拥有一个工作线程，整个文件管理器最多 4 个，且每标签
+  同时仅一个请求。这是明确的 SSH 并发子系统；UI 所有权仍在主线程。UI 提交不可变
+  请求，线程独占 socket/session/SFTP，完成消息交回有界结果，节流消息报告传输进度。
+  关闭时取消、唤醒并 join 线程，再释放结果、事件、窗口及运行库引用，无 TerminateThread。
+  同步 DNS 解析的取消延迟仍受 Windows 影响。
+- 密码/口令只在内存中存在，认证完成或取消后清除；私钥经有界 Unicode Win32 API
+  读取后调用 from-memory 认证。指纹由用户核验后按主机/端口存入 Windows 凭据管理器，
+  变化时拒绝连接。共享 JSON 不含密码、口令、私钥路径或信任记录。测试不写真实凭据库。
+  连接错误带明确阶段和原始 Windows/SSH/SFTP 错误码；输出区保留完整可复制详情，
+  连接失败弹出提示。私钥载入区分公钥、PPK、UTF-16 与支持的私钥，不修改用户密钥。
+- exec request 为固定 POSIX bootstrap；目录以单独的八进制 stdin 行传输，随后是用户
+  明确输入的脚本。路径不拼入 Shell 字符串，哨兵保留末尾换行。无 PTY，发送脚本后 EOF；
+  持续排空 stdout/stderr，保留最多末尾 64 KiB，显示截断与退出码。取消、超时、断线
+  不承诺杀死远端进程，也不自动重试写操作或命令。
+- 文件操作使用 SFTP，不解析 `ls`、不拼接 `rm`/`cp` 命令。永久删除需确认，递归不跟随
+  符号链接。传输只创建不存在的目标，失败仅清理本次新建单文件，目录可能部分完成并报错。
+  列表上限 10000，递归 32 层/10000 项；拒绝截断、非法 UTF-8、不安全的 Windows 名称、
+  symlink/reparse 递归。首版单项选择，远程目录移动使用 rename，远程复制限普通文件。
+  跨服务器复制和交互终端留待后续。
+
+`test-ssh.bat` 验证规则和事务；`tests/ssh_fixture.py` 以临时目录/密钥、仅监听
+127.0.0.1 的 Paramiko 服务器验证实际协议及命令 stdin 帧，不连接用户服务器。
+`test-files.bat` 验证远程视图隔离和禁止本地命令回退。
+
 已实施：workspace 数据结构与移动规则、launch_queue 队列快照、batch_task 有界目录规则、batch_runner 通用命令与顺序/并行调度、无快捷方式叠加的图标读取、hold_drag 长按交互，均独立编译；新增模块测试不启动真实应用。UI 仍由 main.c 编排，旧持久化/注册表代码尚未迁走。
 
 下一步按风险顺序：

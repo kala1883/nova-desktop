@@ -53,7 +53,7 @@ static BOOL validate_preferences(void){
        !validate_number(L"files",L"Manager",L"Migrated",0,1)||!validate_number(L"files",L"Manager",L"FavoriteCount",0,32))return FALSE;
     for(int i=0;i<4;i++){
         wchar_t section[32];swprintf(section,32,L"Pane%d",i);
-        if(!validate_number(L"files",section,L"Count",1,12)||!validate_number(L"files",section,L"Selected",0,11)||
+        if(!validate_number(L"files",section,L"Count",1,12)||!validate_number(L"files",section,L"Selected",0,11)||!validate_number(L"files",section,L"ServerMode",0,1)||
            store_int(L"files",section,L"Selected",0)>=store_int(L"files",section,L"Count",1))return FALSE;
     }
     sqlite3_stmt *s=prepare("SELECT value FROM settings WHERE scope='files'");if(!s)return FALSE;
@@ -95,6 +95,7 @@ BOOL store_open_from(const wchar_t *directory,const wchar_t *legacy){
         if(ok&&batch){BatchTaskList *tasks=calloc(1,sizeof(*tasks));ok=tasks&&store_load_batch_tasks(tasks);free(tasks);}
         if(ok&&commands){FileCommandList presets;ok=store_load_file_commands(&presets);}
     }
+    if(ok){SshServers *servers=calloc(1,sizeof(*servers));ok=servers&&store_load_ssh_servers(servers);free(servers);}
     opening=FALSE;
     if(ok&&(imported||open_changed||split_needed))ok=store_begin()&&store_end(TRUE);
     if(!ok){if(!error_text[0])lstrcpyW(error_text,nova_text(L"配置无效，原文件未修改。",L"Invalid configuration. The original file was not changed."));store_close();return FALSE;}
@@ -362,3 +363,48 @@ BOOL store_load_file_commands(FileCommandList *commands){
 }
 
 BOOL store_backup(void){return db&&config_json_backup(root,error_text);}
+
+static BOOL ssh_read(const wchar_t *section,const wchar_t *key,wchar_t *value,int capacity){
+    sqlite3_stmt *s=prepare("SELECT value FROM settings WHERE scope='ssh_servers' AND section=? AND key=?");
+    if(!s)return FALSE;
+    bind_text(s,1,section);bind_text(s,2,key);int rc=sqlite3_step(s);BOOL ok=FALSE;
+    if(rc==SQLITE_ROW){const wchar_t *text=sqlite3_column_text16(s,0);int bytes=sqlite3_column_bytes16(s,0);
+        ok=text&&bytes>=0&&bytes<capacity*(int)sizeof(wchar_t)&&wcslen(text)==(size_t)bytes/sizeof(wchar_t);
+        if(ok)lstrcpyW(value,text);
+    }
+    sqlite3_finalize(s);return ok;
+}
+BOOL store_load_ssh_servers(SshServers *servers){
+    if(!servers)return FALSE;
+    sqlite3_stmt *s=prepare("SELECT count(*) FROM settings WHERE scope='ssh_servers'");
+    if(!s)return FALSE;
+    int rc=sqlite3_step(s),rows=rc==SQLITE_ROW?sqlite3_column_int(s,0):-1;sqlite3_finalize(s);
+    if(rows==0){ZeroMemory(servers,sizeof(*servers));return TRUE;}
+    SshServers *next=calloc(1,sizeof(*next));if(!next)return FALSE;
+    wchar_t text[64],*end;BOOL ok=ssh_read(L"Servers",L"Version",text,64)&&!lstrcmpW(text,L"1");
+    if(ok){ok=ssh_read(L"Servers",L"Count",text,64);long n=ok?wcstol(text,&end,10):-1;ok=ok&&text[0]&&!*end&&n>=0&&n<=SSH_SERVER_LIMIT;if(ok)next->count=(int)n;}
+    for(int i=0;i<next->count&&ok;i++){
+        wchar_t section[32];swprintf(section,32,L"Server%d",i);SshServer *server=&next->items[i];
+        ok=ssh_read(section,L"Id",text,64);errno=0;long long id=ok?wcstoll(text,&end,10):0;
+        ok=ok&&text[0]&&!*end&&!errno&&id>0;server->id=id;
+        if(ok){ok=ssh_read(section,L"Port",text,64);long port=ok?wcstol(text,&end,10):0;ok=ok&&text[0]&&!*end&&port>=1&&port<=65535;server->port=(int)port;}
+        ok=ok&&ssh_read(section,L"Name",server->name,SSH_NAME_CAP)&&ssh_read(section,L"Host",server->host,256)&&
+           ssh_read(section,L"User",server->user,128)&&ssh_read(section,L"Directory",server->directory,SSH_PATH_CAP);
+    }
+    ok=ok&&rows==2+next->count*6&&ssh_servers_valid(next);
+    if(ok)*servers=*next;
+    else lstrcpyW(error_text,nova_text(L"SSH 服务器配置损坏、超限或版本不受支持；原文件未修改。",L"SSH server settings are damaged, exceed limits, or use an unsupported version. The original file was not changed."));
+    free(next);return ok;
+}
+BOOL store_save_ssh_servers(const SshServers *servers){
+    if(!ssh_servers_valid(servers)){lstrcpyW(error_text,nova_text(L"请填写有效且名称不重复的 SSH 服务器信息。",L"Enter valid SSH server details with unique names."));return FALSE;}
+    if(!store_begin())return FALSE;
+    BOOL ok=store_clear(L"ssh_servers")&&store_set_int(L"ssh_servers",L"Servers",L"Version",1)&&store_set_int(L"ssh_servers",L"Servers",L"Count",servers->count);
+    for(int i=0;i<servers->count&&ok;i++){
+        wchar_t section[32],id[32];swprintf(section,32,L"Server%d",i);swprintf(id,32,L"%lld",(long long)servers->items[i].id);const SshServer *s=&servers->items[i];
+        ok=store_set(L"ssh_servers",section,L"Id",id)&&store_set_int(L"ssh_servers",section,L"Port",s->port)&&
+           store_set(L"ssh_servers",section,L"Name",s->name)&&store_set(L"ssh_servers",section,L"Host",s->host)&&
+           store_set(L"ssh_servers",section,L"User",s->user)&&store_set(L"ssh_servers",section,L"Directory",s->directory);
+    }
+    return store_end(ok);
+}

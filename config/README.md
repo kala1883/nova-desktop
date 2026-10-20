@@ -1,5 +1,20 @@
 # Configuration / 配置
 
+SSH profiles use settings scope `ssh_servers`, `Servers/Version=1`, a bounded
+`Servers/Count` (0–16), and `ServerN/{Id,Name,Host,Port,User,Directory}`. Stable IDs
+are decimal strings. Remote file tabs/favorites retain `nova-ssh:<id>:/path` in
+the existing `files` scope. Profiles and paths are shared; credentials, key paths
+and local host trust pins are excluded. Restored tabs do not auto-connect.
+
+SSH 配置使用 `ssh_servers` scope，整体事务保存，版本和容量校验失败时不覆盖原文件。
+共享字段只有 ID、名称、主机、端口、用户名和初始目录；远程标签/收藏保存稳定 ID 和路径，
+恢复时不自动连接。密码、私钥口令、私钥路径和本机主机信任记录不进入 JSON。
+
+`files/Pane0` through `files/Pane3` each have an optional `ServerMode` setting:
+`0` (local, default) or `1` (servers). It is written only to Git-ignored `local.json`.
+Each pane's add-tab action follows this preference without changing existing tabs.
+各窗格的本地/服务器模式独立保存，只改变新标签的选择流程；非法值拒绝加载，恢复不自动连接。
+
 `nova.json` is the UTF-8 configuration read and written by NOVA. It is available
 for Git version control. Executables inside this checkout use the repository's
 `config/nova.json`; outside a checkout, a package uses `config/nova.json` beside

@@ -16,6 +16,34 @@ static BOOL wait_location(Tab *t,const wchar_t *path){
 }
 static BOOL CALLBACK find_tree(HWND h,LPARAM data){wchar_t cls[64];GetClassNameW(h,cls,64);if(!lstrcmpW(cls,L"SysTreeView32"))*(BOOL*)data=TRUE;return TRUE;}
 static int live_views(void){int n=0;for(int i=0;i<4;i++)for(int j=0;j<fm.panes[i].count;j++)if(fm.panes[i].items[j]->browser)n++;return n;}
+static int server_picker_calls,server_connect_calls;
+static BOOL server_picker_accept;
+static BOOL pick_test_server(HWND owner,HWND anchor,SshLogin *login){
+    assert(IsWindow(owner)&&GetDlgCtrlID(anchor)==C_NEWTAB);server_picker_calls++;
+    if(!server_picker_accept)return FALSE;
+    login->server.id=987;login->server.port=22;lstrcpyW(login->server.name,L"Fixture server");lstrcpyW(login->server.host,L"fixture.example.invalid");lstrcpyW(login->server.user,L"fixture");lstrcpyW(login->server.directory,L"/srv/fixture");return TRUE;
+}
+static BOOL connect_test_server(HWND view,const SshLogin *login){
+    wchar_t location[LOCATION_SIZE];int64_t id;const wchar_t *path;
+    assert(IsWindow(view)&&ssh_view_location(view,location,LOCATION_SIZE)&&ssh_location_parse(location,&id,&path));assert(id==login->server.id&&!lstrcmpW(path,L"/srv/fixture"));server_connect_calls++;return TRUE;
+}
+static void test_pane_modes(Pane *p,const wchar_t *local_directory){
+    server_picker_calls=server_connect_calls=0;server_picker_accept=FALSE;
+    int local_runs=fm.command_runs;fm.test_mode=TRUE;
+    assert(add_tab(p,L"nova-ssh:123:/Case sensitive"));Tab *remote=current(p);assert(remote->remote&&remote->host&&!remote->browser);
+    assert(!run_command(remote,L"echo must-never-run-locally")&&fm.command_runs==local_runs);
+    lstrcpyW(remote->location,L"nova-ssh:123:/Case sensitive");record_history(remote);lstrcpyW(remote->location,L"nova-ssh:123:/case sensitive");record_history(remote);assert(remote->history_count==2);
+    fm.server_picker=pick_test_server;fm.server_connector=connect_test_server;
+    int original_tabs=p->count;command(p,C_PANE_SERVER);assert(p->server_mode&&!fm.panes[1].server_mode&&current(p)==remote);
+    SendMessageW(p->window,WM_COMMAND,MAKEWPARAM(C_NEWTAB,BN_CLICKED),(LPARAM)p->add);assert(server_picker_calls==1&&!server_connect_calls&&p->count==original_tabs&&current(p)==remote);
+    server_picker_accept=TRUE;command(p,C_NEWTAB);assert(server_picker_calls==2&&server_connect_calls==1&&p->count==original_tabs+1&&current(p)->remote&&!lstrcmpW(current(p)->location,L"nova-ssh:987:/srv/fixture"));close_tab(p);
+    command(p,C_PANE_LOCAL);assert(!p->server_mode&&current(p)==remote);command(p,C_NEWTAB);assert(!current(p)->remote&&same_path(current(p)->location,local_directory)&&server_picker_calls==2);close_tab(p);
+    command(p,C_PANE_SERVER);while(p->count<TAB_LIMIT)assert(add_tab(p,L"nova-ssh:123:/limit"));command(p,C_NEWTAB);assert(p->count==TAB_LIMIT&&server_picker_calls==2&&server_connect_calls==1);while(p->count>original_tabs)close_tab(p);
+    fm.server_picker=NULL;fm.server_connector=NULL;
+    puts("PASS per-pane modes retain tabs, server '+' chooses a profile, cancel/full panes create no tabs or connections, and local mode creates local tabs from remote context");
+    close_tab(p);fm.test_mode=FALSE;assert(!current(p)->remote);
+    puts("PASS remote tabs use a separate native view, preserve POSIX case and never fall back to local command execution");
+}
 static void assert_view_fills_host(Tab *t){
     IShellView *view=NULL;HWND window=NULL;RECT host_rect,view_rect;
     assert(SUCCEEDED(IExplorerBrowser_GetCurrentView(t->browser,&IID_IShellView,(void**)&view)));
@@ -25,10 +53,11 @@ static void assert_view_fills_host(Tab *t){
     assert(host_rect.right>100&&host_rect.bottom>100);
     assert(EqualRect(&host_rect,&view_rect));
 }
-int wmain(void){
+int wmain(int argc,wchar_t **argv){
+    BOOL modes_only=argc==2&&!lstrcmpW(argv[1],L"--modes-only");
     setvbuf(stdout,NULL,_IONBF,0);
     assert(SUCCEEDED(OleInitialize(NULL)));
-    IDataObject *old_clipboard=NULL;OleGetClipboard(&old_clipboard);
+    IDataObject *old_clipboard=NULL;if(!modes_only)OleGetClipboard(&old_clipboard);
     wchar_t temp[MAX_PATH],root[MAX_PATH],a[MAX_PATH],b[MAX_PATH],file[MAX_PATH],copy[MAX_PATH];
     GetTempPathW(MAX_PATH,temp);swprintf(root,MAX_PATH,L"%lsNovaFiles-%lu",temp,GetCurrentProcessId());assert(CreateDirectoryW(root,NULL));
     swprintf(a,MAX_PATH,L"%ls\\中文源目录",root);swprintf(b,MAX_PATH,L"%ls\\目标目录",root);assert(CreateDirectoryW(a,NULL));assert(CreateDirectoryW(b,NULL));
@@ -39,7 +68,7 @@ int wmain(void){
     HWND host=CreateWindowExW(0,L"STATIC",L"NOVA embedded file test",WS_OVERLAPPEDWINDOW|WS_VISIBLE,0,0,1200,820,NULL,NULL,GetModuleHandleW(NULL),NULL);assert(host);
     puts("Creating four native views...");assert(file_manager_open(host,root));pump(600);puts("Views created.");
     assert(GetParent(fm.window)==host);assert(GetAncestor(fm.window,GA_ROOT)==host);assert((GetWindowLongPtrW(fm.window,GWL_STYLE)&WS_CHILD)!=0);
-    assert(IsWindow(fm.tooltip)&&fm.tooltips_added==66&&SendMessageW(fm.tooltip,TTM_GETTOOLCOUNT,0,0)==66);
+    assert(IsWindow(fm.tooltip)&&fm.tooltips_added==71&&SendMessageW(fm.tooltip,TTM_GETTOOLCOUNT,0,0)==71);
     wchar_t icon_face[64]=L"";HDC icon_dc=GetDC(fm.window);HFONT old_icon_font=SelectObject(icon_dc,fm.icon_font);GetTextFaceW(icon_dc,64,icon_face);SelectObject(icon_dc,old_icon_font);ReleaseDC(fm.window,icon_dc);assert(!lstrcmpW(icon_face,L"Segoe MDL2 Assets"));
     assert(button_glyph(C_BACK)[0]==0xE72B&&button_glyph(C_FORWARD)[0]==0xE72A&&button_glyph(C_REFRESH)[0]==0xE72C&&button_glyph(C_UP)[0]==0xE74A&&button_glyph(C_COMMAND)[0]==0xE756);
     SendMessageW(fm.toolbar[0],WM_MOUSEMOVE,0,0);assert(fm.hot_button==fm.toolbar[0]);SendMessageW(fm.toolbar[0],WM_MOUSELEAVE,0,0);assert(!fm.hot_button);
@@ -50,12 +79,13 @@ int wmain(void){
         RECT command_rect,new_folder_rect;wchar_t command_name[80];GetWindowRect(pane->command_button,&command_rect);GetWindowRect(pane->new_folder,&new_folder_rect);GetWindowTextW(pane->command_button,command_name,80);
         assert(IsWindowVisible(pane->command_button)&&command_rect.left>new_folder_rect.right&&command_rect.right-command_rect.left==scale(48)&&command_name[0]);
     }
-    puts("PASS global and per-pane icon toolbars retain accessible names and 66 tooltips");
+    puts("PASS global and per-pane icon toolbars retain accessible names and 71 tooltips");
     HWND embedded=fm.window;file_manager_hide();assert(!IsWindowVisible(embedded));assert(file_manager_open(host,root)==embedded);assert(IsWindowVisible(embedded));
     for(int i=0;i<4;i++)assert(fm.panes[i].count==1&&current(&fm.panes[i])->browser);
     for(int i=0;i<4;i++)assert((GetWindowLongPtrW(fm.panes[i].tabs,GWL_STYLE)&TCS_OWNERDRAWFIXED)!=0);
     Pane *narrow=&fm.panes[0];MoveWindow(narrow->window,0,0,scale(128),scale(300),TRUE);pane_layout(narrow);RECT narrow_client;GetClientRect(narrow->window,&narrow_client);assert(IsWindowVisible(narrow->navigation_menu)&&!IsWindowVisible(narrow->back));
     HWND compact[]={narrow->navigation_menu,narrow->cut,narrow->paste,narrow->delete_file,narrow->new_folder};LONG previous_right=0;for(int i=0;i<5;i++){RECT item;GetWindowRect(compact[i],&item);MapWindowPoints(NULL,narrow->window,(POINT*)&item,2);assert(item.left>=previous_right&&item.right<=narrow_client.right);previous_right=item.right;}
+    RECT mode_rect,add_rect;GetWindowRect(narrow->mode_button,&mode_rect);GetWindowRect(narrow->add,&add_rect);MapWindowPoints(NULL,narrow->window,(POINT*)&mode_rect,2);MapWindowPoints(NULL,narrow->window,(POINT*)&add_rect,2);assert(IsWindowVisible(narrow->mode_button)&&mode_rect.left>=0&&mode_rect.right<=add_rect.left&&add_rect.right<=narrow_client.right);
     fm.layout=0;arrange();RECT manager_rect;GetClientRect(fm.window,&manager_rect);int content_height=manager_rect.bottom-scale(46)-scale(27);
     POINT divider={split_pixel(0,0,manager_rect.right),scale(46)+content_height/2};int divider_index=-1;
     assert(hit_splitter(divider,&divider_index)==1&&divider_index==0);
@@ -66,6 +96,15 @@ int wmain(void){
     divider.x=split_pixel(0,0,manager_rect.right);SendMessageW(fm.window,WM_LBUTTONDOWN,0,MAKELPARAM(divider.x,divider.y));assert(fm.splitter_dragging);
     SendMessageW(fm.window,WM_MOUSEMOVE,MK_LBUTTON,MAKELPARAM(divider.x-scale(40),divider.y));SendMessageW(fm.window,WM_CANCELMODE,0,0);assert(!fm.splitter_dragging&&fm.splits[0][0]==resized_split);
     puts("PASS pane dividers resize, cancel safely, debounce to JSON, and directory tabs use a clear owner-drawn selection state");
+
+    if(modes_only){
+        test_pane_modes(&fm.panes[0],root);
+        nova_english=1;update_pane_mode(&fm.panes[0]);wchar_t mode_name[32];GetWindowTextW(fm.panes[0].mode_button,mode_name,32);assert(!lstrcmpW(mode_name,L"Servers"));nova_english=0;update_pane_mode(&fm.panes[0]);
+        file_manager_close();assert(file_manager_open(host,root));pump(300);assert(fm.panes[0].server_mode&&!fm.panes[1].server_mode&&fm.panes[0].count==1&&!current(&fm.panes[0])->remote);file_manager_close();store_close();
+        assert(DeleteFileW(file));assert(RemoveDirectoryW(a)&&RemoveDirectoryW(b));wchar_t settings[MAX_PATH];const wchar_t *names[]={L"file-manager.ini",L"nova.json",L"local.json",L"nova.backup.json",L"local.backup.json"};for(unsigned i=0;i<sizeof(names)/sizeof(names[0]);i++){swprintf(settings,MAX_PATH,L"%ls\\%ls",root,names[i]);DeleteFileW(settings);}assert(RemoveDirectoryW(root));DestroyWindow(host);OleUninitialize();
+        puts("PASS pane-mode isolation, saved-server routing, cancel/capacity safety, local-mode fallback, localization and reopen persistence (no clipboard or server access)");return 0;
+    }
+
     Pane *p=&fm.panes[0];Tab *t=current(p);
     assert(wait_location(t,root));assert_view_fills_host(t);
     /* Reproduce the stale 100x100 browser rectangle without resizing the pane. */
@@ -123,8 +162,9 @@ int wmain(void){
         }
         assert(area==800000);fm.layout=layout;arrange();
     }
+    test_pane_modes(&fm.panes[0],a);
     fm.layout=4;fm.navigation_tree=TRUE;fm.favorite_count=1;lstrcpyW(fm.favorites[0],a);save_session();file_manager_close();pump(100);
-    assert(file_manager_open(host,root));pump(700);assert(fm.layout==4&&fm.navigation_tree&&fm.favorite_count==1&&!lstrcmpW(fm.favorites[0],a));assert(fm.splits[0][0]==resized_split);assert(wait_location(current(&fm.panes[0]),a));
+    assert(file_manager_open(host,root));pump(700);assert(fm.layout==4&&fm.navigation_tree&&fm.favorite_count==1&&!lstrcmpW(fm.favorites[0],a));assert(fm.panes[0].server_mode&&!fm.panes[1].server_mode);assert(fm.splits[0][0]==resized_split);assert(wait_location(current(&fm.panes[0]),a));
     BOOL has_tree=FALSE;EnumChildWindows(fm.window,find_tree,(LPARAM)&has_tree);assert(has_tree);
     file_manager_close();pump(100);
     puts("PASS 12 non-overlapping layouts, session/favorite persistence and reopen lifecycle");

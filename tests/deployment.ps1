@@ -8,6 +8,10 @@ $fixtureRepo = Join-Path $fixtureRoot 'repo with spaces'
 $fixtureRemote = Join-Path $fixtureRoot 'remote.git'
 $fixtureTools = Join-Path $fixtureRoot 'tools'
 $originalPath = $env:PATH
+. (Join-Path $sourceRoot 'deployment\toolchain.ps1')
+Initialize-NovaToolchain
+$toolchainPath = $env:PATH
+$originalToolchainOverride = $env:NOVA_MINGW_BIN
 $compiler = (Get-Command gcc -ErrorAction Stop).Source
 
 function Check($condition, [string]$message) { if (-not $condition) { throw $message } }
@@ -32,12 +36,14 @@ try {
     # Use synthetic data: the real config may now contain personal usage data.
     [IO.File]::WriteAllText((Join-Path $fixtureConfig 'nova.json'), '{"version":1,"application":"NOVA Desktop","initialized":false,"settings":[],"workspaces":[],"items":[]}', [Text.UTF8Encoding]::new($false))
     Copy-Item -LiteralPath (Join-Path $sourceRoot 'config\README.md') -Destination $fixtureConfig
-    foreach ($name in @('LICENSE','NOTICE.md','NOTICE.zh-CN.md','README.md','README.zh-CN.md')) {
+    foreach ($name in @('LICENSE','THIRD_PARTY_NOTICES.txt','NOTICE.md','NOTICE.zh-CN.md','README.md','README.zh-CN.md')) {
         Copy-Item -LiteralPath (Join-Path $sourceRoot $name) -Destination $fixtureRepo
     }
     Set-Content -LiteralPath (Join-Path $fixtureRepo '.gitignore') -Value '/build/' -Encoding ASCII
     New-Item -ItemType Directory -Path (Join-Path $fixtureRepo 'third_party\sqlite') -Force | Out-Null
     Set-Content -LiteralPath (Join-Path $fixtureRepo 'third_party\sqlite\sqlite3.c') -Value '/* fixture */' -Encoding ASCII
+    New-Item -ItemType Directory -Path (Join-Path $fixtureRepo 'third_party/libssh2/src'), (Join-Path $fixtureRepo 'third_party/libssh2/include') -Force | Out-Null
+    Set-Content -LiteralPath (Join-Path $fixtureRepo 'third_party/libssh2/src/fixture.c') -Value '/* fixture */' -Encoding ASCII
     $stubSource = Join-Path $fixtureRoot 'compiler.c'
     @'
 #include <stdio.h>
@@ -56,13 +62,24 @@ int main(int argc,char **argv){
     & $compiler $stubSource -o (Join-Path $fixtureTools 'gcc.exe')
     Check ($LASTEXITCODE -eq 0) 'Could not build compiler stand-in'
     Copy-Item -LiteralPath (Join-Path $fixtureTools 'gcc.exe') -Destination (Join-Path $fixtureTools 'windres.exe')
-    $env:PATH = "$fixtureTools;$originalPath"
+    $env:PATH = "$fixtureTools;$toolchainPath"
+    $env:NOVA_MINGW_BIN = $null
     Invoke-FixtureGit -gitArgs @('init','--bare',$fixtureRemote)
     Invoke-FixtureGit -gitArgs @('init','-b','main',$fixtureRepo)
     Invoke-FixtureGit -gitArgs @('-C',$fixtureRepo,'config','user.name','NOVA deployment test')
     Invoke-FixtureGit -gitArgs @('-C',$fixtureRepo,'config','user.email','nova-test@example.invalid')
     Invoke-FixtureGit -gitArgs @('-C',$fixtureRepo,'remote','add','origin',$fixtureRemote)
+    $env:NOVA_MINGW_BIN = Join-Path $fixtureRoot 'missing compiler'
+    Deploy 'test: missing compiler' $false
+    Check (-not (Invoke-FixtureGit -gitArgs @('-C',$fixtureRepo,'diff','--cached','--name-only'))) 'Toolchain failure staged source changes'
+    Check (-not (Invoke-FixtureGit -gitArgs @('--git-dir',$fixtureRemote,'for-each-ref','--format=%(refname)'))) 'Toolchain failure pushed a commit'
+    Check ((PackageCount) -eq 0) 'Toolchain failure produced a package'
+    # An explicit toolchain directory must work even when it is absent from PATH.
+    $env:NOVA_MINGW_BIN = $fixtureTools
+    $env:PATH = $originalPath
     Deploy 'test: initial deployment' $true
+    $env:NOVA_MINGW_BIN = $null
+    $env:PATH = "$fixtureTools;$toolchainPath"
     Check ((PackageCount) -eq 1) 'First deploy must create one archive'
     $latestExe = Join-Path $fixtureRepo 'build\packages\nova-desktop.exe'
     Check (([IO.File]::ReadAllText($latestExe)) -eq 'deployment test fixture') 'Missing latest executable at packages root'
@@ -72,7 +89,11 @@ int main(int argc,char **argv){
     $zip = Get-ChildItem -LiteralPath (Join-Path $fixtureRepo 'build\packages') -Filter '*.zip' | Select-Object -First 1
     Add-Type -AssemblyName System.IO.Compression.FileSystem
     $archive = [IO.Compression.ZipFile]::OpenRead($zip.FullName)
-    try { foreach ($name in @('nova-desktop.exe','LICENSE','NOTICE.md','NOTICE.zh-CN.md','revision.txt','config/nova.json')) { Check ($null -ne $archive.GetEntry($name)) "Archive missing $name" } }
+    try {
+        # Windows PowerShell 5 uses backslashes in ZIP directory entries.
+        $entryNames = @($archive.Entries | ForEach-Object { $_.FullName.Replace('\','/') })
+        foreach ($name in @('nova-desktop.exe','LICENSE','THIRD_PARTY_NOTICES.txt','NOTICE.md','NOTICE.zh-CN.md','revision.txt','config/nova.json')) { Check ($entryNames -contains $name) "Archive missing $name" }
+    }
     finally { $archive.Dispose() }
     $env:NOVA_DEPLOY_TEST_PAYLOAD = 'second deployment fixture'
     Deploy 'test: no source changes' $true
@@ -125,7 +146,7 @@ int main(int argc,char **argv){
     $latestZip = Get-ChildItem -LiteralPath (Join-Path $fixtureRepo 'build\packages') -Filter '*.zip' | Sort-Object LastWriteTime -Descending | Select-Object -First 1
     $archive = [IO.Compression.ZipFile]::OpenRead($latestZip.FullName)
     try {
-        $entry = $archive.GetEntry('config/nova.json')
+        $entry = $archive.Entries | Where-Object { $_.FullName.Replace('\','/') -eq 'config/nova.json' } | Select-Object -First 1
         $stream = [IO.StreamReader]::new($entry.Open())
         try { Check ($stream.ReadToEnd() -eq $usageJson) 'Archive lost configuration data' }
         finally { $stream.Dispose() }
@@ -163,6 +184,7 @@ int main(int argc,char **argv){
 }
 finally {
     $env:PATH = $originalPath
+    $env:NOVA_MINGW_BIN = $originalToolchainOverride
     $env:NOVA_DEPLOY_TEST_PAYLOAD = $null
     Remove-Item Env:NOVA_DEPLOY_TEST_BUILD_FAIL -ErrorAction SilentlyContinue
     Pop-Location
