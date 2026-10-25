@@ -65,3 +65,16 @@ The shell starts in the current file-view directory and survives view/tab change
 Terminal keys go to the PTY; Ctrl+Shift+C/V handle text copy/paste. Selection,
 scrollback and copying remain available after disconnection. An explicit status
 explains exit or connection failure, and reconnect never replays commands.
+
+## 设备与同步
+
+“设置 → 设备与同步”打开独立原生管理窗口，使用设备登记、目录配对、同步记录和服务器四个标签。设备页复用现有 SSH 选择器与凭据流程；目录页呈现本机目录、对端路径、同步组和暂停状态，新增草稿保存后才建立元数据绑定。两端可使用不同绝对路径。
+
+立即同步与自动同步由用户主动启用，新建及迁移目录默认暂停。进度展示当前阶段、文件与内容字节；失败保留断点并显示原因，冲突保留工作文件。删除同步用明确复选框选择，默认关闭；删除配对只移除绑定。关闭窗口隐藏，退出 NOVA 才停止任务。两种语言即时切换，设备/目录的用户名称保持原文。
+
+服务器页把“当前服务器”和“目标服务器”明确显示为两个对象。选择/检查候选不改变
+活动连接；首次使用点“一键部署”或“连接 / 安全切换”，之后进入设备登记及目录配对。
+项目目录变化时自动生成队列路径，已有数据的服务器必须通过迁移或身份/版本链校验
+切换。迁移进度沿用阶段、字节与暂停控件，断点重开后显示；提交前可恢复旧端，提交
+后继续完成切换。旧设备收到迁移提示后用“跟随已迁移目标”连接，首次登录仍使用原有
+SSH 与指纹核验界面。两种语言即时更新，输入及用户名称保留。

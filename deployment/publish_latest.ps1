@@ -4,6 +4,7 @@ param([Parameter(Mandatory = $true)][string]$Executable)
 $ErrorActionPreference = 'Stop'
 Set-StrictMode -Version Latest
 . (Join-Path $PSScriptRoot 'configuration_info.ps1')
+. (Join-Path $PSScriptRoot 'package_sync.ps1')
 $repoRoot = Split-Path -Parent $PSScriptRoot
 $packageRoot = Join-Path $repoRoot 'build\packages'
 $latest = Join-Path $packageRoot 'nova-desktop.exe'
@@ -35,6 +36,7 @@ try {
     $latestConfig = Join-Path $packageRoot 'config'
     New-Item -ItemType Directory -Path $latestConfig -Force | Out-Null
     Copy-Item -LiteralPath (Join-Path $repoRoot 'config\nova.json') -Destination (Join-Path $latestConfig 'nova.json')
+    Copy-NovaSyncAssets -RepositoryRoot $repoRoot -Destination $packageRoot
     if ($source -ne [IO.Path]::GetFullPath($latest)) {
         Copy-Item -LiteralPath $source -Destination $temporary
         if (Test-Path -LiteralPath $latest) { [IO.File]::Replace($temporary, $latest, $previous) }

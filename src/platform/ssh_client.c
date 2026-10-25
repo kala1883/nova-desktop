@@ -14,7 +14,7 @@
 #include "ssh_client.h"
 #include "../i18n.h"
 
-struct SshClient { SOCKET socket; LIBSSH2_SESSION *session; LIBSSH2_SFTP *sftp; LIBSSH2_CHANNEL *terminal; WSAEVENT terminal_event; HANDLE cancel; ULONGLONG deadline,last_progress; int visited,native_error; SshPhase phase;SshProgress progress;void *progress_context; };
+struct SshClient { SOCKET socket; LIBSSH2_SESSION *session; LIBSSH2_SFTP *sftp; LIBSSH2_CHANNEL *terminal; WSAEVENT terminal_event; HANDLE cancel; ULONGLONG deadline,last_progress; int visited,native_error; DWORD protocol_idle; SshPhase phase;SshProgress progress;void *progress_context; };
 const wchar_t *ssh_phase_name(SshPhase phase){
     switch(phase){
     case SSH_PHASE_RESOLVE:return nova_text(L"解析主机地址",L"Resolve host address");
@@ -274,6 +274,48 @@ BOOL ssh_client_copy(SshClient *c,const wchar_t *from,const wchar_t *to,SshResul
     if(!ok){RETRY(c,rc,libssh2_sftp_unlink(c->sftp,b));return failed(c,r,nova_text(L"复制文件",L"Copy file"));}return TRUE;
 }
 static BOOL channel_write(SshClient *c,LIBSSH2_CHANNEL *channel,const char *data,size_t length){size_t offset=0;while(offset<length){ssize_t rc;RETRY(c,rc,libssh2_channel_write(channel,data+offset,length-offset));if(rc<=0)return FALSE;offset+=(size_t)rc;}return TRUE;}
+BOOL ssh_client_protocol_open(SshClient *c,const wchar_t *project,const wchar_t *root,SshResult *r){
+    begin(c);c->phase=SSH_PHASE_COMMAND;if(c->terminal)return failed(c,r,nova_text(L"通道已被占用",L"Channel already in use"));
+    char p[SSH_PATH_CAP*4],q[SSH_PATH_CAP*4];if(!path_bytes(c,project,p,r)||!path_bytes(c,root,q,r))return FALSE;
+    size_t a=strlen(p)*5+2,b=strlen(q)*5+2;char *first=malloc(a),*second=malloc(b);
+    BOOL ok=first&&second&&ssh_directory_payload((unsigned char*)p,strlen(p),first,a)&&ssh_directory_payload((unsigned char*)q,strlen(q),second,b);
+    LIBSSH2_CHANNEL *channel=NULL;
+    if(ok){do{channel=libssh2_channel_open_session(c->session);}while(!channel&&libssh2_session_last_errno(c->session)==LIBSSH2_ERROR_EAGAIN&&waiting(c));ok=channel!=NULL;}
+    static const char command[]="sh -c 'IFS= read -r nova_p || exit 125; IFS= read -r nova_r || exit 125; nova_p=$(printf \"%b_\" \"$nova_p\") || exit 125; nova_r=$(printf \"%b_\" \"$nova_r\") || exit 125; nova_p=${nova_p%_}; nova_r=${nova_r%_}; exec python3 -B \"$nova_p/sync_server.py\" --root \"$nova_r\"'";
+    if(ok){int rc;RETRY(c,rc,libssh2_channel_exec(channel,command));ok=!rc&&channel_write(c,channel,first,strlen(first))&&channel_write(c,channel,second,strlen(second));}
+    free(first);free(second);c->terminal=channel;
+    return ok||failed(c,r,nova_text(L"打开同步协议通道",L"Open synchronization channel"));
+}
+BOOL ssh_client_protocol_write(SshClient *c,const void *data,size_t size,SshResult *r){
+    begin(c);c->phase=SSH_PHASE_COMMAND;c->deadline=GetTickCount64()+(c->protocol_idle?c->protocol_idle:30000);
+    if(!c->terminal||size>16u*1024u*1024u+1024u*1024u)return failed(c,r,nova_text(L"同步帧大小或状态无效",L"Invalid synchronization frame size or state"));
+    size_t offset=0;while(offset<size){ssize_t n;RETRY(c,n,libssh2_channel_write(c->terminal,(const char*)data+offset,size-offset));if(n<=0)return failed(c,r,nova_text(L"发送同步数据",L"Send synchronization data"));offset+=(size_t)n;c->deadline=GetTickCount64()+(c->protocol_idle?c->protocol_idle:30000);}return TRUE;
+}
+BOOL ssh_client_bootstrap_open(SshClient *c,const char *source,size_t length,SshResult *r){
+    c->protocol_idle=120000; /* Cancellable allowance for database verification and deployment. */
+    begin(c);c->phase=SSH_PHASE_COMMAND;c->deadline=GetTickCount64()+(c->protocol_idle?c->protocol_idle:30000);
+    if(c->terminal||!source||length>1024u*1024u)return failed(c,r,nova_text(L"部署引导数据无效",L"Invalid deployment bootstrap"));
+    LIBSSH2_CHANNEL *channel=NULL;
+    do{channel=libssh2_channel_open_session(c->session);}while(!channel&&libssh2_session_last_errno(c->session)==LIBSSH2_ERROR_EAGAIN&&waiting(c));
+    if(!channel)return failed(c,r,nova_text(L"打开服务器管理通道",L"Open server administration channel"));
+    c->terminal=channel;
+    static const char command[]="python3 -B -u -c 'import sys,base64; exec(compile(base64.b64decode(sys.stdin.buffer.readline()),\"<nova-bootstrap>\",\"exec\"))'";
+    int rc;RETRY(c,rc,libssh2_channel_exec(channel,command));
+    BOOL ok=!rc&&channel_write(c,channel,source,length)&&channel_write(c,channel,"\n",1);
+    return ok||failed(c,r,nova_text(L"启动服务器部署（需要 Python 3.9+）",L"Start server deployment (Python 3.9+ required)"));
+}
+BOOL ssh_client_protocol_read(SshClient *c,void *data,size_t size,SshResult *r){
+    begin(c);c->phase=SSH_PHASE_COMMAND;c->deadline=GetTickCount64()+(c->protocol_idle?c->protocol_idle:30000);size_t offset=0;
+    if(!c->terminal||size>16u*1024u*1024u)return failed(c,r,nova_text(L"同步帧大小或状态无效",L"Invalid synchronization frame size or state"));
+    while(offset<size){
+        if(WaitForSingleObject(c->cancel,0)==WAIT_OBJECT_0||GetTickCount64()>=c->deadline)return failed(c,r,nova_text(L"接收同步数据",L"Receive synchronization data"));
+        ssize_t n=libssh2_channel_read(c->terminal,(char*)data+offset,size-offset);
+        if(n>0){offset+=(size_t)n;c->deadline=GetTickCount64()+(c->protocol_idle?c->protocol_idle:30000);continue;}
+        char errors[512];ssize_t ignored=libssh2_channel_read_stderr(c->terminal,errors,sizeof(errors));(void)ignored;
+        if((n<0&&n!=LIBSSH2_ERROR_EAGAIN)||libssh2_channel_eof(c->terminal)||!waiting(c))return failed(c,r,nova_text(L"同步连接已中断，断点保留",L"Synchronization interrupted; checkpoints retained"));
+    }
+    return TRUE;
+}
 static void append_output(SshResult *r,const char *data,size_t length){
     if(length>=SSH_OUTPUT_CAP){data+=length-(SSH_OUTPUT_CAP-1);length=SSH_OUTPUT_CAP-1;r->output_length=0;r->output_truncated=TRUE;}
     if(r->output_length+length>=SSH_OUTPUT_CAP){size_t drop=r->output_length+length-(SSH_OUTPUT_CAP-1);memmove(r->output,r->output+drop,r->output_length-drop);r->output_length-=drop;r->output_truncated=TRUE;}

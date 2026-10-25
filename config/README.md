@@ -138,3 +138,25 @@ during semantic comparison; incompatible relative reorderings require review.
 `-Preview` 只获取远端并生成预览，不修改工作文件。它备份三份 JSON，快进更新
 `origin/main` 并合并本机修改，不操作 stash 或提交。真正冲突会在工作文件修改前停止。
 语义比较忽略启动项编号压缩和关闭标签残留；不兼容的相对顺序调整仍需人工核对。
+
+## Device synchronization / 设备同步
+
+The entire versioned `sync` settings scope belongs to `local.json`: Manager stores
+Version, Count, Role, Interval, Server, Registered, Node, Name, Project and Broker;
+PairN stores Id, Dataset, Name, Group, Path, Excludes, Paused and Deletes. It is
+transactional and never exported into shared JSON. Limits: two device slots and
+16 pairs. `config/sync/client/` contains the private disk SQLite journal, chunk
+cache and partial downloads. Preserve it; do not copy identities between devices.
+Packages include shared configuration and server source only. The first-open
+`sync/import.json` migration preserves identity and starts all folders paused.
+
+`sync` scope 全部保存在被 Git 忽略的 local.json，身份、配对与路径不进入共享配置。
+`config/sync/client/` 保存断点与块缓存，需要保留，不随包分发；第二台电脑应独立登记。
+详见 [同步说明](../sync/README.md)。
+
+`sync/Manager/Instance` is an optional Version=1 private field identifying the
+active server instance. Migration ancestry is verified remotely before switching.
+`sync/client/server-migration.json` is a version-1 credential-free recovery checkpoint;
+retain it while migration is pending. After local connection settings commit,
+it becomes `server-migration.completed.json`. Neither file enters Git/packages.
+候选服务器不会提前覆盖活动连接；迁移断点不包含密码、私钥或口令，未完成时需保留。

@@ -33,6 +33,7 @@ New-Item -ItemType Directory -Path $fixtureRepo, $fixtureTools -Force | Out-Null
 Push-Location -LiteralPath $fixtureRoot
 try {
     Copy-Item -LiteralPath (Join-Path $sourceRoot 'deployment') -Destination $fixtureRepo -Recurse
+    Copy-Item -LiteralPath (Join-Path $sourceRoot 'sync') -Destination (Join-Path $fixtureRepo 'sync') -Recurse
     $fixtureConfig = Join-Path $fixtureRepo 'config'
     New-Item -ItemType Directory -Path $fixtureConfig -Force | Out-Null
     # Use synthetic data: the real config may now contain personal usage data.
@@ -116,7 +117,7 @@ int main(int argc,char **argv){
     try {
         # Windows PowerShell 5 uses backslashes in ZIP directory entries.
         $entryNames = @($archive.Entries | ForEach-Object { $_.FullName.Replace('\','/') })
-        foreach ($name in @('nova-desktop.exe','LICENSE','THIRD_PARTY_NOTICES.txt','NOTICE.md','NOTICE.zh-CN.md','revision.txt','config/nova.json')) { Check ($entryNames -contains $name) "Archive missing $name" }
+        foreach ($name in @('nova-desktop.exe','LICENSE','THIRD_PARTY_NOTICES.txt','NOTICE.md','NOTICE.zh-CN.md','revision.txt','config/nova.json','sync/README.md','sync/server/sync_server.py','deployment/deploy-sync-server.ps1')) { Check ($entryNames -contains $name) "Archive missing $name" }
     }
     finally { $archive.Dispose() }
     $env:NOVA_DEPLOY_TEST_PAYLOAD = 'second deployment fixture'

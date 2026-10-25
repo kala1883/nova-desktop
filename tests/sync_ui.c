@@ -1,0 +1,49 @@
+#define _WIN32_WINNT 0x0601
+#include <assert.h>
+#include <stdio.h>
+#include <stdlib.h>
+#include "../src/ui/sync_manager.c"
+BOOL nova_english=FALSE;
+/* Fixture callbacks ensure this executable never accesses real login records. */
+BOOL ssh_choose_server(HWND h,int64_t id,SshLogin *login){(void)h;(void)id;(void)login;return FALSE;}
+BOOL ssh_pick_server(HWND h,HWND anchor,SshLogin *login){(void)h;(void)anchor;(void)login;return FALSE;}
+static BOOL fake_login(BOOL interactive,SshLogin *login){(void)interactive;ZeroMemory(login,sizeof(*login));login->server.id=1;login->server.port=22;wcscpy(login->server.name,L"Synthetic SSH");wcscpy(login->server.host,L"fixture.invalid");return TRUE;}
+static BOOL fail_attach;
+static BOOL fake_target_login(int64_t id,BOOL interactive,SshLogin *login){BOOL ok=fake_login(interactive,login);login->server.id=id;return ok;}
+static BOOL fake_run(SyncRequest *request,int action,SyncResult *result){
+    ZeroMemory(result,sizeof(*result));if(action==SYNC_JOB_SERVER_ATTACH&&fail_attach){result->failure=SYNC_CONFLICT;return FALSE;}if(WaitForSingleObject(request->cancel,0)==WAIT_OBJECT_0){result->failure=SYNC_CANCELLED;return FALSE;}
+    result->cloud=strdup("{\"devices\":[{\"role\":\"A\",\"name\":\"Synthetic device\"}],\"datasets\":[{\"id\":\"fixture-data\",\"name\":\"Fixture group\"}],\"bindings\":[{\"dataset\":\"fixture-data\",\"device\":\"B\",\"path\":\"C:\\\\synthetic-peer\"}],\"stored_bytes\":0,\"quota_bytes\":16106127360,\"jobs\":{}}");
+    if(action==SYNC_JOB_SERVER_PROBE){free(result->cloud);result->cloud=strdup("{\"devices\":[],\"datasets\":[{\"id\":\"unrelated-target\",\"name\":\"Destination only\"}],\"bindings\":[],\"jobs\":{},\"stored_bytes\":0,\"quota_bytes\":1073741824,\"python\":\"3.12.0\",\"free_bytes\":10737418240,\"control\":{\"phase\":\"ACTIVE\"}}");}
+    if(action>=SYNC_JOB_SERVER_PROBE){result->installed=TRUE;result->switched=action==SYNC_JOB_SERVER_MIGRATE||action==SYNC_JOB_SERVER_ATTACH||action==SYNC_JOB_SERVER_DEPLOY;wcscpy(result->server_instance,L"fixture-new-server");wcscpy(result->server_phase,L"ACTIVE");}
+    result->stats.sent=1024;result->stats.reused=4096;return result->cloud!=NULL;
+}
+static void pump(void){MSG m;while(PeekMessageW(&m,NULL,0,0,PM_REMOVE)){if(!IsDialogMessageW(sync_manager_window(),&m)){TranslateMessage(&m);DispatchMessageW(&m);}}}
+static void finish(void){ULONGLONG deadline=GetTickCount64()+5000;while(job&&GetTickCount64()<deadline){pump();Sleep(5);}assert(!job);}
+static void capture(HWND h,const wchar_t *file){
+    RECT r;GetWindowRect(h,&r);int w=r.right-r.left,height=r.bottom-r.top;HDC dc=GetDC(h),memory=CreateCompatibleDC(dc);BITMAPINFO info={0};info.bmiHeader.biSize=sizeof(info.bmiHeader);info.bmiHeader.biWidth=w;info.bmiHeader.biHeight=-height;info.bmiHeader.biPlanes=1;info.bmiHeader.biBitCount=32;void *pixels=NULL;HBITMAP bitmap=CreateDIBSection(dc,&info,DIB_RGB_COLORS,&pixels,NULL,0);assert(bitmap);HGDIOBJ old=SelectObject(memory,bitmap);RedrawWindow(h,NULL,NULL,RDW_INVALIDATE|RDW_ERASE|RDW_ALLCHILDREN|RDW_UPDATENOW);assert(PrintWindow(h,memory,0));BITMAPFILEHEADER header={0};header.bfType=0x4d42;header.bfOffBits=sizeof(header)+sizeof(info.bmiHeader);header.bfSize=header.bfOffBits+w*height*4;HANDLE output=CreateFileW(file,GENERIC_WRITE,0,NULL,CREATE_ALWAYS,0,NULL);DWORD n;assert(output!=INVALID_HANDLE_VALUE);assert(WriteFile(output,&header,sizeof(header),&n,NULL)&&WriteFile(output,&info.bmiHeader,sizeof(info.bmiHeader),&n,NULL)&&WriteFile(output,pixels,w*height*4,&n,NULL));CloseHandle(output);SelectObject(memory,old);DeleteObject(bitmap);DeleteDC(memory);ReleaseDC(h,dc);
+}
+int wmain(int argc,wchar_t **argv){
+    SetProcessDPIAware();assert(SUCCEEDED(OleInitialize(NULL)));wchar_t base[MAX_PATH],directory_path[MAX_PATH],work[MAX_PATH];assert(GetTempPathW(MAX_PATH,base));assert(GetTempFileNameW(base,L"nsu",0,directory_path));assert(DeleteFileW(directory_path)&&CreateDirectoryW(directory_path,NULL));assert(store_open(directory_path));swprintf(work,MAX_PATH,L"%ls\\synthetic-work",directory_path);assert(CreateDirectoryW(work,NULL));
+    SyncSettings *initial=calloc(1,sizeof(*initial));assert(initial);sync_settings_default(initial);initial->server_id=1;wcscpy(initial->node_id,L"synthetic-node");wcscpy(initial->name,L"User device name");initial->count=1;SyncPair *p=&initial->pairs[0];wcscpy(p->id,L"fixture-pair");wcscpy(p->dataset,L"fixture-data");wcscpy(p->name,L"User folder name");wcscpy(p->group,L"Fixture group");lstrcpyW(p->directory,work);wcscpy(p->excludes,L".git;node_modules");p->paused=true;assert(sync_settings_save(initial));free(initial);
+    SshServers fixture_servers={0};fixture_servers.count=3;for(int i=0;i<3;i++){SshServer *server=&fixture_servers.items[i];server->id=i+1;server->port=22;swprintf(server->name,SSH_NAME_CAP,L"Synthetic server %d",i+1);swprintf(server->host,256,L"server%d.example.invalid",i+1);wcscpy(server->user,L"fixture");wcscpy(server->directory,L"/");}assert(store_save_ssh_servers(&fixture_servers));
+    login_backend=fake_login;target_login_backend=fake_target_login;run_backend=fake_run;HWND parent=CreateWindowExW(0,L"STATIC",L"NOVA sync fixture",WS_OVERLAPPEDWINDOW,0,0,400,300,NULL,NULL,GetModuleHandleW(NULL),NULL);assert(parent&&sync_manager_open(parent));pump();
+    assert(start_job(SYNC_JOB_REGISTER,FALSE));finish();assert(settings.registered&&cloud_view&&group_count==1);assert(store_int(L"sync",L"Manager",L"Registered",0)==1);
+    int original_groups=group_count;assert(!load_cloud("{\"devices\":[],\"datasets\":{},\"bindings\":[]}"));assert(group_count==original_groups);
+    SetWindowTextW(name_edit,L"Unsaved user name");nova_english=TRUE;sync_manager_language_changed();wchar_t value[256];GetWindowTextW(window,value,256);assert(wcsstr(value,L"Devices and synchronization"));GetWindowTextW(name_edit,value,256);assert(!wcscmp(value,L"Unsaved user name"));GetWindowTextW(pair_name,value,256);assert(!wcscmp(value,L"User folder name"));
+    page=1;TabCtrl_SetCurSel(tab,1);layout();select_pair(0);SetWindowTextW(pair_name,L"Saved user pair");save_pair();finish();assert(!wcscmp(settings.pairs[0].name,L"Saved user pair")&&settings.pairs[0].paused);
+    assert(start_job(SYNC_JOB_RUN,FALSE));finish();assert(ListView_GetItemCount(history)==1);assert(settings.count==1);assert(GetFileAttributesW(work)&FILE_ATTRIBUTE_DIRECTORY);
+    int old_count=settings.count;new_pair();assert(settings.count==old_count);GetWindowTextW(path_edit,value,256);assert(!value[0]);assert(!IsWindowEnabled(GetDlgItem(window,C_RUN)));
+    wchar_t another[MAX_PATH];swprintf(another,MAX_PATH,L"%ls\\synthetic-second",directory_path);assert(CreateDirectoryW(another,NULL));SetWindowTextW(path_edit,another);SetWindowTextW(pair_name,L"Second user pair");save_pair();finish();assert(settings.count==old_count+1&&settings.pairs[old_count].paused&&!wcscmp(settings.pairs[old_count].directory,another));select_pair(0);
+    /* Choosing a candidate alone never changes the active server or identity. */
+    int64_t original_server=settings.server_id;candidate_id=2;page=3;TabCtrl_SetCurSel(tab,3);layout();
+    SetWindowTextW(target_project_edit,L"/fixture-new-server");assert(settings.server_id==original_server);
+    GetWindowTextW(target_root_edit,value,256);assert(!wcscmp(value,L"/fixture-new-server/runtime/broker"));
+    assert(start_job(SYNC_JOB_SERVER_PROBE,FALSE));finish();assert(settings.server_id==original_server&&group_count==1&&!wcscmp(groups[0].id,L"fixture-data"));
+    assert(start_job(SYNC_JOB_SERVER_MIGRATE,FALSE));finish();assert(settings.server_id==2&&!wcscmp(settings.node_id,L"synthetic-node")&&settings.count==2&&settings.pairs[0].paused&&!wcscmp(settings.pairs[0].dataset,L"fixture-data"));
+    candidate_id=3;fail_attach=TRUE;assert(start_job(SYNC_JOB_SERVER_ATTACH,FALSE));finish();assert(settings.server_id==2&&!wcscmp(settings.server_instance,L"fixture-new-server"));fail_attach=FALSE;candidate_id=2;
+    SetWindowTextW(target_project_edit,L"/unsaved-destination");nova_english=FALSE;sync_manager_language_changed();GetWindowTextW(target_project_edit,value,256);assert(!wcscmp(value,L"/unsaved-destination"));
+    puts("PASS native server UI: candidate isolation, probe, retained identity/pairs on migration, rejected switch preservation and localized unsaved fields");
+    if(argc>1&&!wcscmp(argv[1],L"--capture")){nova_english=FALSE;sync_manager_language_changed();capture(window,L"build\\sync-native-zh.bmp");nova_english=TRUE;sync_manager_language_changed();capture(window,L"build\\sync-native-en.bmp");page=3;TabCtrl_SetCurSel(tab,3);layout();capture(window,L"build\\sync-servers-en.bmp");nova_english=FALSE;sync_manager_language_changed();capture(window,L"build\\sync-servers-zh.bmp");}
+    if(argc>1&&!wcscmp(argv[1],L"--show")){SetWindowTextW(window,L"NOVA 原生同步预览 · Synthetic data / no network");while(IsWindowVisible(window)){pump();Sleep(30);}}
+    sync_manager_shutdown();DestroyWindow(parent);store_close();OleUninitialize();puts("PASS native sync UI: registration, folder pairing/save, language, preserved user names, bounded cloud validation, worker lifecycle (fake backend/temporary state only)");return 0;
+}
