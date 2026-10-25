@@ -313,7 +313,7 @@
       "scope": "files",
       "section": "Pane0",
       "key": "Count",
-      "value": "5"
+      "value": "7"
     },
     {
       "scope": "files",
@@ -349,13 +349,13 @@
       "scope": "files",
       "section": "Pane0",
       "key": "Tab5",
-      "value": "nova-ssh:2221145730825772895:/"
+      "value": "D:\\MyWork\\YanchengUrbanOperationCockpit\\@项目管理\\合同&采购&请款付款\\请款\\02-初验款\\宁城交"
     },
     {
       "scope": "files",
       "section": "Pane0",
       "key": "Tab6",
-      "value": "nova-ssh:2221145730825772895:/"
+      "value": "D:\\MyWork\\haikoumaas\\3项目交付管理\\20260715需求规格文档"
     },
     {
       "scope": "files",
@@ -373,7 +373,7 @@
       "scope": "files",
       "section": "Pane1",
       "key": "Count",
-      "value": "6"
+      "value": "7"
     },
     {
       "scope": "files",
@@ -391,31 +391,37 @@
       "scope": "files",
       "section": "Pane1",
       "key": "Tab2",
-      "value": "D:\\MyWork\\nanjingtransportmonitoringsys\\签合同\\20261019采购报名\\必得"
+      "value": "D:\\MyWork\\haikoumaas\\3项目交付管理\\20261022需求确认"
     },
     {
       "scope": "files",
       "section": "Pane1",
       "key": "Tab3",
-      "value": "D:\\MyWork\\others\\researchwork"
+      "value": "D:\\MyWork\\nanjingtransportmonitoringsys\\签合同\\20261019采购报名\\省院\\整合成果_20261023"
     },
     {
       "scope": "files",
       "section": "Pane1",
       "key": "Tab4",
-      "value": "D:\\MyWork\\others\\researchwork\\20261016碳排放规范\\送审稿——发专家2026年10月"
+      "value": "D:\\MyWork\\others\\researchwork"
     },
     {
       "scope": "files",
       "section": "Pane1",
       "key": "Tab5",
-      "value": "D:\\MyWork\\xuzhoumtroline6passengervolumes\\@地铁公交刷卡"
+      "value": "D:\\MyWork\\others\\researchwork\\20261016碳排放规范\\送审稿——发专家2026年10月"
     },
     {
       "scope": "files",
       "section": "Pane1",
       "key": "Tab6",
-      "value": "D:\\MyWork\\haikoumaas\\3项目交付管理\\20260929海口投标\\初设和功能清单"
+      "value": "D:\\MyWork\\xuzhoumtroline6passengervolumes"
+    },
+    {
+      "scope": "files",
+      "section": "Pane1",
+      "key": "Tab7",
+      "value": "D:\\MyWork\\nanjingtransportmonitoringsys\\@信创\\工程可行性研究报告"
     },
     {
       "scope": "files",
@@ -457,19 +463,19 @@
       "scope": "files",
       "section": "Pane2",
       "key": "Tab5",
-      "value": "D:\\MyProjects\\MyApps\\transportandai"
+      "value": "D:\\MyProjects\\MyApps\\TransportDataAgent"
     },
     {
       "scope": "files",
       "section": "Pane2",
       "key": "Tab6",
-      "value": "D:\\MyProjects\\MyApps\\mydesktop"
+      "value": "D:\\MyProjects\\MyApps\\transportandai"
     },
     {
       "scope": "files",
       "section": "Pane2",
       "key": "Tab7",
-      "value": "D:\\MyProjects\\MyApps\\TransportDataAgent"
+      "value": "D:\\MyProjects\\MyApps\\LocalWebGPT"
     },
     {
       "scope": "files",
@@ -479,9 +485,15 @@
     },
     {
       "scope": "files",
+      "section": "Pane2",
+      "key": "Tab9",
+      "value": "nova-ssh:6643498456803929125:/home/ubuntu"
+    },
+    {
+      "scope": "files",
       "section": "Pane3",
       "key": "Count",
-      "value": "4"
+      "value": "8"
     },
     {
       "scope": "files",
@@ -505,13 +517,31 @@
       "scope": "files",
       "section": "Pane3",
       "key": "Tab3",
-      "value": "D:\\MyProjects\\icanmakeameaningfulcareer"
+      "value": "D:\\MyProjects\\icanmakeameaningfulcareer\\icanbeanarchitect"
     },
     {
       "scope": "files",
       "section": "Pane3",
       "key": "Tab4",
-      "value": "D:\\MyProjects\\MyApps\\TransportDataAgent\\systems"
+      "value": "D:\\MyLife\\selfimproving"
+    },
+    {
+      "scope": "files",
+      "section": "Pane3",
+      "key": "Tab5",
+      "value": "D:\\MyProjects\\icanbeanaiexpert\\AIUsing\\myagentteams\\myrea"
+    },
+    {
+      "scope": "files",
+      "section": "Pane3",
+      "key": "Tab6",
+      "value": "D:\\MyProjects\\MyApps\\ai-digest"
+    },
+    {
+      "scope": "files",
+      "section": "Pane3",
+      "key": "Tab7",
+      "value": "D:\\MyProjects\\icanbeanaiexpert\\AIUsing"
     },
     {
       "scope": "ssh_servers",
