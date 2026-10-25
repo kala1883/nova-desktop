@@ -9,12 +9,17 @@ BOOL ssh_choose_server(HWND h,int64_t id,SshLogin *login){(void)h;(void)id;(void
 BOOL ssh_pick_server(HWND h,HWND anchor,SshLogin *login){(void)h;(void)anchor;(void)login;return FALSE;}
 static BOOL fake_login(BOOL interactive,SshLogin *login){(void)interactive;ZeroMemory(login,sizeof(*login));login->server.id=1;login->server.port=22;wcscpy(login->server.name,L"Synthetic SSH");wcscpy(login->server.host,L"fixture.invalid");return TRUE;}
 static BOOL fail_attach;
+static int checks,push_jobs,pull_jobs,resolutions;
 static BOOL fake_target_login(int64_t id,BOOL interactive,SshLogin *login){BOOL ok=fake_login(interactive,login);login->server.id=id;return ok;}
 static BOOL fake_run(SyncRequest *request,int action,SyncResult *result){
     ZeroMemory(result,sizeof(*result));if(action==SYNC_JOB_SERVER_ATTACH&&fail_attach){result->failure=SYNC_CONFLICT;return FALSE;}if(WaitForSingleObject(request->cancel,0)==WAIT_OBJECT_0){result->failure=SYNC_CANCELLED;return FALSE;}
-    result->cloud=strdup("{\"devices\":[{\"role\":\"A\",\"name\":\"Synthetic device\"}],\"datasets\":[{\"id\":\"fixture-data\",\"name\":\"Fixture group\"}],\"bindings\":[{\"dataset\":\"fixture-data\",\"device\":\"B\",\"path\":\"C:\\\\synthetic-peer\"}],\"stored_bytes\":0,\"quota_bytes\":16106127360,\"jobs\":{}}");
+    result->cloud=strdup("{\"devices\":[{\"role\":\"A\",\"node_id\":\"synthetic-node\",\"name\":\"Office laptop\"},{\"role\":\"B\",\"node_id\":\"peer-b\",\"name\":\"Home desktop\"},{\"role\":\"C\",\"node_id\":\"peer-c\",\"name\":\"Studio PC\"}],\"datasets\":[{\"id\":\"fixture-data\",\"name\":\"Fixture group\",\"publisher\":\"A\"}],\"bindings\":[{\"dataset\":\"fixture-data\",\"device\":\"B\",\"path\":\"C:\\\\synthetic-peer\"}],\"stored_bytes\":0,\"quota_bytes\":16106127360,\"jobs\":{}}");
     if(action==SYNC_JOB_SERVER_PROBE){free(result->cloud);result->cloud=strdup("{\"devices\":[],\"datasets\":[{\"id\":\"unrelated-target\",\"name\":\"Destination only\"}],\"bindings\":[],\"jobs\":{},\"stored_bytes\":0,\"quota_bytes\":1073741824,\"python\":\"3.12.0\",\"free_bytes\":10737418240,\"control\":{\"phase\":\"ACTIVE\"}}");}
     if(action>=SYNC_JOB_SERVER_PROBE){result->installed=TRUE;result->switched=action==SYNC_JOB_SERVER_MIGRATE||action==SYNC_JOB_SERVER_ATTACH||action==SYNC_JOB_SERVER_DEPLOY;wcscpy(result->server_instance,L"fixture-new-server");wcscpy(result->server_phase,L"ACTIVE");}
+    if(action==SYNC_JOB_CHECK){checks++;result->changes=strdup("[{\"path\":\"report.docx\",\"state\":\"conflict\",\"local\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\"size\":24064,\"mtime\":1792893600000000000,\"remote_size\":22016,\"remote_mtime\":1792890000000000000,\"local_version\":\"version-local\",\"remote_version\":\"version-server\"},{\"path\":\"notes.txt\",\"state\":\"push\",\"size\":4096,\"mtime\":1792893600000000000,\"local\":\"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb\",\"local_version\":\"\",\"remote_version\":\"\"}]");result->conflicts=1;result->pushes=1;}
+    if(action==SYNC_JOB_PUSH)push_jobs++;
+    if(action==SYNC_JOB_PULL)pull_jobs++;
+    if(action==SYNC_JOB_RESOLVE){resolutions++;assert(request->resolution==1&&!wcscmp(request->resolve_path,L"report.docx")&&!strcmp(request->expected_remote,"version-server"));}
     result->stats.sent=1024;result->stats.reused=4096;return result->cloud!=NULL;
 }
 static void pump(void){MSG m;while(PeekMessageW(&m,NULL,0,0,PM_REMOVE)){if(!IsDialogMessageW(sync_manager_window(),&m)){TranslateMessage(&m);DispatchMessageW(&m);}}}
@@ -43,7 +48,23 @@ int wmain(int argc,wchar_t **argv){
     candidate_id=3;fail_attach=TRUE;assert(start_job(SYNC_JOB_SERVER_ATTACH,FALSE));finish();assert(settings.server_id==2&&!wcscmp(settings.server_instance,L"fixture-new-server"));fail_attach=FALSE;candidate_id=2;
     SetWindowTextW(target_project_edit,L"/unsaved-destination");nova_english=FALSE;sync_manager_language_changed();GetWindowTextW(target_project_edit,value,256);assert(!wcscmp(value,L"/unsaved-destination"));
     puts("PASS native server UI: candidate isolation, probe, retained identity/pairs on migration, rejected switch preservation and localized unsaved fields");
-    if(argc>1&&!wcscmp(argv[1],L"--capture")){nova_english=FALSE;sync_manager_language_changed();capture(window,L"build\\sync-native-zh.bmp");nova_english=TRUE;sync_manager_language_changed();capture(window,L"build\\sync-native-en.bmp");page=3;TabCtrl_SetCurSel(tab,3);layout();capture(window,L"build\\sync-servers-en.bmp");nova_english=FALSE;sync_manager_language_changed();capture(window,L"build\\sync-servers-zh.bmp");}
+    page=1;TabCtrl_SetCurSel(tab,1);editing=FALSE;layout();assert(!IsWindowVisible(role_combo)&&!IsWindowVisible(filter_edit)&&!IsWindowVisible(target_project_edit));
+    int previous_checks=checks;start_batch(SYNC_JOB_CHECK);finish();assert(checks==previous_checks+settings.count&&inspected[0]&&inspected[1]&&pending_conflict[0]==1);
+    folder_checked[0]=TRUE;folder_checked[1]=FALSE;int previous_push=push_jobs;start_batch(SYNC_JOB_PUSH);finish();assert(push_jobs==previous_push+1);
+    int previous_pull=pull_jobs;start_batch(SYNC_JOB_PULL);finish();assert(pull_jobs==previous_pull+1);
+    select_pair(0);ListView_SetItemState(changes,0,LVIS_SELECTED|LVIS_FOCUSED,LVIS_SELECTED|LVIS_FOCUSED);resolve_choice=1;assert(start_job(SYNC_JOB_RESOLVE,FALSE));finish();assert(resolutions==1);
+    assert(ListView_GetItemCount(changes)==2);nova_english=TRUE;sync_manager_language_changed();assert(ListView_GetItemCount(changes)==2);
+    puts("PASS native workflow UI: hidden technical fields, all-folder inspection, checked-folder push/pull, version choice wiring and translated file states");
+    if(argc>1&&!wcscmp(argv[1],L"--capture")){
+        nova_english=FALSE;sync_manager_language_changed();capture(window,L"build\\sync-native-zh.bmp");
+        nova_english=TRUE;sync_manager_language_changed();capture(window,L"build\\sync-native-en.bmp");
+        page=0;TabCtrl_SetCurSel(tab,0);layout();capture(window,L"build\\sync-devices-en.bmp");
+        page=3;TabCtrl_SetCurSel(tab,3);layout();capture(window,L"build\\sync-servers-en.bmp");
+        nova_english=FALSE;sync_manager_language_changed();capture(window,L"build\\sync-servers-zh.bmp");
+        server_advanced=TRUE;layout();capture(window,L"build\\sync-server-advanced-zh.bmp");server_advanced=FALSE;
+        new_pair();SetWindowTextW(path_edit,work);layout();capture(window,L"build\\sync-publish-zh.bmp");advanced=TRUE;layout();capture(window,L"build\\sync-folder-advanced-zh.bmp");
+        assert(IsWindowVisible(GetDlgItem(window,C_CLOSE))&&IsWindowVisible(GetDlgItem(window,C_REFRESH)));
+    }
     if(argc>1&&!wcscmp(argv[1],L"--show")){SetWindowTextW(window,L"NOVA 原生同步预览 · Synthetic data / no network");while(IsWindowVisible(window)){pump();Sleep(30);}}
     sync_manager_shutdown();DestroyWindow(parent);store_close();OleUninitialize();puts("PASS native sync UI: registration, folder pairing/save, language, preserved user names, bounded cloud validation, worker lifecycle (fake backend/temporary state only)");return 0;
 }

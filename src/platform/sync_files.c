@@ -132,6 +132,7 @@ BOOL sy_index_open(SyncRun *r){
         "CREATE TABLE IF NOT EXISTS files(dataset TEXT NOT NULL,path_key TEXT NOT NULL,path TEXT NOT NULL,job TEXT NOT NULL,manifest TEXT NOT NULL,stat_size INTEGER NOT NULL,stat_mtime INTEGER NOT NULL,PRIMARY KEY(dataset,path_key));"
         "CREATE TABLE IF NOT EXISTS outbox(id TEXT PRIMARY KEY,dataset TEXT NOT NULL,manifest TEXT NOT NULL,source_size INTEGER NOT NULL,source_mtime INTEGER NOT NULL);"
         "CREATE TABLE IF NOT EXISTS inbox(id TEXT PRIMARY KEY,dataset TEXT NOT NULL,manifest TEXT NOT NULL,mhash TEXT NOT NULL,phase TEXT NOT NULL);");
+    if(ok)ok=sy_exec(r,"CREATE TABLE IF NOT EXISTS versions(id TEXT PRIMARY KEY,dataset TEXT NOT NULL,path TEXT NOT NULL,manifest TEXT NOT NULL);");
     const char *tables[]={"files","outbox","inbox"};
     const char *columns[]={"dataset,path_key,path,job,manifest,stat_size,stat_mtime","id,dataset,manifest,source_size,source_mtime","id,dataset,manifest,mhash,phase"};
     for(int i=0;i<3&&ok;i++){

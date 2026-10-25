@@ -48,6 +48,10 @@ def run(executable):
                 while not channel.closed:
                     request,payload,_=wire.read_message(reader)
                     try:
+                        race_flag = root / 'B/change-before-receive.flag'
+                        if request.get('action') == 'pending' and request.get('device') == 'B' and race_flag.exists():
+                            race_flag.unlink()
+                            (root / 'B/files/中文.bin').write_bytes(b'edited while waiting for the server')
                         if request.get("action")=="prepare" and request["manifest"].get("kind")=="PUT":
                             manifest=request["manifest"]
                             content=(root/manifest["origin"]/'files'/manifest['path']).read_bytes()
@@ -69,7 +73,7 @@ def run(executable):
                         if request["action"]=="get" and data and not download_drop.is_set():
                             download_drop.set();channel.close();return
                     except Exception as error:
-                        wire.write_message(writer,{"ok":False,"error":str(error)})
+                        wire.write_message(writer,{"ok":False,"error":str(error),"code":getattr(error,"code","remote")})
             except (EOFError,OSError):
                 pass
             except BaseException as error:
@@ -113,7 +117,7 @@ def run(executable):
         thread=threading.Thread(target=accept,daemon=True)
         thread.start()
         try:
-            result=subprocess.run([str(Path(executable).resolve()),"127.0.0.1",str(listener.getsockname()[1]),fingerprint,str(root)],timeout=180)
+            result=subprocess.run([str(Path(executable).resolve()),"127.0.0.1",str(listener.getsockname()[1]),fingerprint,str(root)],timeout=360)
             assert result.returncode==0,result.returncode
             assert upload_drop.is_set() and download_drop.is_set()
             with broker.connect() as db:

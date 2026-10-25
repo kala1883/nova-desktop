@@ -31,7 +31,7 @@
       "scope": "batch_tasks",
       "section": "Task0",
       "key": "Directory0",
-      "value": "D:\\MyProjects\\MyApps\\mylocalllm"
+      "value": "D:\\MyProjects\\icanbeanaiexpert\\AIUsing\\infrastructure\\mylocalllm"
     },
     {
       "scope": "batch_tasks",
@@ -343,7 +343,7 @@
       "scope": "files",
       "section": "Pane0",
       "key": "Tab4",
-      "value": "D:\\MyWork\\YanchengUrbanOperationCockpit\\@项目管理\\重要信息&项目管理&运营&运维\\@外审\\20260731外审意见整改\\附件\\运维巡检2604-10"
+      "value": "D:\\MyWork\\YanchengUrbanOperationCockpit\\20261024php漏洞排查"
     },
     {
       "scope": "files",
@@ -373,7 +373,7 @@
       "scope": "files",
       "section": "Pane1",
       "key": "Count",
-      "value": "8"
+      "value": "9"
     },
     {
       "scope": "files",
@@ -415,19 +415,25 @@
       "scope": "files",
       "section": "Pane1",
       "key": "Tab6",
-      "value": "D:\\MyWork\\xuzhoumtroline6passengervolumes"
+      "value": "D:\\MyProjects\\icanmakebigmoney\\mymedia"
     },
     {
       "scope": "files",
       "section": "Pane1",
       "key": "Tab7",
-      "value": "D:\\MyProjects\\icanmakealotofmoney\\mymedia\\ai-digest"
+      "value": "D:\\MyProjects\\icanbeanaiexpert\\AIUsing\\infrastructure\\tools"
+    },
+    {
+      "scope": "files",
+      "section": "Pane1",
+      "key": "Tab8",
+      "value": "D:\\MyWork\\YanchengUrbanOperationCockpit"
     },
     {
       "scope": "files",
       "section": "Pane2",
       "key": "Count",
-      "value": "9"
+      "value": "7"
     },
     {
       "scope": "files",
@@ -439,13 +445,13 @@
       "scope": "files",
       "section": "Pane2",
       "key": "Tab1",
-      "value": "nova-ssh:2221145730825772895:/"
+      "value": "nova-ssh:4493060290143614798:/home/ubuntu"
     },
     {
       "scope": "files",
       "section": "Pane2",
       "key": "Tab2",
-      "value": "D:\\MyProjects\\MyApps\\LearningApp"
+      "value": "nova-ssh:2221145730825772895:/"
     },
     {
       "scope": "files",
@@ -475,7 +481,7 @@
       "scope": "files",
       "section": "Pane2",
       "key": "Tab7",
-      "value": "D:\\MyProjects\\MyApps"
+      "value": "D:\\MyProjects\\MyApps\\LocalWebGPT"
     },
     {
       "scope": "files",
@@ -493,7 +499,7 @@
       "scope": "files",
       "section": "Pane3",
       "key": "Tab0",
-      "value": "D:\\MyLife\\myhealth"
+      "value": "D:\\MyLife\\myhealth\\妈妈\\3肾输尿管膀胱"
     },
     {
       "scope": "files",
@@ -535,13 +541,7 @@
       "scope": "files",
       "section": "Pane3",
       "key": "Tab7",
-      "value": "D:\\MyProjects\\icanbeanaiexpert\\AIUsing\\myagentteams\\infrastructure"
-    },
-    {
-      "scope": "files",
-      "section": "Pane3",
-      "key": "Tab8",
-      "value": "D:\\MyProjects\\MyApps"
+      "value": "D:\\MyProjects\\icanbeanaiexpert\\AIUsing\\myagentteams"
     },
     {
       "scope": "ssh_servers",
@@ -565,7 +565,7 @@
       "scope": "ssh_servers",
       "section": "Server0",
       "key": "Name",
-      "value": "Server 1"
+      "value": "tecent1"
     },
     {
       "scope": "ssh_servers",
@@ -601,7 +601,7 @@
       "scope": "ssh_servers",
       "section": "Server1",
       "key": "Name",
-      "value": "Server 2"
+      "value": "huawei"
     },
     {
       "scope": "ssh_servers",
@@ -617,9 +617,45 @@
     },
     {
       "scope": "ssh_servers",
+      "section": "Server2",
+      "key": "Directory",
+      "value": "/home/ubuntu"
+    },
+    {
+      "scope": "ssh_servers",
+      "section": "Server2",
+      "key": "Host",
+      "value": "123.207.178.245"
+    },
+    {
+      "scope": "ssh_servers",
+      "section": "Server2",
+      "key": "Id",
+      "value": "4493060290143614798"
+    },
+    {
+      "scope": "ssh_servers",
+      "section": "Server2",
+      "key": "Name",
+      "value": "tecent2"
+    },
+    {
+      "scope": "ssh_servers",
+      "section": "Server2",
+      "key": "Port",
+      "value": "22"
+    },
+    {
+      "scope": "ssh_servers",
+      "section": "Server2",
+      "key": "User",
+      "value": "ubuntu"
+    },
+    {
+      "scope": "ssh_servers",
       "section": "Servers",
       "key": "Count",
-      "value": "2"
+      "value": "3"
     },
     {
       "scope": "ssh_servers",
@@ -797,6 +833,13 @@
       "position": 16,
       "name": "LocalSend",
       "target": "C:\\ProgramData\\Microsoft\\Windows\\Start Menu\\Programs\\LocalSend.lnk"
+    },
+    {
+      "id": "1290399622728206188",
+      "workspace_id": "6969818039083397288",
+      "position": 17,
+      "name": "QQ音乐",
+      "target": "C:\\ProgramData\\Microsoft\\Windows\\Start Menu\\Programs\\腾讯软件\\QQ音乐\\QQ音乐.lnk"
     }
   ]
 }

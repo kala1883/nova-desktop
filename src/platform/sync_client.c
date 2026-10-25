@@ -156,11 +156,19 @@ static BOOL head_save(SyncRun *r,const char *manifest,uint64_t size,int64_t mtim
         ok=sqlite3_step(s)==SQLITE_DONE;
         }sqlite3_finalize(s);
     for(int i=0;i<4;i++)free(v[i]);
+    if(ok){const char *values[]={manifest};
+        ok=sy_statement(r,"INSERT OR IGNORE INTO versions SELECT json_extract(?1,'$.id'),json_extract(?1,'$.dataset'),json_extract(?1,'$.path'),?1",values,1);
+    }
     return ok||sy_fail(r,SYNC_STORAGE);
 }
-static BOOL publish(SyncRun *r,const char *original){
+static BOOL publish_mode(SyncRun *r,const char *original,BOOL repair){
     SyncReply plan={0},response={0};
     char *request=sync_json_patch(r->db,"{\"action\":\"prepare\",\"native\":true}","$.manifest",original,TRUE);
+    if(repair){free(request);
+        char *id=sync_json_string(r->db,original,"$.id");
+        request=id?sy_fields("repair_prepare","job",id,NULL,NULL):NULL;
+        free(id);
+    }
     BOOL ok=request&&sy_rpc(r,request,NULL,0,&plan);
     free(request);
     if(!ok)return FALSE;
@@ -175,7 +183,7 @@ static BOOL publish(SyncRun *r,const char *original){
         return sy_fail(r,SYNC_PROTOCOL);
         }free(key);
     const char *update[]={manifest,id};
-    ok=sy_statement(r,"UPDATE outbox SET manifest=?1 WHERE id=?2",update,2);
+    ok=repair||sy_statement(r,"UPDATE outbox SET manifest=?1 WHERE id=?2",update,2);
     r->result->stats.reused+=(uint64_t)sync_json_int(r->db,plan.json,"$.receiver_reused_bytes",0);
     sqlite3_stmt *items=NULL;
     unsigned char *data=malloc(SYNC_PACKET_MAX);
@@ -228,7 +236,7 @@ static BOOL publish(SyncRun *r,const char *original){
     free(data);
     if(ok)ok=command(r,"commit","job",id,&response);
     sy_reply_free(&response);
-    if(ok){
+    if(ok&&!repair){
         uint64_t size=(uint64_t)sync_json_int(r->db,manifest,"$.size",0),mtime=(uint64_t)sync_json_int(r->db,manifest,"$.mtime_ns",0);
         const char *args[]={id};
         ok=sy_exec(r,"BEGIN IMMEDIATE")&&head_save(r,manifest,size,(int64_t)mtime)&&sy_statement(r,"DELETE FROM outbox WHERE id=?1",args,1)&&sy_exec(r,"COMMIT");
@@ -241,6 +249,7 @@ static BOOL publish(SyncRun *r,const char *original){
     sy_reply_free(&plan);
     return ok&&!sy_cancel(r);
 }
+static BOOL publish(SyncRun *r,const char *manifest){return publish_mode(r,manifest,FALSE);}
 static BOOL cached(SyncRun *r,const char *hash,uint64_t size){wchar_t path[SYNC_PATH_CAP];
     char hex[65];
     uint64_t n;
@@ -338,25 +347,30 @@ static BOOL receive_one(SyncRun *r,const char *manifest,const char *mhash){
     if(ok&&phase&&!strcmp(phase,"APPLIED")){ok=acknowledge(r,manifest,mhash);
         goto cleanup;
         }
+    BOOL resolving=ok&&r->request->resolution&&r->request->resolve_path[0];
+    if(resolving){wchar_t name[SYNC_PATH_CAP];
+        resolving=sync_wide(relative,name,SYNC_PATH_CAP)&&!wcscmp(name,r->request->resolve_path);
+    }
     if(ok){previous=sy_query(r,"SELECT manifest FROM files WHERE dataset=?1 AND path_key=?2",dataset,key);
         if(previous){old_id=sync_json_string(r->db,previous,"$.id");
             old_hash=sync_json_string(r->db,previous,"$.sha256");
-            }ok=(!parent&&!old_id)||(parent&&old_id&&!strcmp(parent,old_id));
+            }ok=resolving||(!parent&&!old_id)||(parent&&old_id&&!strcmp(parent,old_id));
         if(!ok)sy_fail(r,SYNC_CONFLICT);
         }
     BOOL exists=FALSE,already=FALSE;
     uint64_t actual_size=0,actual_time=0,total=(uint64_t)sync_json_int(r->db,manifest,"$.size",-1);
     char actual[65]={0};
     if(ok)ok=probe(r,path,actual,&actual_size,&actual_time,&exists);
+    if(ok&&resolving&&((exists&&!r->accepted_local[0])||(!exists&&r->accepted_local[0])||(exists&&strcmp(actual,r->accepted_local))))ok=sy_fail(r,SYNC_CONFLICT);
     if(ok){already=phase&&!strcmp(phase,"READY")&&((expected&&exists&&!strcmp(actual,expected)&&actual_size==total)||(!expected&&!exists));
         BOOL adopted=!previous&&expected&&exists&&!strcmp(actual,expected)&&actual_size==total;
-        if(!already&&!adopted&&!((old_hash&&exists&&!strcmp(actual,old_hash))||(!old_hash&&!exists)))ok=sy_fail(r,SYNC_CONFLICT);
+        if(!resolving&&!already&&!adopted&&!((old_hash&&exists&&!strcmp(actual,old_hash))||(!old_hash&&!exists)))ok=sy_fail(r,SYNC_CONFLICT);
         if(ok&&adopted){ok=seed(r,path,manifest);
             already=ok;
             }
         if(ok&&old_hash&&exists&&!strcmp(actual,old_hash))ok=seed(r,path,previous);
     }
-    if(ok&&!strcmp(kind,"DELETE")&&!r->request->pair.sync_deletes)ok=sy_fail(r,SYNC_DELETE);
+    if(ok&&!strcmp(kind,"DELETE")&&!r->request->pair.sync_deletes&&!(resolving&&r->request->resolution==1))ok=sy_fail(r,SYNC_DELETE);
     if(ok){const char *values[]={id,dataset,manifest,mhash};
         ok=sy_statement(r,"INSERT OR IGNORE INTO inbox VALUES (?1,?2,?3,?4,'DOWNLOADING')",values,4);
         }
@@ -367,6 +381,7 @@ static BOOL receive_one(SyncRun *r,const char *manifest,const char *mhash){
     if(ok){const char *values[]={id};
         ok=sy_statement(r,"UPDATE inbox SET phase='READY' WHERE id=?1",values,1);
         }
+    if(resolving&&r->request->resolution==1)already=TRUE;
     if(ok&&!already&&!strcmp(kind,"PUT")){
         sy_progress(r,SYNC_APPLY,path,0,total);
         wchar_t directory[SYNC_PATH_CAP],temporary[SYNC_PATH_CAP];
@@ -415,6 +430,7 @@ static BOOL receive_one(SyncRun *r,const char *manifest,const char *mhash){
         BOOL present=FALSE;
         char final[65];
         ok=probe(r,path,final,&size,&mtime,&present);
+        if(ok&&resolving&&r->request->resolution==1&&((present&&!r->accepted_local[0])||(!present&&r->accepted_local[0])||(present&&strcmp(final,r->accepted_local))))ok=sy_fail(r,SYNC_CONFLICT);
         BOOL stable=ok&&expected&&present&&!strcmp(expected,final)&&size==total;
         const char *values[]={id};
         ok=ok&&sy_exec(r,"BEGIN IMMEDIATE")&&head_save(r,manifest,stable?size:0,stable?(int64_t)mtime:-1)&&sy_statement(r,"UPDATE inbox SET phase='APPLIED' WHERE id=?1",values,1)&&sy_exec(r,"COMMIT");
@@ -423,6 +439,9 @@ static BOOL receive_one(SyncRun *r,const char *manifest,const char *mhash){
             ok=acknowledge(r,manifest,mhash);
             if(ok)r->result->stats.downloaded++;
             }
+        if(ok&&resolving&&r->request->resolution==2){
+            if(expected)lstrcpynA(r->accepted_local,expected,65);else r->accepted_local[0]=0;
+        }
     }
 cleanup:
     free(current);
@@ -479,7 +498,11 @@ static BOOL push_file(SyncRun *r,const wchar_t *path,const wchar_t *relative,BOO
     else{
         ok=sy_meta(path,&size,&mtime);
         char *saved=sy_query(r,"SELECT json_object('size',stat_size,'mtime',stat_mtime) FROM files WHERE dataset=?1 AND path=?2",dataset,name);
-        if(ok&&saved&&sync_json_int(r->db,saved,"$.size",-1)==(int64_t)size&&sync_json_int(r->db,saved,"$.mtime",-1)==(int64_t)mtime)r->result->stats.unchanged++;
+        BOOL same=ok&&saved&&sync_json_int(r->db,saved,"$.size",-1)==(int64_t)size&&sync_json_int(r->db,saved,"$.mtime",-1)==(int64_t)mtime;
+        if(same){char actual[65],*old=head?sync_json_string(r->db,head,"$.sha256"):NULL;
+            ok=sync_hash_file(path,actual,NULL,NULL,r->request->cancel);same=ok&&old&&!strcmp(actual,old);free(old);
+        }
+        if(ok&&same)r->result->stats.unchanged++;
         else if(ok)manifest=snapshot_file(r,path,name,parent);
         free(saved);
         if(!ok)sy_fail(r,SYNC_PATH);
@@ -539,8 +562,155 @@ static BOOL bind_pair(SyncRun *r){
     free(path);
     return ok;
 }
+/* Inspection hashes working files but never publishes, receives or binds them. */
+static BOOL inspect_tree(SyncRun *r,const wchar_t *directory,const wchar_t *relative,int depth,int *count){
+    if(depth>32)return sy_fail(r,SYNC_PATH);
+    wchar_t mask[SYNC_PATH_CAP];
+    if(!sy_join(mask,directory,L"*"))return sy_fail(r,SYNC_PATH);
+    WIN32_FIND_DATAW data;
+    HANDLE find=FindFirstFileW(mask,&data);
+    if(find==INVALID_HANDLE_VALUE)return GetLastError()==ERROR_FILE_NOT_FOUND||sy_fail(r,SYNC_PATH);
+    BOOL ok=TRUE;
+    do{
+        if(!wcscmp(data.cFileName,L".")||!wcscmp(data.cFileName,L"..")||(data.dwFileAttributes&FILE_ATTRIBUTE_REPARSE_POINT))continue;
+        wchar_t path[SYNC_PATH_CAP],name[SYNC_PATH_CAP];
+        int n=swprintf(name,SYNC_PATH_CAP,relative[0]?L"%ls/%ls":L"%ls%ls",relative,data.cFileName);
+        if(n<0||n>=SYNC_PATH_CAP||!sy_join(path,directory,data.cFileName)){ok=sy_fail(r,SYNC_PATH);break;}
+        if(excluded(r,name,data.cFileName)||PathIsPrefixW(r->request->state_directory,path))continue;
+        if(++*count>100000||sy_cancel(r)){ok=FALSE;break;}
+        if(data.dwFileAttributes&FILE_ATTRIBUTE_DIRECTORY)ok=inspect_tree(r,path,name,depth+1,count);
+        else{
+            char hash[65],size_text[32],time_text[32];uint64_t size=0,mtime=0;
+            sy_progress(r,SYNC_SCAN,path,0,0);
+            ok=sync_hash_file(path,hash,&size,&mtime,r->request->cancel);
+            char *utf=sync_utf8(name);
+            snprintf(size_text,sizeof(size_text),"%llu",(unsigned long long)size);
+            snprintf(time_text,sizeof(time_text),"%llu",(unsigned long long)mtime);
+            const char *values[]={utf,hash,size_text,time_text};
+            ok=ok&&utf&&sy_statement(r,"INSERT INTO inspection(path,local_hash,local_size,local_time) VALUES (?1,?2,?3,?4) ON CONFLICT(path) DO UPDATE SET local_hash=?2,local_size=?3,local_time=?4",values,4);
+            free(utf);
+        }
+    }while(ok&&FindNextFileW(find,&data));
+    DWORD error=GetLastError();FindClose(find);
+    return (ok&&error==ERROR_NO_MORE_FILES)||(r->result->failure!=SYNC_OK?FALSE:sy_fail(r,SYNC_PATH));
+}
+static BOOL inspect(SyncRun *r){
+    r->result->pushes=r->result->pulls=r->result->conflicts=r->result->waiting=0;
+    free(r->result->changes);r->result->changes=NULL;
+    DWORD attributes=GetFileAttributesW(r->request->pair.directory);
+    if(attributes==INVALID_FILE_ATTRIBUTES||!(attributes&FILE_ATTRIBUTE_DIRECTORY)||(attributes&FILE_ATTRIBUTE_REPARSE_POINT))return sy_fail(r,SYNC_PATH);
+    SyncReply reply={0};char *dataset=sync_utf8(r->request->pair.dataset);
+    BOOL ok=dataset&&command(r,"overview","dataset",dataset,&reply)&&
+        sy_exec(r,"DROP TABLE IF EXISTS temp.inspection; CREATE TEMP TABLE inspection(path TEXT PRIMARY KEY COLLATE NOCASE,local_hash TEXT,local_size INTEGER,local_time INTEGER,base TEXT,remote TEXT,available INTEGER DEFAULT 1);");
+    if(ok){const char *v[]={reply.json};
+        ok=sy_statement(r,"INSERT INTO inspection(path,remote,available) SELECT json_extract(value,'$.manifest.path'),json_extract(value,'$.manifest'),json_extract(value,'$.available') FROM json_each(?1,'$.heads')",v,1);
+    }
+    if(ok){const char *v[]={dataset};
+        ok=sy_statement(r,"INSERT INTO inspection(path,base) SELECT path,manifest FROM files WHERE dataset=?1 ON CONFLICT(path) DO UPDATE SET base=excluded.base",v,1);
+    }
+    int count=0;if(ok)ok=inspect_tree(r,r->request->pair.directory,L"",0,&count);
+    /* Respect filters for tracked deletions too; missing local files only push when opted in. */
+    sqlite3_stmt *s=NULL;
+    if(ok)ok=sqlite3_prepare_v2(r->db,"SELECT path FROM inspection",-1,&s,NULL)==SQLITE_OK;
+    SyncBuffer remove={0};
+    if(ok)ok=sync_buffer_add(&remove,"[");
+    BOOL first=TRUE;
+    while(ok&&sqlite3_step(s)==SQLITE_ROW){const char *p=(const char*)sqlite3_column_text(s,0);wchar_t path[SYNC_PATH_CAP];
+        if(!sync_wide(p,path,SYNC_PATH_CAP)||!sync_relative_path(path)){ok=sy_fail(r,SYNC_PROTOCOL);break;}
+        wchar_t *base=wcsrchr(path,L'/');base=base?base+1:path;
+        if(excluded(r,path,base)){ok=(first||sync_buffer_add(&remove,","))&&sync_buffer_string(&remove,p);first=FALSE;}
+    }
+    sqlite3_finalize(s);s=NULL;
+    if(ok)ok=sync_buffer_add(&remove,"]");
+    if(ok){const char *v[]={remove.data};ok=sy_statement(r,"DELETE FROM inspection WHERE path IN (SELECT value FROM json_each(?1))",v,1);}
+    free(remove.data);
+    const char *classify=
+        "CREATE TEMP VIEW inspection_states AS SELECT *,CASE "
+        "WHEN remote IS NOT NULL AND json_extract(remote,'$.id') IS NOT json_extract(base,'$.id') AND local_hash IS NOT json_extract(base,'$.sha256') AND local_hash IS NOT json_extract(remote,'$.sha256') THEN 'conflict' "
+        "WHEN remote IS NOT NULL AND json_extract(remote,'$.id') IS NOT json_extract(base,'$.id') THEN CASE WHEN available=0 THEN 'waiting' ELSE 'pull' END "
+        "WHEN local_hash IS NOT json_extract(base,'$.sha256') THEN 'push' ELSE 'synced' END AS state FROM inspection;";
+    if(ok)ok=sy_exec(r,"DROP VIEW IF EXISTS temp.inspection_states;")&&sy_exec(r,classify);
+    if(ok&&!r->request->pair.sync_deletes)ok=sy_exec(r,"DELETE FROM inspection WHERE local_hash IS NULL AND (remote IS NULL OR json_extract(remote,'$.id') IS json_extract(base,'$.id'));");
+    if(ok)ok=sqlite3_prepare_v2(r->db,"SELECT state,count(*) FROM inspection_states GROUP BY state",-1,&s,NULL)==SQLITE_OK;
+    while(ok&&sqlite3_step(s)==SQLITE_ROW){const char *state=(const char*)sqlite3_column_text(s,0);int n=sqlite3_column_int(s,1);
+        if(!strcmp(state,"push"))r->result->pushes=n;
+        if(!strcmp(state,"pull"))r->result->pulls=n;
+        if(!strcmp(state,"conflict"))r->result->conflicts=n;
+        if(!strcmp(state,"waiting"))r->result->waiting=n;
+    }
+    sqlite3_finalize(s);
+    if(ok){r->result->changes=sy_query(r,"SELECT json_group_array(json_object('path',path,'state',state,'local',coalesce(local_hash,''),'local_version',coalesce(json_extract(base,'$.id'),''),'remote_version',coalesce(json_extract(remote,'$.id'),''),'size',local_size,'mtime',local_time,'remote_size',json_extract(remote,'$.size'),'remote_mtime',json_extract(remote,'$.mtime_ns'),'remote_deleted',json_extract(remote,'$.kind')='DELETE','origin',json_extract(remote,'$.origin'))) FROM inspection_states",NULL,NULL);
+        ok=r->result->changes!=NULL;
+    }
+    free(dataset);sy_reply_free(&reply);
+    return ok||sy_fail(r,SYNC_STORAGE);
+}
+static BOOL repair_subscribers(SyncRun *r){
+    SyncReply reply={0};char *dataset=sync_utf8(r->request->pair.dataset);
+    BOOL ok=dataset&&command(r,"repairs","dataset",dataset,&reply);
+    sqlite3_stmt *s=NULL;
+    if(ok)ok=sqlite3_prepare_v2(r->db,"SELECT value FROM json_each(?1,'$.jobs')",-1,&s,NULL)==SQLITE_OK;
+    if(ok)sqlite3_bind_text(s,1,reply.json,-1,SQLITE_STATIC);
+    while(ok&&sqlite3_step(s)==SQLITE_ROW)ok=publish_mode(r,(const char*)sqlite3_column_text(s,0),TRUE);
+    sqlite3_finalize(s);free(dataset);sy_reply_free(&reply);return ok;
+}
+static BOOL resolve(SyncRun *r){
+    if(!sync_relative_path(r->request->resolve_path)||(r->request->resolution!=1&&r->request->resolution!=2))return sy_fail(r,SYNC_PROTOCOL);
+    lstrcpynA(r->accepted_local,r->request->expected_local,65);
+    if(!inspect(r))return FALSE;
+    char *relative=sync_utf8(r->request->resolve_path);
+    char *record=relative?sy_query(r,"SELECT json_object('local',coalesce(local_hash,''),'remote',json_extract(remote,'$.id')) FROM inspection WHERE path=?1",relative,NULL):NULL;
+    char *local=record?sync_json_string(r->db,record,"$.local"):NULL,*remote=record?sync_json_string(r->db,record,"$.remote"):NULL;
+    BOOL ok=local&&remote&&!strcmp(local,r->request->expected_local)&&!strcmp(remote,r->request->expected_remote);
+    wchar_t path[SYNC_PATH_CAP];
+    if(ok)ok=target_path(r,relative,path);
+    /* A replacement always keeps a verified, private recovery copy. */
+    if(ok&&local[0]){wchar_t directory[SYNC_PATH_CAP],backup[SYNC_PATH_CAP],name[80],root[SYNC_PATH_CAP];
+        swprintf(name,80,L"%hs",local);
+        ok=sy_join(root,r->request->state_directory,L"recovery")&&sy_join(directory,root,name)&&sy_mkdirs(directory)&&sy_join(backup,directory,r->request->resolve_path);
+        if(ok){for(wchar_t *p=backup;*p;p++)if(*p==L'/')*p=L'\\';
+            lstrcpyW(directory,backup);wchar_t *slash=wcsrchr(directory,L'\\');if(slash)*slash=0;else ok=FALSE;
+        }
+        if(ok)ok=sy_mkdirs(directory)&&(sy_regular(backup)||CopyFileW(path,backup,TRUE));
+        char hash[65];if(ok)ok=sync_hash_file(backup,hash,NULL,NULL,r->request->cancel)&&!strcmp(hash,local);
+    }
+    SyncReply reply={0};char *dataset=sync_utf8(r->request->pair.dataset);
+    if(ok)ok=dataset&&command(r,"pending","dataset",dataset,&reply);
+    if(ok){const char *v[]={reply.json,relative};
+        sqlite3_stmt *latest=NULL;
+        ok=sqlite3_prepare_v2(r->db,"SELECT json_extract(value,'$.manifest.id') FROM json_each(?1,'$.jobs') WHERE json_extract(value,'$.manifest.path')=?2 ORDER BY key DESC LIMIT 1",-1,&latest,NULL)==SQLITE_OK;
+        if(ok){sqlite3_bind_text(latest,1,v[0],-1,SQLITE_STATIC);sqlite3_bind_text(latest,2,v[1],-1,SQLITE_STATIC);
+            int step=sqlite3_step(latest);ok=step==SQLITE_DONE||(step==SQLITE_ROW&&!strcmp((const char*)sqlite3_column_text(latest,0),remote));
+        }
+        sqlite3_finalize(latest);
+    }
+    sqlite3_stmt *s=NULL;
+    if(ok)ok=sqlite3_prepare_v2(r->db,"SELECT json_extract(value,'$.manifest'),json_extract(value,'$.mhash') FROM json_each(?1,'$.jobs') WHERE json_extract(value,'$.manifest.path')=?2",-1,&s,NULL)==SQLITE_OK;
+    if(ok){sqlite3_bind_text(s,1,reply.json,-1,SQLITE_STATIC);sqlite3_bind_text(s,2,relative,-1,SQLITE_STATIC);}
+    while(ok&&sqlite3_step(s)==SQLITE_ROW)ok=receive_one(r,(const char*)sqlite3_column_text(s,0),(const char*)sqlite3_column_text(s,1));
+    sqlite3_finalize(s);
+    if(ok){char *manifest=sy_query(r,"SELECT remote FROM inspection WHERE path=?1",relative,NULL);char digest[65];
+        ok=manifest&&sync_sha(manifest,strlen(manifest),digest)&&receive_one(r,manifest,digest);free(manifest);
+    }
+    if(ok){
+        const char *v[]={dataset,relative};
+        ok=sy_statement(r,"INSERT OR IGNORE INTO versions SELECT id,dataset,json_extract(manifest,'$.path'),manifest FROM outbox WHERE dataset=?1 AND json_extract(manifest,'$.path')=?2",v,2)&&
+            sy_statement(r,"DELETE FROM outbox WHERE dataset=?1 AND json_extract(manifest,'$.path')=?2",v,2);
+        if(ok&&r->request->resolution==1)ok=push_file(r,path,r->request->resolve_path,!local[0]);
+    }
+    free(relative);free(record);free(local);free(remote);free(dataset);sy_reply_free(&reply);
+    return ok||(r->result->failure!=SYNC_OK?FALSE:sy_fail(r,SYNC_CONFLICT));
+}
 BOOL sy_sync(SyncRun *r){
+    DWORD attributes=GetFileAttributesW(r->request->pair.directory);
+    if(attributes==INVALID_FILE_ATTRIBUTES||!(attributes&FILE_ATTRIBUTE_DIRECTORY)||(attributes&FILE_ATTRIBUTE_REPARSE_POINT))return sy_fail(r,SYNC_PATH);
     if(!bind_pair(r))return FALSE;
+    if(r->request->direction!=2&&!repair_subscribers(r))return FALSE;
+    if(r->request->direction==2)return receive_all(r);
+    if(r->request->direction==1){
+        if(!inspect(r))return FALSE;
+        if(r->result->conflicts||r->result->pulls||r->result->waiting)return sy_fail(r,SYNC_CONFLICT);
+    }
     char *dataset=sync_utf8(r->request->pair.dataset);
     char *outbox=dataset?sy_query(r,"SELECT json_group_array(json(manifest)) FROM outbox WHERE dataset=?1",dataset,NULL):NULL;
     free(dataset);
@@ -550,7 +720,7 @@ BOOL sy_sync(SyncRun *r){
     while(ok&&sqlite3_step(s)==SQLITE_ROW)ok=publish(r,(const char*)sqlite3_column_text(s,0));
     sqlite3_finalize(s);
     free(outbox);
-    if(ok)ok=receive_all(r);
+    if(ok&&r->request->direction!=1)ok=receive_all(r);
     int count=0;
     if(ok)ok=scan(r,r->request->pair.directory,L"",0,&count);
     if(ok&&r->request->pair.sync_deletes){dataset=sync_utf8(r->request->pair.dataset);
@@ -570,6 +740,8 @@ BOOL sy_sync(SyncRun *r){
 }
 BOOL sync_client_run(SyncRequest *request,int action,SyncResult *result){
     if(action>=SYNC_JOB_SERVER_PROBE)return sync_server_run(request,action,result);
+    int chosen_resolution=request->resolution;
+    if(action!=SYNC_JOB_RESOLVE)request->resolution=0;
     memset(result,0,sizeof(*result));
     SyncRun r={0};
     r.request=request;
@@ -589,11 +761,24 @@ BOOL sync_client_run(SyncRequest *request,int action,SyncResult *result){
     if(ok)ok=ssh_client_protocol_open(r.ssh,request->settings.project,request->settings.broker,&result->ssh);
     SyncReply reply={0};
     if(ok&&action==SYNC_JOB_REGISTER){char *name=sync_utf8(request->settings.name);
-        ok=name&&command(&r,"register","name",name,&reply);
+        char *base=name?sy_fields("register","name",name,NULL,NULL):NULL;
+        char *registration=base?sync_json_patch(r.db,base,"$.automatic","true",TRUE):NULL;
+        ok=registration&&sy_rpc(&r,registration,NULL,0,&reply);
+        free(base);free(registration);
+        if(ok){char *role=sync_json_string(r.db,reply.json,"$.device");
+            ok=role&&strlen(role)==1&&role[0]>='A'&&role[0]<'A'+SYNC_DEVICE_LIMIT;
+            if(ok){result->registered_role=role[0]-'A';request->settings.role=result->registered_role;}
+            free(role);
+        }
         free(name);
         sy_reply_free(&reply);
         }
-    if(ok&&action==SYNC_JOB_RUN)ok=sy_sync(&r);
+    if(ok&&action==SYNC_JOB_CHECK)ok=inspect(&r);
+    if(ok&&action==SYNC_JOB_RESOLVE)ok=resolve(&r);
+    if(ok&&(action==SYNC_JOB_RUN||action==SYNC_JOB_PUSH||action==SYNC_JOB_PULL)){
+        request->direction=action==SYNC_JOB_PUSH?1:action==SYNC_JOB_PULL?2:0;
+        ok=sy_sync(&r);
+    }
     if(ok&&action==SYNC_JOB_BIND)ok=bind_pair(&r);
     if(ok&&action==SYNC_JOB_UNBIND){char *dataset=sync_utf8(request->pair.dataset);
         ok=dataset&&command(&r,"unbind","dataset",dataset,&reply);
@@ -609,10 +794,12 @@ BOOL sync_client_run(SyncRequest *request,int action,SyncResult *result){
     if(r.ssh)ssh_client_close(r.ssh);
     if(r.db)sqlite3_close(r.db);
     SecureZeroMemory(request->login.secret,sizeof(request->login.secret));
+    request->resolution=chosen_resolution;
     return ok;
 }
 void sync_result_dispose(SyncResult *r){ssh_result_dispose(&r->ssh);
     free(r->cloud);
     free(r->route);
+    free(r->changes);
     memset(r,0,sizeof(*r));
     }

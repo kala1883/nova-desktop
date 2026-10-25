@@ -11,7 +11,7 @@
 typedef struct Admin {
     SyncRun wire;
     const wchar_t *project,*root;
-    BOOL target;
+    BOOL target,provision;
 } Admin;
 static const char *source_names[]={"sync_server.py","chunksync/__init__.py","chunksync/common.py","chunksync/wire.py","chunksync/broker.py","chunksync/control.py"};
 
@@ -68,7 +68,7 @@ static BOOL opened(Admin *a,SshLogin *login){
     char *encoded=malloc(capacity);
     if(!encoded)return sy_fail(&a->wire,SYNC_STORAGE);
     int n=EVP_EncodeBlock((unsigned char*)encoded,source,(int)length);
-    BOOL ok=n>0&&ssh_client_bootstrap_open(a->wire.ssh,encoded,(size_t)n,&a->wire.result->ssh);
+    BOOL ok=n>0&&ssh_client_bootstrap_open(a->wire.ssh,encoded,(size_t)n,a->provision,&a->wire.result->ssh);
     free(encoded);
     if(!ok){a->wire.result->target_error=a->target;
         return sy_fail(&a->wire,SYNC_NETWORK);
@@ -441,6 +441,7 @@ BOOL sync_server_run(SyncRequest *request,int action,SyncResult *result){
     b.project=request->target_project;
     b.root=request->target_broker;
     b.target=TRUE;
+    b.provision=action==SYNC_JOB_SERVER_DEPLOY||action==SYNC_JOB_SERVER_MIGRATE;
     BOOL ok=sqlite3_open(":memory:",&a.wire.db)==SQLITE_OK;
     b.wire.db=a.wire.db;
     if(ok&&action==SYNC_JOB_SERVER_RESTORE){

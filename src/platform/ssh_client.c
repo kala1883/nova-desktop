@@ -291,8 +291,8 @@ BOOL ssh_client_protocol_write(SshClient *c,const void *data,size_t size,SshResu
     if(!c->terminal||size>16u*1024u*1024u+1024u*1024u)return failed(c,r,nova_text(L"同步帧大小或状态无效",L"Invalid synchronization frame size or state"));
     size_t offset=0;while(offset<size){ssize_t n;RETRY(c,n,libssh2_channel_write(c->terminal,(const char*)data+offset,size-offset));if(n<=0)return failed(c,r,nova_text(L"发送同步数据",L"Send synchronization data"));offset+=(size_t)n;c->deadline=GetTickCount64()+(c->protocol_idle?c->protocol_idle:30000);}return TRUE;
 }
-BOOL ssh_client_bootstrap_open(SshClient *c,const char *source,size_t length,SshResult *r){
-    c->protocol_idle=120000; /* Cancellable allowance for database verification and deployment. */
+BOOL ssh_client_bootstrap_open(SshClient *c,const char *source,size_t length,BOOL provision,SshResult *r){
+    c->protocol_idle=provision?300000:120000; /* Package installation may take several minutes. */
     begin(c);c->phase=SSH_PHASE_COMMAND;c->deadline=GetTickCount64()+(c->protocol_idle?c->protocol_idle:30000);
     if(c->terminal||!source||length>1024u*1024u)return failed(c,r,nova_text(L"部署引导数据无效",L"Invalid deployment bootstrap"));
     LIBSSH2_CHANNEL *channel=NULL;
@@ -300,7 +300,19 @@ BOOL ssh_client_bootstrap_open(SshClient *c,const char *source,size_t length,Ssh
     if(!channel)return failed(c,r,nova_text(L"打开服务器管理通道",L"Open server administration channel"));
     c->terminal=channel;
     static const char command[]="python3 -B -u -c 'import sys,base64; exec(compile(base64.b64decode(sys.stdin.buffer.readline()),\"<nova-bootstrap>\",\"exec\"))'";
-    int rc;RETRY(c,rc,libssh2_channel_exec(channel,command));
+    /* Fixed administrator setup; no paths, credentials, sudo or user text enter shell syntax. */
+    static const char setup[]="sh -c '"
+        "# NOVA_BOOTSTRAP_SETUP\n"
+        "if ! python3 -c \"import sys; assert sys.version_info >= (3,9)\" >/dev/null 2>&1; then "
+        "if [ \"$(id -u)\" != 0 ]; then echo \"Install Python 3.9+ as the server administrator, then retry Configure server.\" >&2; exit 126; fi; "
+        "if command -v apt-get >/dev/null 2>&1; then apt-get update >&2 && DEBIAN_FRONTEND=noninteractive apt-get install -y python3 >&2 || exit 126; "
+        "elif command -v dnf >/dev/null 2>&1; then dnf install -y python3 >&2 || exit 126; "
+        "elif command -v yum >/dev/null 2>&1; then yum install -y python3 >&2 || exit 126; "
+        "elif command -v apk >/dev/null 2>&1; then apk add python3 >&2 || exit 126; "
+        "else echo \"No supported package manager; install Python 3.9+ then retry.\" >&2; exit 126; fi; fi; "
+        "python3 -c \"import sys,sqlite3,zlib; assert sys.version_info >= (3,9); sqlite3.connect(\\\":memory:\\\").execute(\\\"SELECT json_valid(1)\\\")\" >/dev/null 2>&1 || exit 126; "
+        "exec python3 -B -u -c \"import sys,base64; exec(compile(base64.b64decode(sys.stdin.buffer.readline()),\\\"<nova-bootstrap>\\\",\\\"exec\\\"))\"'";
+    int rc;RETRY(c,rc,libssh2_channel_exec(channel,provision?setup:command));
     BOOL ok=!rc&&channel_write(c,channel,source,length)&&channel_write(c,channel,"\n",1);
     return ok||failed(c,r,nova_text(L"启动服务器部署（需要 Python 3.9+）",L"Start server deployment (Python 3.9+ required)"));
 }
@@ -312,7 +324,10 @@ BOOL ssh_client_protocol_read(SshClient *c,void *data,size_t size,SshResult *r){
         ssize_t n=libssh2_channel_read(c->terminal,(char*)data+offset,size-offset);
         if(n>0){offset+=(size_t)n;c->deadline=GetTickCount64()+(c->protocol_idle?c->protocol_idle:30000);continue;}
         char errors[512];ssize_t ignored=libssh2_channel_read_stderr(c->terminal,errors,sizeof(errors));(void)ignored;
-        if((n<0&&n!=LIBSSH2_ERROR_EAGAIN)||libssh2_channel_eof(c->terminal)||!waiting(c))return failed(c,r,nova_text(L"同步连接已中断，断点保留",L"Synchronization interrupted; checkpoints retained"));
+        if((n<0&&n!=LIBSSH2_ERROR_EAGAIN)||libssh2_channel_eof(c->terminal)||!waiting(c)){
+            if(libssh2_channel_get_exit_status(c->terminal)==126)return failed(c,r,nova_text(L"服务器环境未就绪：需要 Python 3.9+、SQLite JSON 和 zlib。自动安装需要服务器管理员权限；请准备好环境后重试。",L"Server environment unavailable: Python 3.9+, SQLite JSON and zlib are required. Automatic installation needs server administrator privileges; prepare the environment and retry."));
+            return failed(c,r,nova_text(L"同步连接已中断，断点保留",L"Synchronization interrupted; checkpoints retained"));
+        }
     }
     return TRUE;
 }

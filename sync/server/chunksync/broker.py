@@ -23,7 +23,16 @@ CREATE TABLE IF NOT EXISTS inventory(device TEXT NOT NULL,hash TEXT NOT NULL,siz
 CREATE TABLE IF NOT EXISTS receipts(job TEXT NOT NULL,device TEXT NOT NULL,mhash TEXT NOT NULL,PRIMARY KEY(job,device));
 CREATE INDEX IF NOT EXISTS jobs_state ON jobs(state,seq);
 CREATE INDEX IF NOT EXISTS chunks_hash ON job_chunks(hash);
+CREATE INDEX IF NOT EXISTS jobs_path ON jobs(dataset,path_key,seq);
+CREATE TABLE IF NOT EXISTS publishers(dataset TEXT PRIMARY KEY,device TEXT NOT NULL);
+CREATE TABLE IF NOT EXISTS recipients(job TEXT NOT NULL,device TEXT NOT NULL,PRIMARY KEY(job,device));
 """
+
+DEVICE_ROLES = tuple(chr(ord('A') + i) for i in range(16))
+
+
+class VersionConflict(SyncError):
+    code = 'conflict'
 
 
 class Broker:
@@ -57,17 +66,30 @@ class Broker:
         if linked(self.chunks) or linked(self.uploads):
             raise SyncError("服务端内容目录不能是链接")
         self.db = self.root / "queue.sqlite3"
-        if initialize:
-            with self.connect() as db:
-                db.executescript(SCHEMA)
+        # Additive upgrade: preserve legacy identities, versions and receipts.
+        self.upgraded = False
+        state_file = self.root / '.nova-control.json'
+        if initialize and (not state_file.exists() or control(self.root)['phase'] == 'ACTIVE'):
+            self.upgrade()
+
+    def upgrade(self):
+        with self.connect() as db:
+            db.executescript("BEGIN IMMEDIATE;" + SCHEMA + """
+                INSERT OR IGNORE INTO publishers SELECT dataset,origin FROM jobs j
+                  WHERE seq=(SELECT min(seq) FROM jobs k WHERE k.dataset=j.dataset);
+                INSERT OR IGNORE INTO recipients SELECT id,origin FROM jobs;
+                INSERT OR IGNORE INTO recipients SELECT j.id,b.device FROM jobs j JOIN bindings b ON b.dataset=j.dataset;
+                COMMIT;
+            """)
+        self.upgraded = True
 
     def connect(self, write=False):
         return database(self.db, write=write, max_bytes=self.config["metadata_limit"])
 
     def authenticate(self, db, request):
         role = request.get("device")
-        if role not in ("A", "B"):
-            raise SyncError("请先登记为设备 A 或 B")
+        if role not in DEVICE_ROLES:
+            raise SyncError("请先注册本设备 / Register this device first")
         found = db.execute("SELECT node_id FROM devices WHERE role=?", (role,)).fetchone()
         if not found or found["node_id"] != request.get("node_id"):
             raise SyncError("设备身份与登记记录不匹配，请登记或选择另一设备位")
@@ -77,9 +99,15 @@ class Broker:
         role = request.get("device")
         node = checked_id(request.get("node_id"))
         name = request.get("name", "").strip()
-        if role not in ("A", "B") or not 1 <= len(name) <= 100:
-            raise SyncError("请填写设备名称和 A/B 设备位")
+        if (request.get("automatic") is not True and role not in DEVICE_ROLES) or not 1 <= len(name) <= 100:
+            raise SyncError("请填写设备名称 / Enter a device name")
         with self.connect(True) as db:
+            if request.get("automatic") is True:
+                retained = db.execute("SELECT role FROM devices WHERE node_id=?", (node,)).fetchone()
+                occupied = {r[0] for r in db.execute("SELECT role FROM devices")}
+                role = retained[0] if retained else next((r for r in DEVICE_ROLES if r not in occupied), None)
+            if role not in DEVICE_ROLES:
+                raise SyncError("设备已达 16 台上限 / Device limit (16) reached")
             existing = db.execute("SELECT * FROM devices WHERE role=?", (role,)).fetchone()
             if existing and existing["node_id"] != node:
                 raise SyncError(f"设备 {role} 已被另一安装登记；请选择另一设备位")
@@ -133,15 +161,15 @@ class Broker:
             else:
                 head = db.execute("SELECT job FROM heads WHERE dataset=? AND path_key=?", (manifest["dataset"],manifest["path_key"])).fetchone()
                 if (head[0] if head else None) != manifest["parent"]:
-                    raise SyncError("两端基线不一致，请先接收远端更改；本机内容已保留")
-                other = "B" if role == "A" else "A"
+                    raise VersionConflict("版本已变化，请先拉取或选择保留的版本 / Version changed; pull or choose a version")
+                others = [r[0] for r in db.execute("SELECT device FROM bindings WHERE dataset=? AND device!=?", (manifest['dataset'], role))]
                 unique = {c["hash"]: c["size"] for c in manifest["chunks"]}
                 needed = []
                 extra = 0
                 for chunk, size in unique.items():
-                    available = db.execute("SELECT size FROM inventory WHERE device=? AND hash=?", (other,chunk)).fetchone()
+                    available = bool(others) and all(db.execute("SELECT 1 FROM inventory WHERE device=? AND hash=? AND size=?", (other,chunk,size)).fetchone() for other in others)
                     obj = db.execute("SELECT size FROM objects WHERE hash=?", (chunk,)).fetchone()
-                    if available and available[0] != size or obj and obj[0] != size:
+                    if obj and obj[0] != size:
                         raise SyncError("内容哈希的大小记录不一致")
                     if not available:
                         needed.append(chunk)
@@ -154,6 +182,9 @@ class Broker:
                     raise SyncError("云端实际空闲空间不足以保留安全余量")
                 db.execute("INSERT INTO jobs(id,dataset,path_key,origin,manifest,mhash,state) VALUES (?,?,?,?,?,?,?)",
                            (manifest["id"],manifest["dataset"],manifest["path_key"],role,encoded,digest,"STAGING"))
+                db.execute("INSERT INTO recipients VALUES (?,?)", (manifest['id'],role))
+                for other in others:
+                    db.execute("INSERT OR IGNORE INTO recipients VALUES (?,?)", (manifest['id'],other))
                 for chunk, size in unique.items():
                     db.execute("INSERT INTO job_chunks VALUES (?,?,?)", (manifest["id"],chunk,size))
                     if chunk in needed:
@@ -191,7 +222,7 @@ class Broker:
         with self.connect(True) as db:
             role = self.authenticate(db,request)
             job = db.execute("SELECT * FROM jobs WHERE id=?", (request.get("job"),)).fetchone()
-            if not job or job["origin"] != role or job["state"] != "STAGING":
+            if not job or job["origin"] != role or job["state"] not in ("STAGING", "READY"):
                 raise SyncError("上传任务不在可写状态")
             obj = db.execute("SELECT o.* FROM objects o JOIN needs n ON n.hash=o.hash WHERE n.job=? AND o.hash=?", (job["id"],digest)).fetchone()
             if not obj:
@@ -231,7 +262,7 @@ class Broker:
             if job["state"] == "STAGING":
                 head = db.execute("SELECT job FROM heads WHERE dataset=? AND path_key=?", (job["dataset"],job["path_key"])).fetchone()
                 if (head[0] if head else None) != manifest["parent"]:
-                    raise SyncError("发布前基线发生变化，请先处理两端冲突")
+                    raise VersionConflict("发布前版本已变化 / Version changed before publication")
                 for obj in db.execute("SELECT o.* FROM needs n JOIN objects o ON n.hash=o.hash WHERE n.job=?", (job["id"],)):
                     if self.object_offset(db,obj["hash"],obj["size"]) != obj["size"]:
                         raise SyncError("仍有内容块尚未完成上传")
@@ -251,7 +282,8 @@ class Broker:
             for chunk in json.loads(job["manifest"])["chunks"]:
                 db.execute("INSERT OR IGNORE INTO inventory VALUES (?,?,?)", (role,chunk["hash"],chunk["size"]))
             db.execute("INSERT OR IGNORE INTO receipts VALUES (?,?,?)", (job["id"],role,job["mhash"]))
-            if db.execute("SELECT count(*) FROM receipts WHERE job=?", (job["id"],)).fetchone()[0] == 2:
+            if (db.execute("SELECT count(*) FROM recipients WHERE job=?", (job['id'],)).fetchone()[0] >= 2 and
+                not db.execute("SELECT 1 FROM recipients t WHERE t.job=? AND NOT EXISTS(SELECT 1 FROM receipts r WHERE r.job=t.job AND r.device=t.device)", (job['id'],)).fetchone()):
                 db.execute("UPDATE jobs SET state='DELIVERED' WHERE id=?", (job["id"],))
         # Receipts MUST commit before filesystem GC in a separate transaction.
         return {"acknowledged":True,"gc":self.gc()}
@@ -273,6 +305,8 @@ class Broker:
 
     def handle(self, request, payload=b""):
         with active_queue(self.root):
+            if not self.upgraded:
+                self.upgrade()
             return self._handle(request, payload)
 
     def _handle(self, request, payload=b""):
@@ -306,6 +340,8 @@ class Broker:
                     if not isinstance(path,str) or not 1<=len(path)<2048 or '\0' in path or not isinstance(name,str) or len(name)>120:
                         raise SyncError("目录绑定格式错误 / Invalid folder binding")
                     db.execute("INSERT OR REPLACE INTO bindings VALUES (?,?,?,?,?)",(dataset,role,path,name,time.time()))
+                    db.execute("INSERT OR IGNORE INTO recipients SELECT id,? FROM jobs WHERE dataset=?", (role,dataset))
+                    db.execute("UPDATE jobs SET state='READY' WHERE dataset=? AND state='DELIVERED' AND NOT EXISTS(SELECT 1 FROM receipts WHERE job=jobs.id AND device=?)", (dataset,role))
                 return {"bound":action=="bind","files_deleted":False},b""
             if action == "dataset_create":
                 dataset = checked_id(request.get("dataset"))
@@ -318,7 +354,31 @@ class Broker:
                 if not old and db.execute("SELECT count(*) FROM datasets").fetchone()[0] >= 16:
                     raise SyncError("同步组已达 16 个上限，现有数据保留 / Synchronization group limit (16) reached; existing data preserved")
                 db.execute("INSERT OR IGNORE INTO datasets VALUES (?,?)",(dataset,name))
+                db.execute("INSERT OR IGNORE INTO publishers VALUES (?,?)", (dataset,role))
                 return {"id":dataset,"name":name},b""
+            if action == "overview":
+                dataset = checked_id(request.get('dataset'))
+                rows = db.execute("SELECT j.id,j.manifest,j.mhash,EXISTS(SELECT 1 FROM receipts r WHERE r.job=j.id AND r.device=?) AS received FROM heads h JOIN jobs j ON j.id=h.job WHERE h.dataset=? ORDER BY j.path_key", (role,dataset)).fetchall()
+                return {"heads":[{"manifest":json.loads(r['manifest']),"mhash":r['mhash'],"received":bool(r['received']),
+                                  "available":not db.execute("SELECT 1 FROM jobs j JOIN job_chunks c ON c.job=j.id WHERE j.dataset=? AND j.path_key=? AND j.state='READY' AND NOT EXISTS(SELECT 1 FROM receipts r WHERE r.job=j.id AND r.device=?) AND NOT EXISTS(SELECT 1 FROM objects o WHERE o.hash=c.hash AND o.complete=1) AND NOT EXISTS(SELECT 1 FROM inventory i WHERE i.device=? AND i.hash=c.hash)", (dataset,json.loads(r['manifest'])['path_key'],role,role)).fetchone()} for r in rows]},b''
+            if action == "repairs":
+                dataset = checked_id(request.get('dataset'))
+                rows = db.execute("SELECT DISTINCT j.manifest FROM jobs j JOIN job_chunks c ON c.job=j.id WHERE j.dataset=? AND j.origin=? AND j.state='READY' AND NOT EXISTS(SELECT 1 FROM objects o WHERE o.hash=c.hash AND o.complete=1) AND EXISTS(SELECT 1 FROM recipients t WHERE t.job=j.id AND t.device!=j.origin AND NOT EXISTS(SELECT 1 FROM receipts r WHERE r.job=t.job AND r.device=t.device) AND NOT EXISTS(SELECT 1 FROM inventory i WHERE i.device=t.device AND i.hash=c.hash))", (dataset,role)).fetchall()
+                # Rehydrate late subscribers from durable source caches, without a new version.
+                return {"jobs":[json.loads(r[0]) for r in rows]},b''
+            if action == "repair_prepare":
+                job = db.execute("SELECT * FROM jobs WHERE id=?", (checked_id(request.get('job')),)).fetchone()
+                if not job or job['origin'] != role or job['state'] != 'READY':
+                    raise SyncError('无法修复此版本 / Cannot repair this version')
+                chunks = list(db.execute("SELECT c.hash,c.size FROM job_chunks c WHERE c.job=? AND EXISTS(SELECT 1 FROM recipients t WHERE t.job=c.job AND t.device!=? AND NOT EXISTS(SELECT 1 FROM receipts r WHERE r.job=t.job AND r.device=t.device) AND NOT EXISTS(SELECT 1 FROM inventory i WHERE i.device=t.device AND i.hash=c.hash))", (job['id'],role)))
+                extra = sum(c['size'] for c in chunks if not db.execute('SELECT 1 FROM objects WHERE hash=?', (c['hash'],)).fetchone())
+                allocated = db.execute('SELECT coalesce(sum(size),0) FROM objects').fetchone()[0]
+                if allocated + extra > self.config['quota'] or shutil.disk_usage(self.root).free < extra + self.config['reserve']:
+                    raise SyncError('暂存空间不足 / Insufficient staging space')
+                for c in chunks:
+                    db.execute('INSERT OR IGNORE INTO objects(hash,size) VALUES (?,?)', (c['hash'],c['size']))
+                    db.execute('INSERT OR IGNORE INTO needs VALUES (?,?)', (job['id'],c['hash']))
+                return {"id":job['id'],"manifest":json.loads(job['manifest']),"state":"STAGING","needed":[dict(r) for r in db.execute('SELECT o.* FROM needs n JOIN objects o ON o.hash=n.hash WHERE n.job=?', (job['id'],))]},b''
             if action == "pending":
                 dataset = checked_id(request.get("dataset"))
                 rows = db.execute("SELECT j.manifest,j.mhash FROM jobs j WHERE j.dataset=? AND j.state='READY' AND NOT EXISTS(SELECT 1 FROM receipts r WHERE r.job=j.id AND r.device=?) ORDER BY j.seq",(dataset,role)).fetchall()
@@ -342,7 +402,7 @@ class Broker:
                 db.execute("UPDATE devices SET last_seen=? WHERE role=?",(time.time(),role))
                 return {"control":control(self.root) if (self.root/'.nova-control.json').exists() else None,
                         "devices":[dict(r) for r in db.execute("SELECT * FROM devices ORDER BY role")],
-                        "datasets":[dict(r) for r in db.execute("SELECT * FROM datasets ORDER BY name")],
+                        "datasets":[dict(r) for r in db.execute("SELECT d.*,p.device AS publisher FROM datasets d LEFT JOIN publishers p ON p.dataset=d.id ORDER BY name")],
                         "bindings":[dict(r) for r in db.execute("SELECT * FROM bindings ORDER BY dataset,device")],
                         "jobs":{r[0]:r[1] for r in db.execute("SELECT state,count(*) FROM jobs GROUP BY state")},
                         "allocated_bytes":db.execute("SELECT coalesce(sum(size),0) FROM objects").fetchone()[0],

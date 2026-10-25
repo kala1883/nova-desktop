@@ -15,12 +15,18 @@ typedef struct SyncRequest {
     SshLogin target_login;
     wchar_t target_project[SYNC_PATH_CAP],target_broker[SYNC_PATH_CAP];
     int quota_gib,reserve_gib;
+    int direction,resolution; /* 0 both, 1 push, 2 pull; resolution: 1 local, 2 server. */
+    wchar_t resolve_path[SYNC_PATH_CAP];
+    char expected_local[65],expected_remote[SYNC_ID_CAP];
 } SyncRequest;
 typedef struct SyncResult { SyncFailure failure;DWORD native_error;SshResult ssh;SyncStats stats;char *cloud,*route;wchar_t detail[1024];
     BOOL target_error,installed,switched,pending_migration;
+    int registered_role,pushes,pulls,conflicts,waiting;
+    char *changes;
     wchar_t server_instance[SYNC_ID_CAP],server_phase[32];
 } SyncResult;
 enum { SYNC_JOB_REFRESH=1,SYNC_JOB_REGISTER,SYNC_JOB_RUN,SYNC_JOB_BIND,SYNC_JOB_UNBIND };
+enum { SYNC_JOB_CHECK=6,SYNC_JOB_PUSH,SYNC_JOB_PULL,SYNC_JOB_RESOLVE };
 enum { SYNC_JOB_SERVER_PROBE=10,SYNC_JOB_SERVER_DEPLOY,SYNC_JOB_SERVER_ATTACH,SYNC_JOB_SERVER_MIGRATE,SYNC_JOB_SERVER_RESTORE };
 BOOL sync_server_run(SyncRequest *request,int action,SyncResult *result);
 BOOL sync_server_pending(SyncRequest *request);

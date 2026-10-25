@@ -57,12 +57,18 @@ def run(executable):
             process = None
             try:
                 reader, writer = channel.makefile("rb"), channel.makefile("wb")
-                admin = command.startswith(b"python3 -B -u -c 'import sys,base64;")
+                setup = b'NOVA_BOOTSTRAP_SETUP' in command
+                admin = setup or command.startswith(b"python3 -B -u -c 'import sys,base64;")
                 if admin:
                     encoded = reader.readline()
                     source = base64.b64decode(encoded)
                     assert source == (ROOT / "sync/server/chunksync/control.py").read_bytes(), "bootstrap must be embedded source"
-                    process = subprocess.Popen([sys.executable, "-B", "-u", "-c", command.decode().split("-c '", 1)[1][:-1]], stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+                    if setup:
+                        assert b'sudo' not in command and b'id -u' in command and b'apt-get' in command
+                        code = 'import sys,base64; exec(compile(base64.b64decode(sys.stdin.buffer.readline()),"<nova-bootstrap>","exec"))'
+                    else:
+                        code = command.decode().split("-c '", 1)[1][:-1]
+                    process = subprocess.Popen([sys.executable, "-B", "-u", "-c", code], stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
                     process.stdin.write(encoded)
                     process.stdin.flush()
                 else:

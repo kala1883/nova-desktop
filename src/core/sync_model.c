@@ -34,8 +34,8 @@ void sync_settings_default(SyncSettings *s){
     memset(s,0,sizeof(*s));
     s->version=1;
     s->interval=60;
-    wcscpy(s->project,L"/opt/cloud-file-sync-research");
-    wcscpy(s->broker,L"/opt/cloud-file-sync-research/runtime/broker");
+    wcscpy(s->project,L"/opt/nova-sync");
+    wcscpy(s->broker,L"/opt/nova-sync/runtime/broker");
 }
 static bool pair_valid(const SyncPair *p){
     return bounded(p->id,SYNC_ID_CAP)&&sync_identifier(p->id)&&bounded(p->dataset,SYNC_ID_CAP)&&sync_identifier(p->dataset)&&
@@ -44,7 +44,7 @@ static bool pair_valid(const SyncPair *p){
 }
 bool sync_settings_valid(const SyncSettings *s){
     if(s&&(!bounded(s->server_instance,SYNC_ID_CAP)||(s->server_instance[0]&&!sync_identifier(s->server_instance))))return false;
-    if(!s||s->version!=1||s->count<0||s->count>SYNC_PAIR_LIMIT||s->role<0||s->role>1||s->interval<10||s->interval>86400||s->server_id<0||
+    if(!s||s->version!=1||s->count<0||s->count>SYNC_PAIR_LIMIT||s->role<0||s->role>=SYNC_DEVICE_LIMIT||s->interval<10||s->interval>86400||s->server_id<0||
        !bounded(s->node_id,SYNC_ID_CAP)||(s->node_id[0]&&!sync_identifier(s->node_id))||!bounded(s->name,SYNC_NAME_CAP)||wcslen(s->name)>100||
        !bounded(s->project,SYNC_PATH_CAP)||s->project[0]!=L'/'||!bounded(s->broker,SYNC_PATH_CAP)||s->broker[0]!=L'/'||
        wcspbrk(s->project,L"\r\n")||wcspbrk(s->broker,L"\r\n")||(s->registered&&(!s->node_id[0]||!s->name[0])))return false;
