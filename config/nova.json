@@ -373,7 +373,7 @@
       "scope": "files",
       "section": "Pane1",
       "key": "Count",
-      "value": "8"
+      "value": "9"
     },
     {
       "scope": "files",
@@ -421,13 +421,19 @@
       "scope": "files",
       "section": "Pane1",
       "key": "Tab7",
-      "value": "D:\\MyProjects\\icanbeanaiexpert\\AIUsing\\infrastructure\\mylocalllm"
+      "value": "D:\\MyProjects\\icanbeanaiexpert\\AIUsing\\infrastructure\\tools"
+    },
+    {
+      "scope": "files",
+      "section": "Pane1",
+      "key": "Tab8",
+      "value": "D:\\MyWork\\YanchengUrbanOperationCockpit"
     },
     {
       "scope": "files",
       "section": "Pane2",
       "key": "Count",
-      "value": "7"
+      "value": "6"
     },
     {
       "scope": "files",
@@ -523,7 +529,7 @@
       "scope": "files",
       "section": "Pane3",
       "key": "Tab5",
-      "value": "D:\\MyProjects\\icanmakebigmoney\\mymedia"
+      "value": "D:\\MyProjects\\icanmakebigmoney\\mymedia\\ai-digest"
     },
     {
       "scope": "files",
