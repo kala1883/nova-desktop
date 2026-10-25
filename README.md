@@ -12,6 +12,10 @@ required.
 
 ## Highlights
 
+- **Native device synchronization** — register two devices, pair up to 16 folders
+  and manage incremental, resumable SSH transfers in **Settings → Devices and
+  synchronization**. The server stages missing chunks and reclaims them after
+  receipt. No Windows Python or local web service is needed; see [sync](sync/README.md).
 - **12 resizable file-manager layouts** — four panes, two columns, two rows, a
   single pane, four three-pane arrangements, and three/four-column or row
   layouts. Drag pane dividers to resize them; proportions are restored locally.
@@ -46,6 +50,8 @@ required.
 - MinGW-w64 GCC and `windres` to build from source
 - OpenSSL 3 headers and static `libcrypto.a` from the same MinGW toolchain
   (MSYS2 MINGW64: `pacman -S mingw-w64-x86_64-openssl`)
+- zlib headers and static `libz.a` from that toolchain (MSYS2 MINGW64 package:
+  `mingw-w64-x86_64-zlib`); no zlib DLL is required at runtime.
 - PowerShell for the build and test scripts
 
 SQLite 3.53.4 is vendored in `third_party/sqlite` and linked statically. After
@@ -453,3 +459,22 @@ commit the merge before pushing. It merges independently added tasks by stable I
 even when both computers used the same Task1 index, and preserves task shortcuts.
 Conflicting edits/deletion of the same task or over-capacity data require review;
 it never forces a side or truncates entries. Runtime `local.json` is not synchronized.
+
+## Native device synchronization
+
+Open **Settings → Devices and synchronization** (or `--sync`) to register A/B,
+pair folders and run transfers. New and migrated pairs start paused. On B, select
+the existing synchronization group and B's own local path. Keep local chunk
+caches after cloud acknowledgement; no automatic local cache cleanup is provided.
+See [setup, migration and limits](sync/README.md). `deployment/test-sync.bat`
+checks persistence and native UI; its optional loopback fixture verifies actual
+SSH framing, incremental reuse and interruption recovery without user data.
+
+The native manager's **Servers** tab now includes one-click deployment from
+embedded EXE resources, verified connection, resumable migration and source
+restoration before cutover. A new computer needs only NOVA, its own SSH login,
+device registration and folder pairing through the UI. No manual scripts or
+Windows Python are required. Linux SSH/SFTP, Python 3.9+ with SQLite JSON, and
+write permission to the chosen server directory are prerequisites. Migration
+retains queue/history/identities, freezes the old queue and advertises the
+destination to offline peers; see [the workflow](sync/README.md).

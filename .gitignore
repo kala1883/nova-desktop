@@ -9,3 +9,4 @@
 /config/local.json
 /config/local.backup.json
 /config/.nova-*.tmp
+/config/sync/

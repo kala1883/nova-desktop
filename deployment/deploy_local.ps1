@@ -82,6 +82,8 @@ try {
     foreach ($name in @('LICENSE', 'THIRD_PARTY_NOTICES.txt', 'NOTICE.md', 'NOTICE.zh-CN.md', 'README.md', 'README.zh-CN.md')) {
         Copy-Item -LiteralPath (Join-Path $repoRoot $name) -Destination $packageDir
     }
+    . (Join-Path $PSScriptRoot 'package_sync.ps1')
+    Copy-NovaSyncAssets -RepositoryRoot $repoRoot -Destination $packageDir
     New-Item -ItemType Directory -Path (Join-Path $packageDir 'config') -Force | Out-Null
     Copy-Item -LiteralPath (Join-Path $repoRoot 'config\nova.json') -Destination (Join-Path $packageDir 'config\nova.json')
     $packagedConfig = Get-NovaConfigurationInfo -Path (Join-Path $packageDir 'config\nova.json')

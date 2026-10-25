@@ -65,7 +65,7 @@ UI 依赖 controller 与 core 的只读视图；controller 依赖 core 和平台
 - `--migrate-data` 在单实例锁保护下执行相同数据初始化、使用数据迁移及 JSON 备份，然后退出，不创建应用窗口、不派发启动项或任务。可在初次运行界面前将实际保存数据填入 config/nova.json；已初始化的 JSON 保持优先，不以旧数据覆盖。
 
 - 共享磁盘配置为 UTF-8 `config/nova.json`，根版本为 1；settings、workspaces、items 保留原 scope/section/key 与稳定 ID，所有 64 位 ID 以字符串表示。仓库内运行时向上定位含 `.git` 和 `config/nova.json` 的根目录，直接读写该文件；脱离仓库时使用 exe 旁的 config 目录。初始文件 `initialized=false` 只允许空数组，首次从 `%APPDATA%\NOVA Desktop` 只读迁移旧 SQLite 或 INI，无旧数据则初始化默认值，此后不再读取旧配置。
-- SQLite 仅作为单 UI 线程的内存关系与事务引擎，不创建新的磁盘数据库。JSON 加载限制 16 MiB、4096 条 setting、8 个工作区及 160 个启动项；校验字段类型、未知版本、重复键、字符串边界、容量和外键后才安装。任务及命令预设继续使用其独立版本校验。工作区启动项仍按需装载到 UI；完整内存关系表保留未加载项，保存不会丢失它们。
+- 应用配置的 SQLite 只在单 UI 线程内存中运行；同步子系统另有工作线程独占的磁盘断点索引（见下文）。JSON 加载限制 16 MiB、4096 条 setting、8 个工作区及 160 个启动项；校验字段类型、未知版本、重复键、字符串边界、容量和外键后才安装。任务及命令预设继续使用其独立版本校验。工作区启动项仍按需装载到 UI；完整内存关系表保留未加载项，保存不会丢失它们。
 - 配置事务在同目录唯一临时文件生成完整 JSON、检查写入长度并 FlushFileBuffers，再用 ReplaceFileW 原子替换，同时保留临时回滚副本；内存 COMMIT 失败时恢复原文件，发布失败时回滚内存。语言、窗口模式及工作区变化在同一事务提交。文件窗格仍去抖 400 ms，并在关闭时刷新。启动更新 `nova.backup.json`；无效数据拒绝打开，不自动覆盖，备份可由用户手动恢复。
 - `config/nova.json` 纳入 Git；备份、临时文件和 build 产物忽略。每次成功编译更新 `build/packages/nova-desktop.exe` 与配置副本，旧命名包和 ZIP 保留；替换固定 exe 时先复制到同目录临时文件，失败保留原副本且不终止运行实例。部署包包含 config/nova.json。
 
@@ -190,3 +190,20 @@ UI 依赖 controller 与 core 的只读视图；controller 依赖 core 和平台
 - [ShellExecuteExW](https://learn.microsoft.com/en-us/windows/win32/api/shellapi/nf-shellapi-shellexecuteexw)：Shell 启动及 COM/Shell 扩展相关约束。
 - [SetCapture](https://learn.microsoft.com/en-us/windows/win32/api/winuser/nf-winuser-setcapture)：鼠标捕获与释放约束。
 - [DLL Security](https://learn.microsoft.com/en-us/windows/win32/dlls/dynamic-link-library-security)：可信 DLL 搜索路径、防止不安全目录参与加载。
+
+## 已实施：原生设备与同步
+
+- `core/sync_model.[ch]` 保存两个设备位、最多 16 个配对的有界规则及 Gear 切块边界，保持无 Win32/IO/UI 依赖。`platform/sync_settings.[ch]` 将版本化的 `sync` scope 整体事务保存到 local.json，不进入共享 JSON；导入旧身份与配对时全部暂停。
+- `ui/sync_manager.[ch]` 拥有原生登记、配对、进度及最多 24 条会话记录。所有 HWND、主配置、COM 与控件均属于主 UI 线程；语言切换即时更新，用户名称保持原文。新配对先在草稿中编辑，保存前不产生持久绑定。
+- 同步只有一条工作线程，每次拥有不可变请求快照、独立 SSH socket/session/exec channel、取消事件和磁盘 SQLite 连接。它不访问 UI 配置连接。进度通过临界区最新值与合并消息交回 UI；接收删除通过消息在 UI 线程调用 IFileOperation，保留确认/回收站语义。关闭管理窗口只隐藏；退出取消并 join，等待期间处理删除请求以免死锁，之后才释放资源。
+- `platform/sync_client.c` 管理扫描、不可变 outbox、接收 journal、确认和目录绑定；`sync_files.c` 管理 hash、原子缓存及磁盘索引；`sync_wire.c` 在现有 libssh2 上实现有界帧与静态 zlib 压缩；`sync_json.c` 管理有界 UTF-8 JSON。原生客户端不启动本机 Python、浏览器、监听端口、服务或额外进程。远端固定命令从 stdin 接收编码路径，路径不插入 shell 语法。
+- `config/sync/client/` 保存兼容旧协议的 files/outbox/inbox SQLite 表、SHA-256 块与下载断点；flush 内容并持久记录 APPLIED 后才确认。云端用接收端库存免传已有块，确认后回收无引用块。此缓存不可随意清理，目前没有自动历史 GC。同步工作目录保持普通目录，临时重建文件通过校验后原子替换；冲突、重解析点和容量失败停下任务。
+- `sync/server/` 是同项目维护的 stdlib Python SSH broker，部署升级保留队列；bind/unbind 仅改元数据。云端上限与服务器磁盘保留量控制未交接数据，不要求容纳全部工作目录。协议、限制与恢复见 `sync/README.md` 和 `sync/PROTOCOL.md`。自动模式只有用户启用的目录才传输，失败暂停；默认迁移不启动实际传输。
+
+### 已实施：内置部署与服务器迁移
+
+- `platform/sync_server.c` 使用既有工作线程、独立 libssh2 通道与有界协议。`nova.rc` 将六个服务端源文件嵌入 EXE，固定引导命令只从 stdin 接收可信引导代码，目录与参数仍以 JSON 数据传递；不启动本机 Python、PowerShell、ssh.exe 或服务。UI 候选服务器独立于当前连接，只有验证实例/迁移祖先链及节点身份、成功保存本机配置后才切换。探测其他候选不会替换活动目录组。
+- 远端 `chunksync/control.py` 同时作为独立引导与 broker 门禁模块。部署校验文件哈希/语法，将不可变版本写入 releases，验证兼容队列后原子发布版本指针。已有配额和数据保留，未知非空目录与目标队列拒绝覆盖。首次从旧版升级拒绝仍在运行的旧协议进程；受管理版本通过逐请求共享锁与管理操作独占锁协调。
+- 管理门禁锁位于可替换队列目录之外，正常 broker 请求持有共享锁并检查 ACTIVE 状态。EXPORTING 冻结源端后才备份 SQLite；目标 IMPORTING 接收有界包与校验文件，PREPARED 验证数据库及完整清单，源端 REDIRECT 持久提交后目标才 ACTIVE。进程/网络中断通过私有 server-migration.json 与远端 token/偏移继续；根目录交换中断可从 PREPARED 快照恢复。保留旧端；恢复只允许在 REDIRECT 提交之前。
+- 迁移保留全部 devices/datasets/bindings/jobs/heads/objects/job_chunks/needs/inventory/receipts，以及完整块、上传分片与队列配额。每连接最多缓存两份清单并按名称索引，逐包不反复解析整份列表；清单最多 50,000 条、16 MiB，迁移祖先链最多 64 个实例。客户端只中转包，不缓存整份迁移内容。
+- 服务器实例与迁移祖先链独立于设备节点身份。`sync/Manager/Instance` 作为 Version=1 的可选本机字段兼容旧配置。旧端返回结构化 moved/frozen 状态；跟随目标只保存有界 SSH 连接元数据，凭据仍由本机凭据管理器与既有首用指纹核验管理，节点和本机缓存不重建。两端 SSH 登录信息在工作线程认证后及任务销毁时清零。

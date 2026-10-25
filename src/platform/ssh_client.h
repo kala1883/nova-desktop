@@ -35,6 +35,12 @@ BOOL ssh_client_delete(SshClient *client,const wchar_t *path,SshResult *result);
 BOOL ssh_client_transfer(SshClient *client,BOOL upload,const wchar_t *local,const wchar_t *remote,SshResult *result);
 BOOL ssh_client_copy(SshClient *client,const wchar_t *from,const wchar_t *to,SshResult *result);
 BOOL ssh_client_exec(SshClient *client,const wchar_t *directory,const wchar_t *command,SshResult *result);
+/* A binary, non-PTY channel owned by this connection's worker. Paths are stdin
+   data, never shell syntax. Read/write are exact, cancellable, and bounded. */
+BOOL ssh_client_protocol_open(SshClient *client,const wchar_t *project,const wchar_t *root,SshResult *result);
+BOOL ssh_client_bootstrap_open(SshClient *client,const char *base64_source,size_t length,SshResult *result);
+BOOL ssh_client_protocol_write(SshClient *client,const void *data,size_t size,SshResult *result);
+BOOL ssh_client_protocol_read(SshClient *client,void *data,size_t size,SshResult *result);
 /* Called only by the connection's owning worker. read/write never wait for input. */
 BOOL ssh_client_terminal_open(SshClient *client,const wchar_t *directory,int columns,int rows,SshResult *result);
 BOOL ssh_client_terminal_read(SshClient *client,char *data,size_t capacity,size_t *length,BOOL *ended,SshResult *result);

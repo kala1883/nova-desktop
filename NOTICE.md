@@ -22,6 +22,8 @@ material changes and avoid misleading users about their origin.
 - libvterm 0.3.3 (MIT) is vendored and statically linked for the native SSH
   terminal. Provenance and hashes are in `third_party/libvterm/README.md`;
   its license and the wcwidth notice are also included in packages.
+- zlib (zlib license) is statically linked from the build toolchain for sync
+  payload compression; its full license is included in `THIRD_PARTY_NOTICES.txt`.
 - Windows, Win32, PowerShell, and related product names are trademarks of
   Microsoft Corporation. NOVA Desktop is not affiliated with or endorsed by
   Microsoft.
@@ -37,9 +39,14 @@ run inside a checkout, or the executable's config folder for a standalone packag
 Old AppData SQLite/INI files are read only during first migration and preserved.
 Adding an item records its path; it
 does not copy, move, upload, or claim rights in the user's files. The project
-includes no analytics, advertising SDK, or cloud synchronization service.
+includes no analytics or advertising SDK. User-enabled synchronization stages
+file content on the selected SSH server; acknowledged chunks are reclaimed.
+The local native manager controls registration, folder pairing and automatic
+transfers. Private identity, pair settings and chunk journals stay in Git-ignored
+`config/local.json` and `config/sync/`; local historical chunks are retained.
 The primary JSON is available to Git; reviewing or publishing it may disclose
-saved names, paths and command text. NOVA does not automatically upload this data.
+saved names, paths and command text. NOVA transfers files only for requested SSH operations or synchronization pairs
+the user enables.
 Explicit SSH/SFTP operations transfer selected files to the chosen server and run
 commands there only when requested. Passwords, key passphrases and key paths are
 not saved in JSON. Save/Connect remembers login secrets and key paths in the current

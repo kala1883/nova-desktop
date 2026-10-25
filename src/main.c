@@ -17,6 +17,7 @@
 #include "ui/hold_drag.h"
 #include "ui/file_manager.h"
 #include "ui/batch_tasks.h"
+#include "ui/sync_manager.h"
 #include "platform/storage.h"
 #include "i18n.h"
 
@@ -51,6 +52,7 @@
 #define ID_LANGUAGE_EN 124
 #define ID_BATCH_TASKS 125
 #define ID_SIDEBAR 126
+#define ID_SYNC_MANAGER 127
 #define STATS_TIMER 1
 #define START_PIN_TIMER 2
 #define START_DESKTOP_TIMER 4
@@ -378,13 +380,14 @@ static void apply_language(BOOL english){
     SendMessageW(search_edit,EM_SETCUEBANNER,TRUE,(LPARAM)nova_text(L"搜索当前工作区  Ctrl+K",L"Search this workspace  Ctrl+K"));
     update_tooltip(desktop_button,nova_text(L"桌面围栏 / 恢复普通窗口",L"Desktop fence / restore normal window"));
     update_tooltip(pin_button,nova_text(L"置顶 / 取消置顶 (F11)",L"Always on top / unpin (F11)"));
-    update_tooltip(settings_button,nova_text(L"设置：批量任务、语言、开机启动、工作区管理",L"Settings: batch tasks, language, startup, and workspace management"));
+    update_tooltip(settings_button,nova_text(L"设置：设备同步、批量任务、语言、开机启动、工作区管理",L"Settings: device sync, batch tasks, language, startup, and workspace management"));
     update_tooltip(new_button,nova_text(L"新建工作区（最多 8 个）",L"New workspace (up to 8)"));
     update_tooltip(sidebar_button,sidebar_collapsed?nova_text(L"展开侧边栏 (Ctrl+B)",L"Expand sidebar (Ctrl+B)"):nova_text(L"折叠侧边栏 (Ctrl+B)",L"Collapse sidebar (Ctrl+B)"));
     update_tooltip(launch_button,nova_text(L"将当前工作区的每个项目各打开一次",L"Open every item in this workspace once"));
     update_tooltip(minimize_button,nova_text(L"最小化",L"Minimize"));update_tooltip(maximize_button,nova_text(L"最大化 / 还原",L"Maximize / restore"));update_tooltip(close_button,nova_text(L"关闭",L"Close"));
     refresh_spaces();
     batch_tasks_language_changed();
+    sync_manager_language_changed();
     file_manager_close();files_view=NULL;
     if(files_page)open_file_manager();
     set_notice(nova_text(L"界面语言已切换为简体中文。",L"Interface language changed to English."));
@@ -680,6 +683,7 @@ static void settings_menu(void){
     AppendMenuW(menu,MF_POPUP,(UINT_PTR)language,nova_text(L"语言",L"Language"));
     AppendMenuW(menu,MF_STRING|(startup_enabled?MF_CHECKED:0),ID_STARTUP,nova_text(L"开机启动",L"Start with Windows"));
     AppendMenuW(menu,MF_STRING,ID_BATCH_TASKS,nova_text(L"批量任务…",L"Batch tasks…"));
+    AppendMenuW(menu,MF_STRING,ID_SYNC_MANAGER,nova_text(L"设备与同步…",L"Devices and synchronization…"));
     AppendMenuW(menu,MF_SEPARATOR,0,NULL);
     AppendMenuW(menu,MF_STRING|(active_space==0?MF_GRAYED:0),ID_RENAME,nova_text(L"重命名当前工作区",L"Rename current workspace"));
     AppendMenuW(menu,MF_STRING|(active_space==0||space_count<=1?MF_GRAYED:0),ID_DELETE,nova_text(L"删除当前工作区…",L"Delete current workspace…"));
@@ -720,7 +724,7 @@ static LRESULT CALLBACK window_proc(HWND hwnd,UINT msg,WPARAM wp,LPARAM lp){
         HWND children[]={space_list,new_button,sidebar_button,settings_button,pin_button,desktop_button,minimize_button,maximize_button,close_button,search_edit,add_button,folder_button,launch_button,app_list,name_edit};
         for(unsigned i=0;i<sizeof(children)/sizeof(children[0]);i++){SetWindowSubclass(children[i],child_proc,1,0);DragAcceptFiles(children[i],TRUE);}DragAcceptFiles(hwnd,TRUE);
         tooltip=CreateWindowExW(WS_EX_TOPMOST,TOOLTIPS_CLASSW,NULL,WS_POPUP|TTS_ALWAYSTIP|TTS_NOPREFIX,CW_USEDEFAULT,CW_USEDEFAULT,CW_USEDEFAULT,CW_USEDEFAULT,hwnd,NULL,GetModuleHandleW(NULL),NULL);
-        add_tooltip(desktop_button,nova_text(L"桌面围栏 / 恢复普通窗口",L"Desktop fence / restore normal window"));add_tooltip(pin_button,nova_text(L"置顶 / 取消置顶 (F11)",L"Always on top / unpin (F11)"));add_tooltip(settings_button,nova_text(L"设置：批量任务、语言、开机启动、工作区管理",L"Settings: batch tasks, language, startup, and workspace management"));add_tooltip(new_button,nova_text(L"新建工作区（最多 8 个）",L"New workspace (up to 8)"));
+        add_tooltip(desktop_button,nova_text(L"桌面围栏 / 恢复普通窗口",L"Desktop fence / restore normal window"));add_tooltip(pin_button,nova_text(L"置顶 / 取消置顶 (F11)",L"Always on top / unpin (F11)"));add_tooltip(settings_button,nova_text(L"设置：设备同步、批量任务、语言、开机启动、工作区管理",L"Settings: device sync, batch tasks, language, startup, and workspace management"));add_tooltip(new_button,nova_text(L"新建工作区（最多 8 个）",L"New workspace (up to 8)"));
         add_tooltip(sidebar_button,sidebar_collapsed?nova_text(L"展开侧边栏 (Ctrl+B)",L"Expand sidebar (Ctrl+B)"):nova_text(L"折叠侧边栏 (Ctrl+B)",L"Collapse sidebar (Ctrl+B)"));
         add_tooltip(launch_button,nova_text(L"将当前工作区的每个项目各打开一次",L"Open every item in this workspace once"));
         add_tooltip(minimize_button,nova_text(L"最小化",L"Minimize"));add_tooltip(maximize_button,nova_text(L"最大化 / 还原",L"Maximize / restore"));add_tooltip(close_button,nova_text(L"关闭",L"Close"));
@@ -759,6 +763,7 @@ static LRESULT CALLBACK window_proc(HWND hwnd,UINT msg,WPARAM wp,LPARAM lp){
         if(id==ID_CLOSE){PostMessageW(hwnd,WM_CLOSE,0,0);return 0;}
         if(id==ID_SETTINGS){settings_menu();return 0;}
         if(id==ID_BATCH_TASKS){batch_tasks_open(main_window);return 0;}
+        if(id==ID_SYNC_MANAGER){if(!sync_manager_open(main_window))error_message(nova_text(L"无法打开同步管理；本机配置可能损坏或来自更新版本，原文件保留。",L"Unable to open synchronization; local configuration may be damaged or newer. Original data preserved."));return 0;}
         if(id==ID_DESKTOP){set_desktop_mode(!desktop_mode);return 0;}
         if(id==ID_SIDEBAR){set_sidebar_collapsed(!sidebar_collapsed);return 0;}
         if(id==ID_LAUNCH_ALL){launch_workspace();return 0;}
@@ -798,7 +803,7 @@ static LRESULT CALLBACK window_proc(HWND hwnd,UINT msg,WPARAM wp,LPARAM lp){
     case WM_NOVA_BATCH_CHANGED:if(app_list)refresh_apps();return 0;
     case WM_TRAY:if(lp==WM_LBUTTONUP)restore_window();if(lp==WM_RBUTTONUP)tray_menu();return 0;
     case WM_CLOSE:file_manager_close();DestroyWindow(hwnd);return 0;
-    case WM_DESTROY:batch_tasks_shutdown();file_manager_close();save_config();KillTimer(hwnd,STATS_TIMER);KillTimer(hwnd,START_PIN_TIMER);KillTimer(hwnd,START_DESKTOP_TIMER);UnregisterHotKey(hwnd,ID_HOTKEY);if(!test_mode)Shell_NotifyIconW(NIM_DELETE,&tray);PostQuitMessage(0);return 0;
+    case WM_DESTROY:sync_manager_shutdown();batch_tasks_shutdown();file_manager_close();save_config();KillTimer(hwnd,STATS_TIMER);KillTimer(hwnd,START_PIN_TIMER);KillTimer(hwnd,START_DESKTOP_TIMER);UnregisterHotKey(hwnd,ID_HOTKEY);if(!test_mode)Shell_NotifyIconW(NIM_DELETE,&tray);PostQuitMessage(0);return 0;
     }return DefWindowProcW(hwnd,msg,wp,lp);
 }
 
@@ -822,7 +827,7 @@ int WINAPI wWinMain(HINSTANCE instance,HINSTANCE previous,PWSTR command,int show
     HANDLE mutex=CreateMutexW(NULL,FALSE,L"NOVA_DESKTOP_SINGLE_INSTANCE");
     if(GetLastError()==ERROR_ALREADY_EXISTS){
         if(migrate_only){MessageBoxW(NULL,nova_text(L"请先关闭 NOVA，再迁移使用数据。",L"Close NOVA before migrating usage data."),APP_NAME,MB_OK|MB_ICONWARNING);CloseHandle(mutex);OleUninitialize();return 5;}
-        HWND existing=FindWindowW(APP_CLASS,NULL);if(existing){PostMessageW(existing,WM_RESTORE_NOVA,0,0);if(command&&wcsstr(command,L"--files"))PostMessageW(existing,WM_COMMAND,ID_FILES,0);}CloseHandle(mutex);OleUninitialize();return 0;
+        HWND existing=FindWindowW(APP_CLASS,NULL);if(existing){PostMessageW(existing,WM_RESTORE_NOVA,0,0);if(command&&wcsstr(command,L"--files"))PostMessageW(existing,WM_COMMAND,ID_FILES,0);if(command&&wcsstr(command,L"--sync"))PostMessageW(existing,WM_COMMAND,ID_SYNC_MANAGER,0);}CloseHandle(mutex);OleUninitialize();return 0;
     }
     wchar_t dir[MAX_PATH];if(FAILED(SHGetFolderPathW(NULL,CSIDL_APPDATA,NULL,SHGFP_TYPE_CURRENT,dir))||wcslen(dir)>MAX_PATH-40)return 1;
     wcscat(dir,L"\\NOVA Desktop");swprintf(config_path,MAX_PATH,L"%ls\\config.ini",dir);
@@ -853,12 +858,15 @@ int WINAPI wWinMain(HINSTANCE instance,HINSTANCE previous,PWSTR command,int show
     if(command&&wcsstr(command,L"--files")&&active_space!=0){active_space=0;save_config();refresh_spaces();}
     ShowWindow(hwnd,show==SW_HIDE?SW_HIDE:SW_MAXIMIZE);UpdateWindow(hwnd);
     if(active_space==0)open_file_manager();
+    sync_manager_startup(hwnd);
+    if(command&&wcsstr(command,L"--sync"))PostMessageW(hwnd,WM_COMMAND,ID_SYNC_MANAGER,0);
     MSG msg={0};while(GetMessageW(&msg,NULL,0,0)>0){
         if(msg.message==WM_KEYDOWN&&msg.wParam==VK_F11){set_pinned(!pinned);continue;}
         if(msg.message==WM_KEYDOWN&&msg.wParam=='B'&&(GetKeyState(VK_CONTROL)&0x8000)&&GetAncestor(msg.hwnd,GA_ROOT)==hwnd){set_sidebar_collapsed(!sidebar_collapsed);continue;}
         if(msg.message==WM_KEYDOWN&&msg.wParam=='K'&&(GetKeyState(VK_CONTROL)&0x8000)&&files_page)show_workspace_page();
         if(file_manager_message(&msg))continue;
         HWND batch_window=batch_tasks_window();if(batch_window&&IsDialogMessageW(batch_window,&msg))continue;
+        HWND sync_window=sync_manager_window();if(sync_window&&IsDialogMessageW(sync_window,&msg))continue;
         if(msg.message==WM_KEYDOWN&&msg.wParam==VK_ESCAPE&&(hold_drag.dragging||hold_drag.armed)){hold_drag_cancel(&hold_drag);continue;}
         if(msg.message==WM_KEYDOWN&&(msg.wParam==VK_F11||(msg.wParam=='K'&&(GetKeyState(VK_CONTROL)&0x8000)))){if(msg.wParam==VK_F11)set_pinned(!pinned);else SetFocus(search_edit);continue;}
         if(msg.message==WM_KEYDOWN&&((msg.hwnd==name_edit&&(msg.wParam==VK_RETURN||msg.wParam==VK_ESCAPE))||(msg.hwnd==app_list&&(msg.wParam==VK_RETURN||msg.wParam==VK_DELETE))||(pinned&&msg.wParam==VK_ESCAPE))){DispatchMessageW(&msg);continue;}

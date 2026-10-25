@@ -217,6 +217,10 @@ int wmain(int argc,wchar_t **argv) {
         SendMessageW(batch_tasks_window(),WM_CLOSE,0,0);
         spaces[2]=original_workspace;active_space=original_active;assert(save_config());refresh_apps();
         puts("PASS persistent task shortcuts, protected Files workspace, duplicate guard and Launch all queues two harmless tasks once");
+        SendMessageW(window,WM_COMMAND,ID_SYNC_MANAGER,0);
+        assert(sync_manager_window()&&GetWindow(sync_manager_window(),GW_OWNER)==window&&IsWindowVisible(sync_manager_window()));
+        SendMessageW(sync_manager_window(),WM_CLOSE,0,0);assert(!IsWindowVisible(sync_manager_window()));
+        puts("PASS Settings opens the native sync manager; close hides it without a transfer");
         SendMessageW(window,WM_COMMAND,ID_BATCH_TASKS,0);assert(batch_tasks_window()&&GetWindow(batch_tasks_window(),GW_OWNER)==window);
         HWND batch_window=batch_tasks_window();SendMessageW(GetDlgItem(batch_window,2110),LB_SETCURSEL,0,0);SendMessageW(batch_window,WM_COMMAND,MAKEWPARAM(2110,LBN_SELCHANGE),0);SetWindowTextW(GetDlgItem(batch_window,2111),L"更新代码");SetWindowTextW(GetDlgItem(batch_window,2106),L"git pull origin main");SendMessageW(batch_window,WM_COMMAND,2107,0);
         SendMessageW(batch_window,WM_COMMAND,2108,0);SetWindowTextW(GetDlgItem(batch_window,2111),L"构建项目");SetWindowTextW(GetDlgItem(batch_window,2106),L"npm run build");SendMessageW(GetDlgItem(batch_window,2112),CB_SETCURSEL,BATCH_PARALLEL,0);SendMessageW(batch_window,WM_COMMAND,2107,0);

@@ -1,5 +1,7 @@
 @echo off
 setlocal
+call "%~dp0toolchain.bat"
+if errorlevel 1 exit /b %errorlevel%
 powershell.exe -NoLogo -NoProfile -ExecutionPolicy Bypass -File "%~dp0..\tests\toolchain.ps1"
 if errorlevel 1 exit /b %errorlevel%
 powershell.exe -NoLogo -NoProfile -ExecutionPolicy Bypass -File "%~dp0..\tests\openssl.ps1"
