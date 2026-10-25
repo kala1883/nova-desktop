@@ -5,6 +5,7 @@
 #include <stddef.h>
 #include <wchar.h>
 #define SYNC_PAIR_LIMIT 16
+#define SYNC_DEVICE_LIMIT 16
 #define SYNC_PATH_CAP 2048
 #define SYNC_ID_CAP 81
 #define SYNC_NAME_CAP 128

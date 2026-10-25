@@ -38,7 +38,7 @@ BOOL ssh_client_exec(SshClient *client,const wchar_t *directory,const wchar_t *c
 /* A binary, non-PTY channel owned by this connection's worker. Paths are stdin
    data, never shell syntax. Read/write are exact, cancellable, and bounded. */
 BOOL ssh_client_protocol_open(SshClient *client,const wchar_t *project,const wchar_t *root,SshResult *result);
-BOOL ssh_client_bootstrap_open(SshClient *client,const char *base64_source,size_t length,SshResult *result);
+BOOL ssh_client_bootstrap_open(SshClient *client,const char *base64_source,size_t length,BOOL provision,SshResult *result);
 BOOL ssh_client_protocol_write(SshClient *client,const void *data,size_t size,SshResult *result);
 BOOL ssh_client_protocol_read(SshClient *client,void *data,size_t size,SshResult *result);
 /* Called only by the connection's owning worker. read/write never wait for input. */

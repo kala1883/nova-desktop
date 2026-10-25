@@ -12,7 +12,7 @@ required.
 
 ## Highlights
 
-- **Native device synchronization** — register two devices, pair up to 16 folders
+- **Native device synchronization** — register up to 16 devices, publish/subscribe to 16 folders
   and manage incremental, resumable SSH transfers in **Settings → Devices and
   synchronization**. The server stages missing chunks and reclaims them after
   receipt. No Windows Python or local web service is needed; see [sync](sync/README.md).
@@ -462,19 +462,38 @@ it never forces a side or truncates entries. Runtime `local.json` is not synchro
 
 ## Native device synchronization
 
-Open **Settings → Devices and synchronization** (or `--sync`) to register A/B,
-pair folders and run transfers. New and migrated pairs start paused. On B, select
-the existing synchronization group and B's own local path. Keep local chunk
-caches after cloud acknowledgement; no automatic local cache cleanup is provided.
-See [setup, migration and limits](sync/README.md). `deployment/test-sync.bat`
-checks persistence and native UI; its optional loopback fixture verifies actual
-SSH framing, incremental reuse and interruption recovery without user data.
+Open **Settings → Devices and synchronization** (or `--sync`). Add each computer's
+SSH public key to your server, choose its SSH connection and click **Configure
+server**, then **Register this device**. Names default to the computer name;
+identities are allocated automatically, up to 16 devices.
 
-The native manager's **Servers** tab now includes one-click deployment from
-embedded EXE resources, verified connection, resumable migration and source
-restoration before cutover. A new computer needs only NOVA, its own SSH login,
-device registration and folder pairing through the UI. No manual scripts or
-Windows Python are required. Linux SSH/SFTP, Python 3.9+ with SQLite JSON, and
-write permission to the chosen server directory are prerequisites. Migration
-retains queue/history/identities, freezes the old queue and advertises the
-destination to offline peers; see [the workflow](sync/README.md).
+Use **Publish folder** on the source and **Subscribe** on another computer,
+choosing its own local directory. Refresh shows available publications and their
+source device. Saving exchanges metadata; click **Sync selected** to transfer.
+**Check all** hashes every local sync folder without transferring work files.
+Check the folders to **Push selected**, **Pull selected**, or synchronize both ways.
+New and migrated folders keep automatic synchronization paused.
+
+The file table compares current local/server versions. Choose **Keep local
+version** or **Use server version** for a conflict; changed local content is
+verified and saved under private `config/sync/client/recovery/<hash>/<relative-path>`
+first. **Transfers → Open recovery copies** opens these copies. A changed file or
+server version invalidates a stale choice. Chunk caches and version metadata must
+be retained; there is no automatic local cleanup.
+
+The server reclaims staged chunks only after all intended subscribers acknowledge
+them. Late subscribers request earlier versions again; their source devices must
+push cached content when it has already been reclaimed. Offline recipients keep
+pending chunks until receipt, so the quota can still fill. A new queue defaults
+to `/opt/nova-sync`, a 15 GiB quota and 5 GiB free reserve.
+
+**Server → Advanced** contains paths, quotas, existing-queue connection and
+resumable migration. Configuration deploys embedded sources and preserves existing
+queues; on supported Linux package managers it installs missing Python when the
+SSH account is already root. It never elevates privileges. Other accounts need
+Python 3.9+, SQLite JSON, zlib and writable server paths prepared by an administrator.
+Windows needs no Python, scripts or extra service. See [setup, migration and limits](sync/README.md).
+
+`deployment/test-sync.bat` covers persistence and native UI. Optional Python
+fixtures cover broker fan-out, real loopback SSH, late subscription, directional
+transfers, conflict choices and resumable migration using temporary data.

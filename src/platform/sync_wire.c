@@ -135,7 +135,7 @@ BOOL sy_rpc(SyncRun *r,const char *request,const void *data,size_t size,SyncRepl
     free(encoding);
     if(ok&&sync_json_int(r->db,header,"$.ok",0)!=1){char *message=sync_json_string(r->db,header,"$.error");
         char *code=sync_json_string(r->db,header,"$.code");
-        SyncFailure reason=code&&!strcmp(code,"moved")?SYNC_MOVED:code&&!strcmp(code,"frozen")?SYNC_FROZEN:SYNC_REMOTE;
+        SyncFailure reason=code&&!strcmp(code,"moved")?SYNC_MOVED:code&&!strcmp(code,"frozen")?SYNC_FROZEN:code&&!strcmp(code,"conflict")?SYNC_CONFLICT:SYNC_REMOTE;
         free(code);
         free(r->result->route);
         r->result->route=sync_json_string(r->db,header,"$.state");

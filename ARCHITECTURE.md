@@ -193,8 +193,8 @@ UI 依赖 controller 与 core 的只读视图；controller 依赖 core 和平台
 
 ## 已实施：原生设备与同步
 
-- `core/sync_model.[ch]` 保存两个设备位、最多 16 个配对的有界规则及 Gear 切块边界，保持无 Win32/IO/UI 依赖。`platform/sync_settings.[ch]` 将版本化的 `sync` scope 整体事务保存到 local.json，不进入共享 JSON；导入旧身份与配对时全部暂停。
-- `ui/sync_manager.[ch]` 拥有原生登记、配对、进度及最多 24 条会话记录。所有 HWND、主配置、COM 与控件均属于主 UI 线程；语言切换即时更新，用户名称保持原文。新配对先在草稿中编辑，保存前不产生持久绑定。
+- `core/sync_model.[ch]` 保存最多 16 台设备、16 个目录绑定的有界规则及 Gear 切块边界，保持无 Win32/IO/UI 依赖。`platform/sync_settings.[ch]` 将版本化的 `sync` scope 整体事务保存到 local.json，不进入共享 JSON；导入旧身份与配对时全部暂停。
+- `ui/sync_manager.[ch]` 拥有原生注册、发布/订阅、批量检查、版本选择、进度及最多 24 条会话记录。所有 HWND、主配置、COM 与控件均属于主 UI 线程；语言切换即时更新，用户名称保持原文。新配对先在草稿中编辑，保存前不产生持久绑定。
 - 同步只有一条工作线程，每次拥有不可变请求快照、独立 SSH socket/session/exec channel、取消事件和磁盘 SQLite 连接。它不访问 UI 配置连接。进度通过临界区最新值与合并消息交回 UI；接收删除通过消息在 UI 线程调用 IFileOperation，保留确认/回收站语义。关闭管理窗口只隐藏；退出取消并 join，等待期间处理删除请求以免死锁，之后才释放资源。
 - `platform/sync_client.c` 管理扫描、不可变 outbox、接收 journal、确认和目录绑定；`sync_files.c` 管理 hash、原子缓存及磁盘索引；`sync_wire.c` 在现有 libssh2 上实现有界帧与静态 zlib 压缩；`sync_json.c` 管理有界 UTF-8 JSON。原生客户端不启动本机 Python、浏览器、监听端口、服务或额外进程。远端固定命令从 stdin 接收编码路径，路径不插入 shell 语法。
 - `config/sync/client/` 保存兼容旧协议的 files/outbox/inbox SQLite 表、SHA-256 块与下载断点；flush 内容并持久记录 APPLIED 后才确认。云端用接收端库存免传已有块，确认后回收无引用块。此缓存不可随意清理，目前没有自动历史 GC。同步工作目录保持普通目录，临时重建文件通过校验后原子替换；冲突、重解析点和容量失败停下任务。
@@ -207,3 +207,11 @@ UI 依赖 controller 与 core 的只读视图；controller 依赖 core 和平台
 - 管理门禁锁位于可替换队列目录之外，正常 broker 请求持有共享锁并检查 ACTIVE 状态。EXPORTING 冻结源端后才备份 SQLite；目标 IMPORTING 接收有界包与校验文件，PREPARED 验证数据库及完整清单，源端 REDIRECT 持久提交后目标才 ACTIVE。进程/网络中断通过私有 server-migration.json 与远端 token/偏移继续；根目录交换中断可从 PREPARED 快照恢复。保留旧端；恢复只允许在 REDIRECT 提交之前。
 - 迁移保留全部 devices/datasets/bindings/jobs/heads/objects/job_chunks/needs/inventory/receipts，以及完整块、上传分片与队列配额。每连接最多缓存两份清单并按名称索引，逐包不反复解析整份列表；清单最多 50,000 条、16 MiB，迁移祖先链最多 64 个实例。客户端只中转包，不缓存整份迁移内容。
 - 服务器实例与迁移祖先链独立于设备节点身份。`sync/Manager/Instance` 作为 Version=1 的可选本机字段兼容旧配置。旧端返回结构化 moved/frozen 状态；跟随目标只保存有界 SSH 连接元数据，凭据仍由本机凭据管理器与既有首用指纹核验管理，节点和本机缓存不重建。两端 SSH 登录信息在工作线程认证后及任务销毁时清零。
+
+### 已实施：发布订阅、批量检查与版本选择
+
+- 设备身份仍存私有 local.json；服务器按 node_id 自动分配 A–P 内部标识，界面不暴露设备位。服务器 publishers/recipients 为追加表，在 ACTIVE 门禁内事务升级；旧设备、清单、接收记录保留。GC 必须满足全部目标接收确认，且至少有一台订阅端。
+- 新订阅回填历史 recipients 并重新标记待接收版本。overview 报告当前文件头及所需版本链的内容可用性；repairs/repair_prepare 从原发布设备缓存补回缺失内容，复用版本 ID，不回退文件头或创建伪版本。仍利用各接收端 inventory 免传已有块。取消订阅不清除未交接任务。
+- UI 在主线程顺序调度最多 16 个目录的请求；每个 worker 独占 SSH、SQLite 和请求快照。CHECK 使用临时表比较文件哈希、基线与远端头，不上传或应用工作文件；推送与拉取分别限制方向。批量任务支持勾选，取消停止后续调度，连接/迁移错误停止整批，普通目录错误独立呈现。
+- 当前文件版本的本机/服务器选择携带所检查的本机 SHA 和服务器版本。替换前复制并校验私有 recovery/<sha>/<相对路径>，保留普通文件名。接收链沿用 inbox 的 APPLIED/ack 约束；保留本机时在最新接收基线上发布新子版本。versions 附加表保存替换前清单；过期选择拒绝。界面只提供当前两端版本选择，不自动合并文本。
+- 服务器配置在现有已认证 SSH 通道执行固定引导：当远端账户本身为 root 时可通过 apt-get/dnf/yum/apk 安装缺失 Python；无 sudo、提权或本机子进程。探测不会安装软件。路径、配额、迁移和过滤/删除选项收进高级设置；所有界面和错误保持中英双语。

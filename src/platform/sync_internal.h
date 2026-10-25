@@ -5,6 +5,7 @@
 typedef struct SyncRun {
     SyncRequest *request;SyncResult *result;sqlite3 *db;SshClient *ssh;
     wchar_t cache[SYNC_PATH_CAP],partial[SYNC_PATH_CAP];uint64_t gear[256];ULONGLONG progress_tick;
+    char accepted_local[65]; /* Evolving working hash during one explicit version choice. */
 } SyncRun;
 typedef struct SyncReply { char *json;unsigned char *data;size_t size; } SyncReply;
 BOOL sy_fail(SyncRun *r,SyncFailure code);
