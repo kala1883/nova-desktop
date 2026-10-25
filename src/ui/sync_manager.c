@@ -69,6 +69,9 @@ static CloudBinding bindings[SYNC_PAIR_LIMIT*SYNC_DEVICE_LIMIT];
 static int binding_count;
 static ULONGLONG last_run[SYNC_PAIR_LIMIT];
 static SyncFailure history_codes[24];
+static wchar_t history_details[24][1800];
+static SyncFailure folder_codes[SYNC_PAIR_LIMIT];
+static wchar_t folder_details[SYNC_PAIR_LIMIT][1800],batch_error[2048];
 static wchar_t summary[2048];
 static HWND labels[9];
 static HWND admin_labels[4],target_project_edit,target_root_edit,quota_edit,reserve_edit,target_text,admin_note;
@@ -210,8 +213,12 @@ static const wchar_t *failure_name(SyncFailure f){switch(f){case SYNC_CANCELLED:
         case SYNC_DELETE:return nova_text(L"删除未完成或删除同步尚未启用",L"Deletion was not completed or deletion sync is disabled");
         case SYNC_MOVED:return nova_text(L"服务器已迁移，请在服务器页连接迁移目标",L"Server moved; follow its destination on the Servers page");
         case SYNC_FROZEN:return nova_text(L"服务器迁移未结束，请继续迁移或恢复旧端",L"Server migration pending; resume it or restore the source");
+        case SYNC_UPGRADE:return nova_text(L"服务器版本较旧，请在“服务器”页重新配置服务器",L"Server update required; choose Configure server on the Server page");
         default:return nova_text(L"同步协议校验失败",L"Synchronization protocol validation failed");
         }}
+static void failure_message(wchar_t out[2048],SyncFailure code,const wchar_t *detail){
+    swprintf(out,2048,L"%ls%ls%.1800ls",failure_name(code),detail[0]?L"\r\n":L"",detail);
+}
 static BOOL persist(const SyncSettings *next){if(!sync_settings_save(next)){text(store_error());
         return FALSE;
         }settings=*next;
@@ -221,9 +228,11 @@ static void forget_folder_view(int index){
     free(plans[index]);
     for(int i=index;i<SYNC_PAIR_LIMIT-1;i++){
         plans[i]=plans[i+1];inspected[i]=inspected[i+1];folder_checked[i]=folder_checked[i+1];
+        folder_codes[i]=folder_codes[i+1];lstrcpyW(folder_details[i],folder_details[i+1]);
         pending_push[i]=pending_push[i+1];pending_pull[i]=pending_pull[i+1];pending_conflict[i]=pending_conflict[i+1];pending_wait[i]=pending_wait[i+1];last_run[i]=last_run[i+1];
     }
     int last=SYNC_PAIR_LIMIT-1;plans[last]=NULL;inspected[last]=folder_checked[last]=FALSE;
+    folder_codes[last]=SYNC_OK;folder_details[last][0]=0;
     pending_push[last]=pending_pull[last]=pending_conflict[last]=pending_wait[last]=0;last_run[last]=0;
 }
 static void new_id(wchar_t *out){unsigned char data[16];
@@ -259,12 +268,13 @@ static void populate_pairs(void){
     for(int i=0;i<settings.count;i++){SyncPair *p=&settings.pairs[i];
         row(pairs,i,p->name);
         ListView_SetItemText(pairs,i,1,p->directory);
-        int publisher=settings.role;
+        int publisher=-1;
         for(int j=0;j<group_count;j++)if(!wcscmp(groups[j].id,p->dataset))publisher=groups[j].publisher;
         wchar_t source[192],state[192];
         lstrcpynW(source,publisher_name(publisher),192);
         ListView_SetItemText(pairs,i,2,source);
         if(job&&job->index==i)lstrcpyW(state,nova_text(L"处理中…",L"Working…"));
+        else if(folder_codes[i]!=SYNC_OK)lstrcpynW(state,failure_name(folder_codes[i]),192);
         else if(!inspected[i])lstrcpyW(state,nova_text(L"待检查",L"Check for changes"));
         else if(pending_conflict[i])swprintf(state,192,nova_text(L"%d 个冲突",L"%d conflicts"),pending_conflict[i]);
         else if(pending_wait[i])swprintf(state,192,nova_text(L"等待源设备补发 · %d",L"Awaiting source · %d"),pending_wait[i]);
@@ -298,9 +308,9 @@ typedef struct SyncCloudView {
 } SyncCloudView;
 static SyncCloudView *cloud_view;
 static const wchar_t *publisher_name(int role){
-    if(role==settings.role)return nova_text(L"本机发布",L"Published here");
     if(cloud_view&&role>=0&&role<SYNC_DEVICE_LIMIT&&cloud_view->present[role])return cloud_view->names[role];
-    return nova_text(L"其他设备",L"Another device");
+    if(settings.registered&&role==settings.role&&settings.name[0])return settings.name;
+    return nova_text(L"发布设备未知",L"Publisher unknown");
 }
 static void render_cloud(void){
     if(!cloud_view)return;
@@ -527,7 +537,7 @@ static BOOL start_job(int action,BOOL interactive){
     if(action==SYNC_JOB_RESOLVE){
         int at=ListView_GetNextItem(changes,-1,LVNI_SELECTED);LVITEMW item={0};item.mask=LVIF_PARAM;item.iItem=at;
         sqlite3 *db=NULL;BOOL ok=at>=0&&ListView_GetItem(changes,&item)&&plans[selected]&&sqlite3_open(":memory:",&db)==SQLITE_OK;
-        char pointer[80];snprintf(pointer,sizeof(pointer),"$[%lld]",(long long)(item.lParam>>1));
+        char pointer[80];snprintf(pointer,sizeof(pointer),"$[%d]",(int)(item.lParam>>1));
         char *record=ok?sync_json_string(db,plans[selected],pointer):NULL;
         char *path=record?sync_json_string(db,record,"$.path"):NULL,*local=record?sync_json_string(db,record,"$.local"):NULL,*remote=record?sync_json_string(db,record,"$.remote_version"):NULL;
         ok=ok&&path&&local&&remote&&strlen(local)<sizeof(j->request.expected_local)&&strlen(remote)<sizeof(j->request.expected_remote)&&sync_wide(path,j->request.resolve_path,SYNC_PATH_CAP);
@@ -686,8 +696,14 @@ static void finish_job(void){
             pending_conflict[i]=j->result.conflicts;pending_wait[i]=j->result.waiting;
             if(selected==i)render_changes();
         }
-        if(j->action==SYNC_JOB_RUN||j->action==SYNC_JOB_PUSH||j->action==SYNC_JOB_PULL||j->action==SYNC_JOB_RESOLVE){memmove(&history_codes[1],&history_codes[0],23*sizeof(history_codes[0]));
+        if(j->action==SYNC_JOB_RUN||j->action==SYNC_JOB_PUSH||j->action==SYNC_JOB_PULL||j->action==SYNC_JOB_RESOLVE||j->action==SYNC_JOB_CHECK){memmove(&history_codes[1],&history_codes[0],23*sizeof(history_codes[0]));
+            if(j->index>=0&&j->index<settings.count){int i=j->index;
+                folder_codes[i]=j->result.failure;
+                swprintf(folder_details[i],1800,L"%.1000ls%.700ls",j->result.detail,j->result.ssh.error);
+            }
+            memmove(&history_details[1],&history_details[0],23*sizeof(history_details[0]));
             history_codes[0]=j->result.failure;
+            swprintf(history_details[0],1800,L"%.1000ls%.700ls",j->result.detail,j->result.ssh.error);
             int count=ListView_GetItemCount(history);
             if(count>=24)ListView_DeleteItem(history,23);
             wchar_t name[SYNC_NAME_CAP],sent[40],received[40],reused[40];
@@ -715,7 +731,12 @@ static void finish_job(void){
     }
     int action=j->action;
     if(batch_action&&!retry&&j->result.failure!=SYNC_OK){batch_failures++;
-        if(j->result.failure==SYNC_NETWORK||j->result.failure==SYNC_STORAGE||j->result.failure==SYNC_CANCELLED||j->result.failure==SYNC_MOVED||j->result.failure==SYNC_FROZEN)batch_action=0;
+        if(!batch_error[0]){wchar_t detail[2048],raw[1800];
+            swprintf(raw,1800,L"%.1000ls%.700ls",j->result.detail,j->result.ssh.error);
+            failure_message(detail,j->result.failure,raw);
+            swprintf(batch_error,2048,L"%.120ls: %.1900ls",j->request.pair.name,detail);
+        }
+        if(j->result.failure==SYNC_NETWORK||j->result.failure==SYNC_STORAGE||j->result.failure==SYNC_CANCELLED||j->result.failure==SYNC_MOVED||j->result.failure==SYNC_FROZEN||j->result.failure==SYNC_UPGRADE)batch_action=0;
     }
     CloseHandle(j->worker);
     CloseHandle(j->cancel);
@@ -977,14 +998,15 @@ static void continue_batch(void){
     batch_action=0;
     int pushes=0,pulls=0,conflicts=0,waiting=0;
     for(int i=0;i<settings.count;i++){pushes+=pending_push[i];pulls+=pending_pull[i];conflicts+=pending_conflict[i];waiting+=pending_wait[i];}
-    wchar_t value[256];
-    if(batch_failures)swprintf(value,256,nova_text(L"%d 个目录失败 · 请查看状态和传输记录",L"%d folders failed · Review status and transfers"),batch_failures);
+    wchar_t value[2048];
+    if(batch_failures)swprintf(value,2048,nova_text(L"%d 个目录失败 · %.1900ls",L"%d folders failed · %.1900ls"),batch_failures,batch_error);
     else swprintf(value,256,nova_text(L"↑ %d 待推送   ↓ %d 待拉取   ·   %d 个冲突   ·   %d 个等待补发",L"↑ %d push   ↓ %d pull   ·   %d conflicts   ·   %d awaiting source"),pushes,pulls,conflicts,waiting);
     text(value);controls();
 }
 static void start_batch(int action){
     if(job||!settings.registered||!settings.count||migration_pending)return;
     batch_action=action;batch_next=0;batch_failures=0;
+    batch_error[0]=0;
     for(int i=0;i<settings.count;i++)batch_checked[i]=action==SYNC_JOB_CHECK||folder_checked[i];
     continue_batch();
 }
@@ -1331,11 +1353,20 @@ static LRESULT CALLBACK window_proc(HWND h,UINT message,WPARAM wp,LPARAM lp){
                 }
                 int index=ListView_GetNextItem(pairs,-1,LVNI_SELECTED);
                 if(index>=0){LVITEMW item={0};item.mask=LVIF_PARAM;item.iItem=index;ListView_GetItem(pairs,&item);
-                    if(item.lParam>=0&&item.lParam<settings.count&&item.lParam!=selected){editing=FALSE;select_pair((int)item.lParam);layout();}
+                    if(item.lParam>=0&&item.lParam<settings.count){
+                        if(item.lParam!=selected){editing=FALSE;select_pair((int)item.lParam);layout();}
+                        if(folder_codes[item.lParam]!=SYNC_OK){wchar_t detail[2048];failure_message(detail,folder_codes[item.lParam],folder_details[item.lParam]);text(detail);}
+                    }
                     else if(item.lParam<0){selected=-1;catalog_choice=(int)-item.lParam-1;editing=FALSE;render_changes();controls();layout();}
                 }
                 }
             if(n->hwndFrom==changes&&n->code==LVN_ITEMCHANGED&&!refreshing)controls();
+            if(n->hwndFrom==history&&(n->code==LVN_ITEMCHANGED||n->code==NM_DBLCLK)){
+                int index=ListView_GetNextItem(history,-1,LVNI_SELECTED);
+                if(index>=0&&index<24&&history_codes[index]!=SYNC_OK){wchar_t detail[2048];failure_message(detail,history_codes[index],history_details[index]);text(detail);
+                    if(n->code==NM_DBLCLK)MessageBoxW(window,detail,nova_text(L"传输详情",L"Transfer details"),MB_OK|MB_ICONINFORMATION);
+                }
+            }
             if(n->hwndFrom==pairs&&n->code==NM_DBLCLK&&!job){if(catalog_choice>=0)subscribe_folder();else if(selected>=0){editing=TRUE;layout();}}
             return 0;
             }
@@ -1592,6 +1623,8 @@ void sync_manager_shutdown(void){
     binding_count=group_count=0;
     batch_action=batch_next=0;editing=advanced=server_advanced=FALSE;catalog_choice=-1;
     for(int i=0;i<SYNC_PAIR_LIMIT;i++){free(plans[i]);plans[i]=NULL;folder_checked[i]=inspected[i]=FALSE;pending_push[i]=pending_pull[i]=pending_conflict[i]=pending_wait[i]=0;}
+    ZeroMemory(folder_codes,sizeof(folder_codes));ZeroMemory(folder_details,sizeof(folder_details));
+    ZeroMemory(history_codes,sizeof(history_codes));ZeroMemory(history_details,sizeof(history_details));batch_error[0]=0;
     free(cloud_view);
     cloud_view=NULL;
     selected=-1;

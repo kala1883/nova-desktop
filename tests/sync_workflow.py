@@ -13,6 +13,7 @@ import unittest
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / 'sync/server'))
 broker_module = importlib.import_module('chunksync.broker')
+control_module = importlib.import_module('chunksync.control')
 
 
 class Workflow(unittest.TestCase):
@@ -86,6 +87,30 @@ class Workflow(unittest.TestCase):
         plan, _ = self.publish(a, 'initial-version')
         self.ack(a, plan)
         self.assertGreater(self.call(a, 'status')['stored_bytes'], 0)
+
+    def test_admin_status_preserves_publication_identity(self):
+        a, b = [self.register(node) for node in ('laptop', 'desktop')]
+        self.bind(a)
+        self.bind(b)
+        normal = self.call(a, 'status')['datasets'][0]
+        admin = control_module.database_status(self.broker.root)['datasets'][0]
+        self.assertEqual(admin, normal)
+        self.assertEqual(admin['publisher'], a)
+        with self.broker.connect(True) as db:
+            db.execute('DELETE FROM publishers')
+        self.assertIsNone(control_module.database_status(self.broker.root)['datasets'][0]['publisher'])
+        # The original source can re-save its metadata without uploading files.
+        self.bind(a)
+        self.bind(b)
+        self.assertEqual(control_module.database_status(self.broker.root)['datasets'][0]['publisher'], a)
+        self.assertEqual(self.call(a, 'status')['jobs'], {})
+        # Inspecting an older queue must remain read-only and must not guess its publisher.
+        with self.broker.connect(True) as db:
+            db.execute('DROP TABLE publishers')
+        legacy = control_module.database_status(self.broker.root)['datasets'][0]
+        self.assertIsNone(legacy['publisher'])
+        with self.broker.connect() as db:
+            self.assertIsNone(db.execute("SELECT name FROM sqlite_master WHERE name='publishers'").fetchone())
 
     def test_registration_capacity_and_version_race(self):
         roles = [self.register(f'node-{i}') for i in range(16)]

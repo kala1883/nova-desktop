@@ -32,6 +32,10 @@ int wmain(int argc,wchar_t **argv){
     assert(argc==5);lstrcpyW(root,argv[4]);assert(GetFileAttributesW(root)&FILE_ATTRIBUTE_DIRECTORY);char pin[80];assert(WideCharToMultiByte(CP_UTF8,0,argv[3],-1,pin,sizeof(pin),NULL,NULL));assert(ssh_runtime_acquire());
     SyncRequest *a=calloc(1,sizeof(*a)),*b=calloc(1,sizeof(*b));assert(a&&b);setup(a,0,argv[1],_wtoi(argv[2]),pin);setup(b,1,argv[1],_wtoi(argv[2]),pin);SyncResult result=action(a,SYNC_JOB_REGISTER);assert(result.failure==SYNC_OK);sync_result_dispose(&result);result=action(b,SYNC_JOB_REGISTER);assert(result.failure==SYNC_OK);sync_result_dispose(&result);
     wchar_t pa[SYNC_PATH_CAP],pb[SYNC_PATH_CAP];swprintf(pa,SYNC_PATH_CAP,L"%ls\\中文.bin",a->pair.directory);swprintf(pb,SYNC_PATH_CAP,L"%ls\\中文.bin",b->pair.directory);source_file(pa);
+    wchar_t legacy[SYNC_PATH_CAP];swprintf(legacy,SYNC_PATH_CAP,L"%ls\\A\\legacy-server.flag",root);write_text(legacy,"old broker response");
+    result=action(a,SYNC_JOB_CHECK);assert(result.failure==SYNC_UPGRADE&&result.stats.sent==0&&result.stats.published==0);sync_result_dispose(&result);
+    result=action(a,SYNC_JOB_PUSH);assert(result.failure==SYNC_UPGRADE&&result.stats.sent==0&&result.stats.published==0);sync_result_dispose(&result);assert(DeleteFileW(legacy));
+    puts("PASS legacy server CHECK/PUSH refusal identifies required server update before uploading content");
     result=action(a,SYNC_JOB_RUN);assert(result.failure==SYNC_NETWORK);sync_result_dispose(&result);
     result=action(a,SYNC_JOB_RUN);assert(result.failure==SYNC_OK&&result.stats.resumed>=SYNC_PACKET_MAX);printf("PASS native upload resumed at %llu bytes\n",(unsigned long long)result.stats.resumed);sync_result_dispose(&result);
     result=action(b,SYNC_JOB_RUN);assert(result.failure==SYNC_NETWORK);sync_result_dispose(&result);

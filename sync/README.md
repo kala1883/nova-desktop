@@ -16,6 +16,9 @@ Python 仅用于服务器。关闭同步窗口会隐藏窗口，自动同步随 
    key and verify the host fingerprint. Click **Configure server**. It installs
    and connects to the embedded broker; existing queue data and quotas survive.
    A new queue uses `/opt/nova-sync`, 15 GiB staging and 5 GiB free reserve.
+   Use the same **Configure server** action to update its embedded server component.
+   **Refresh** reloads state. **Published by** shows registered device names;
+   missing legacy publication metadata is shown as **Publisher unknown**.
 2. The remote account needs write permission to its project/queue paths. Under
    **Advanced**, use a writable home directory for a non-root account. On Linux,
    configuration can install Python using apt-get/dnf/yum/apk when the SSH account
@@ -42,6 +45,8 @@ Python 仅用于服务器。关闭同步窗口会隐藏窗口，自动同步随 
 每台电脑先将自己的 SSH 公钥加入服务器，然后在原生界面**配置服务器 → 注册本设备**，
 自动分配身份，最多 16 台。源电脑**发布目录**；其他电脑刷新后选择该目录并**订阅**，
 本机路径可以不同。保存只登记元数据，明确点击同步才会传文件。
+后续更新服务器组件仍使用**配置服务器**；**刷新**只读取状态。
+**发布设备**显示登记的设备名称，包括本机；缺失的旧发布信息显示为**发布设备未知**。
 
 日常使用**检查全部**检查本机所有目录，勾选后选择推送、拉取或双向同步。文件表提供
 本机/服务器版本选择；先保留本机恢复副本，再处理冲突。默认关闭自动同步和删除传播。

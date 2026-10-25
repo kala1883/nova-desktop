@@ -20,7 +20,7 @@ static void model_tests(void){
     s->version=2;assert(!sync_settings_valid(s));free(before);free(s);puts("PASS sync model: bounded collection, duplicates, immutable failures, Unicode and traversal checks");
 }
 static void settings_tests(const wchar_t *dir){
-    assert(store_open(dir));assert(store_set_int(L"app",L"Nova",L"Language",0));wchar_t shared[MAX_PATH],local[MAX_PATH];swprintf(shared,MAX_PATH,L"%ls\\nova.json",dir);swprintf(local,MAX_PATH,L"%ls\\local.json",dir);char before[65536],after[65536],private_json[65536];DWORD length=contents(shared,before,sizeof(before));
+    assert(store_open(dir));assert(store_set_int(L"app",L"Nova",L"Language",0));wchar_t shared[MAX_PATH],local[MAX_PATH];swprintf(shared,MAX_PATH,L"%ls\\runtime.json",dir);swprintf(local,MAX_PATH,L"%ls\\local.json",dir);char before[65536],after[65536],private_json[65536];DWORD length=contents(shared,before,sizeof(before));
     SyncSettings *s=malloc(sizeof(*s)),*loaded=malloc(sizeof(*loaded));assert(s&&loaded);sync_settings_default(s);wcscpy(s->node_id,L"synthetic-node");wcscpy(s->name,L"Synthetic private device");s->registered=true;fixture_pair(&s->pairs[0]);s->count=1;
     assert(sync_settings_save(s));assert(contents(shared,after,sizeof(after))==length&&!memcmp(before,after,length));contents(local,private_json,sizeof(private_json));assert(strstr(private_json,"synthetic-node")&&!strstr(after,"fixture-only"));assert(sync_settings_load(loaded)&&!memcmp(loaded,s,sizeof(*s)));
     assert(store_set_int(L"sync",L"Manager",L"Version",2));assert(!sync_settings_load(loaded));store_close();assert(store_open(dir));assert(!sync_settings_load(loaded));store_close();free(s);free(loaded);puts("PASS sync configuration: local.json only, exact reload and newer-version rejection");

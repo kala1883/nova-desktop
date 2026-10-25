@@ -57,17 +57,12 @@ UI 依赖 controller 与 core 的只读视图；controller 依赖 core 和平台
 
 ## 状态与资源所有权
 
-- 共享与本机状态分层：任务/子任务、工作区/启动项、命令预设、标签目录和收藏及语言写入 nova.json；Active、窗口模式/侧边栏、Pane.Selected、Manager.Layout/NavigationTree/Split 写入被忽略的 local.json。打开时先读共享文件，再叠加仅允许临时状态字段的本机文件。旧共享文件中的临时状态迁移到本机文件；旧选择索引因共享标签删除而失效时复位到 0，损坏值仍拒绝加载。
-- 一次配置事务分别生成两份快照，先准备并 flush 两个临时文件，使用回滚副本发布；任一文件发布失败则恢复已发布文件及内存事务。与原文件字节相同时不替换，所以本机会话变化不会改动共享 JSON 或其时间戳。两份文件分别备份，部署只打包共享文件。
-- PowerShell 语义合并工具按稳定任务 ID 和工作区/启动项 ID 对三份 Git 版本合并；任务顺序索引冲突不丢弃独立新增任务。相同实体的不同修改、删改或容量冲突停止并保留备份，用户确认后再继续，不自动 commit/push。
-- `sync_config.bat` 处理 Git 尚未合并就被未提交 JSON 阻塞的场景：先 fetch、备份及预合并，只有无语义冲突且允许快进时才暂时恢复共享文件、快进并原子发布合并结果；Git 更新失败则恢复原本机字节。实体内容与相对顺序分别合并，排序编号压缩不构成内容编辑；不兼容相对顺序仍拒绝。超出 Pane.Count 的旧 Tab 字段不参与合并。工具不操作本机状态、已有 stash 或提交，拒绝已暂存配置和未完成 Git 操作。
-
-- `--migrate-data` 在单实例锁保护下执行相同数据初始化、使用数据迁移及 JSON 备份，然后退出，不创建应用窗口、不派发启动项或任务。可在初次运行界面前将实际保存数据填入 config/nova.json；已初始化的 JSON 保持优先，不以旧数据覆盖。
-
-- 共享磁盘配置为 UTF-8 `config/nova.json`，根版本为 1；settings、workspaces、items 保留原 scope/section/key 与稳定 ID，所有 64 位 ID 以字符串表示。仓库内运行时向上定位含 `.git` 和 `config/nova.json` 的根目录，直接读写该文件；脱离仓库时使用 exe 旁的 config 目录。初始文件 `initialized=false` 只允许空数组，首次从 `%APPDATA%\NOVA Desktop` 只读迁移旧 SQLite 或 INI，无旧数据则初始化默认值，此后不再读取旧配置。
-- 应用配置的 SQLite 只在单 UI 线程内存中运行；同步子系统另有工作线程独占的磁盘断点索引（见下文）。JSON 加载限制 16 MiB、4096 条 setting、8 个工作区及 160 个启动项；校验字段类型、未知版本、重复键、字符串边界、容量和外键后才安装。任务及命令预设继续使用其独立版本校验。工作区启动项仍按需装载到 UI；完整内存关系表保留未加载项，保存不会丢失它们。
-- 配置事务在同目录唯一临时文件生成完整 JSON、检查写入长度并 FlushFileBuffers，再用 ReplaceFileW 原子替换，同时保留临时回滚副本；内存 COMMIT 失败时恢复原文件，发布失败时回滚内存。语言、窗口模式及工作区变化在同一事务提交。文件窗格仍去抖 400 ms，并在关闭时刷新。启动更新 `nova.backup.json`；无效数据拒绝打开，不自动覆盖，备份可由用户手动恢复。
-- `config/nova.json` 纳入 Git；备份、临时文件和 build 产物忽略。每次成功编译更新 `build/packages/nova-desktop.exe` 与配置副本，旧命名包和 ZIP 保留；替换固定 exe 时先复制到同目录临时文件，失败保留原副本且不终止运行实例。部署包包含 config/nova.json。
+- 日常业务数据与 Git 快照分离：任务/子任务、工作区/启动项、命令预设、标签、收藏和语言写入被忽略的 `runtime.json`；窗口/选择/布局及 sync 身份写入 `local.json`。`nova.json` 只作为显式交换的共享快照，运行期间不写它。版本均为 1，SQLite 继续作为主 UI 线程的内存事务引擎。
+- 首次打开无 runtime 时校验共享快照及本机文件，再只读迁移旧 SQLite/INI，完整验证任务、命令、工作区及外键后发布 runtime/local/base/seed；保留旧 nova 原始字节到 `nova.migration.json`。存在 runtime 后不再读取共享快照；runtime 损坏、新版本或基线存在但 runtime 丢失时拒绝打开，不用旧快照覆盖。本机字段覆盖旧共享临时字段，失效的选中标签归零，非法值拒绝。
+- 配置事务同目录准备并 flush 临时文件，使用 ReplaceFileW 和回滚副本发布，内存提交失败恢复磁盘及内存。相同字节不替换，startup 分别更新 runtime/local 的 backup。首次发布附带 `runtime.base.json` 合并基线及不可变 `runtime.seed.json` 首次规范化结果，旧 JSON/SQLite/INI 与旧备份均保留。完整关系表保存未装载项，容量/UTF-8/重复键/外键及各业务版本校验保持不变。
+- `config_snapshot.bat -Action Migrate` 在旧版关闭后完成本机迁移，备份并确认共享文件仍为迁移来源，验证 Git HEAD 快照后仅清理旧的未提交 nova，并以 HEAD 为基线保留本机新增。已暂存、有冲突或迁移后修改的共享文件拒绝清理，不 commit/push。`--migrate-data` 仅迁移和备份，不清理 Git、不打开 UI、不执行任务。
+- 显式 Import/Export 使用既有稳定 ID 语义三方合并：基线、本机 runtime、共享 nova；独立新增保留，同实体编辑/删改、排序或容量冲突拒绝。脚本持有同名单实例 mutex 的句柄阻止应用写入，并重新核对输入字节；原生 `--check-data <isolated-directory>` 无界面校验原始输入和合并结果，不读取用户 AppData。原始文件与预览在被忽略的 `.snapshot-*` 中保留，全部临时文件 flush 后才发布，失败按相反顺序恢复。Import 只更新 runtime 和远端基线；Export 同时更新 runtime、nova 和合并后基线，均不修改 local、凭据或同步缓存。seed 解决首次旧任务迁移分配 ID 后原始快照未变的识别。
+- 仓库内程序向上查找 `.git` 与 `config/nova.json`，独立程序使用 exe 旁 config。Git 和包中仅保留共享快照；构建/部署不自动导出本机数据，计数/哈希只描述共享快照。旧 sync_config/resolve_config 继续合并 Git 快照，不操作 runtime。
 
 - 一个 AppState 在主线程持有。工作线程只接收不可变任务快照，结果带稳定 item_id 与 generation；搜索/切换后丢弃过期结果。
 - 导入、排序、跨区移动都经过命令；先验证容量、索引、重复路径，再提交。失败不半删半加。

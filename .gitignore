@@ -8,5 +8,11 @@
 /config/nova.backup.json
 /config/local.json
 /config/local.backup.json
+/config/runtime.json
+/config/runtime.backup.json
+/config/runtime.base.json
+/config/runtime.seed.json
+/config/nova.migration.json
+/config/.snapshot-*/
 /config/.nova-*.tmp
 /config/sync/

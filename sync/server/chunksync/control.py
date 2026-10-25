@@ -211,7 +211,9 @@ def database_status(root):
         if not required <= tables:
             raise ControlError("队列数据库格式不兼容 / Incompatible queue schema")
         return {"devices": [dict(r) for r in db.execute("SELECT * FROM devices ORDER BY role")],
-                "datasets": [dict(r) for r in db.execute("SELECT * FROM datasets ORDER BY id")],
+                "datasets": [dict(r) for r in db.execute(
+                    "SELECT d.*,p.device AS publisher FROM datasets d LEFT JOIN publishers p ON p.dataset=d.id ORDER BY d.id"
+                    if "publishers" in tables else "SELECT *,NULL AS publisher FROM datasets ORDER BY id")],
                 "bindings": [dict(r) for r in db.execute("SELECT * FROM bindings")] if "bindings" in tables else [],
                 "jobs": {r[0]: r[1] for r in db.execute("SELECT state,count(*) FROM jobs GROUP BY state")},
                 "stored_bytes": db.execute("SELECT coalesce(sum(progress),0) FROM objects").fetchone()[0]}

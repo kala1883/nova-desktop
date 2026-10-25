@@ -8,11 +8,13 @@ BOOL nova_english=FALSE;
 BOOL ssh_choose_server(HWND h,int64_t id,SshLogin *login){(void)h;(void)id;(void)login;return FALSE;}
 BOOL ssh_pick_server(HWND h,HWND anchor,SshLogin *login){(void)h;(void)anchor;(void)login;return FALSE;}
 static BOOL fake_login(BOOL interactive,SshLogin *login){(void)interactive;ZeroMemory(login,sizeof(*login));login->server.id=1;login->server.port=22;wcscpy(login->server.name,L"Synthetic SSH");wcscpy(login->server.host,L"fixture.invalid");return TRUE;}
-static BOOL fail_attach;
+static BOOL fail_attach,legacy_server,rejected_server;
 static int checks,push_jobs,pull_jobs,resolutions;
 static BOOL fake_target_login(int64_t id,BOOL interactive,SshLogin *login){BOOL ok=fake_login(interactive,login);login->server.id=id;return ok;}
 static BOOL fake_run(SyncRequest *request,int action,SyncResult *result){
     ZeroMemory(result,sizeof(*result));if(action==SYNC_JOB_SERVER_ATTACH&&fail_attach){result->failure=SYNC_CONFLICT;return FALSE;}if(WaitForSingleObject(request->cancel,0)==WAIT_OBJECT_0){result->failure=SYNC_CANCELLED;return FALSE;}
+    if(legacy_server&&(action==SYNC_JOB_PUSH||action==SYNC_JOB_CHECK)){result->failure=SYNC_UPGRADE;wcscpy(result->detail,L"Legacy broker request detail");return FALSE;}
+    if(rejected_server&&action==SYNC_JOB_PUSH&&!wcscmp(request->pair.id,L"fixture-pair")){result->failure=SYNC_REMOTE;wcscpy(result->detail,L"Specific server rejection");return FALSE;}
     result->cloud=strdup("{\"devices\":[{\"role\":\"A\",\"node_id\":\"synthetic-node\",\"name\":\"Office laptop\"},{\"role\":\"B\",\"node_id\":\"peer-b\",\"name\":\"Home desktop\"},{\"role\":\"C\",\"node_id\":\"peer-c\",\"name\":\"Studio PC\"}],\"datasets\":[{\"id\":\"fixture-data\",\"name\":\"Fixture group\",\"publisher\":\"A\"}],\"bindings\":[{\"dataset\":\"fixture-data\",\"device\":\"B\",\"path\":\"C:\\\\synthetic-peer\"}],\"stored_bytes\":0,\"quota_bytes\":16106127360,\"jobs\":{}}");
     if(action==SYNC_JOB_SERVER_PROBE){free(result->cloud);result->cloud=strdup("{\"devices\":[],\"datasets\":[{\"id\":\"unrelated-target\",\"name\":\"Destination only\"}],\"bindings\":[],\"jobs\":{},\"stored_bytes\":0,\"quota_bytes\":1073741824,\"python\":\"3.12.0\",\"free_bytes\":10737418240,\"control\":{\"phase\":\"ACTIVE\"}}");}
     if(action>=SYNC_JOB_SERVER_PROBE){result->installed=TRUE;result->switched=action==SYNC_JOB_SERVER_MIGRATE||action==SYNC_JOB_SERVER_ATTACH||action==SYNC_JOB_SERVER_DEPLOY;wcscpy(result->server_instance,L"fixture-new-server");wcscpy(result->server_phase,L"ACTIVE");}
@@ -33,6 +35,13 @@ int wmain(int argc,wchar_t **argv){
     SshServers fixture_servers={0};fixture_servers.count=3;for(int i=0;i<3;i++){SshServer *server=&fixture_servers.items[i];server->id=i+1;server->port=22;swprintf(server->name,SSH_NAME_CAP,L"Synthetic server %d",i+1);swprintf(server->host,256,L"server%d.example.invalid",i+1);wcscpy(server->user,L"fixture");wcscpy(server->directory,L"/");}assert(store_save_ssh_servers(&fixture_servers));
     login_backend=fake_login;target_login_backend=fake_target_login;run_backend=fake_run;HWND parent=CreateWindowExW(0,L"STATIC",L"NOVA sync fixture",WS_OVERLAPPEDWINDOW,0,0,400,300,NULL,NULL,GetModuleHandleW(NULL),NULL);assert(parent&&sync_manager_open(parent));pump();
     assert(start_job(SYNC_JOB_REGISTER,FALSE));finish();assert(settings.registered&&cloud_view&&group_count==1);assert(store_int(L"sync",L"Manager",L"Registered",0)==1);
+    wchar_t publisher[192];ListView_GetItemText(pairs,0,2,publisher,192);assert(!wcscmp(publisher,L"Office laptop"));
+    assert(!wcscmp(publisher_name(1),L"Home desktop"));
+    cloud_view->present[0]=FALSE;assert(!wcscmp(publisher_name(0),settings.name));cloud_view->present[0]=TRUE;
+    nova_english=TRUE;assert(!wcscmp(publisher_name(-1),L"Publisher unknown"));
+    int old_publisher=groups[0].publisher;groups[0].publisher=-1;populate_pairs();ListView_GetItemText(pairs,0,2,publisher,192);assert(!wcscmp(publisher,L"Publisher unknown"));groups[0].publisher=old_publisher;populate_pairs();
+    nova_english=FALSE;assert(!wcscmp(publisher_name(-1),L"发布设备未知"));
+    puts("PASS publication labels show registered local/peer names and distinguish missing publisher metadata");
     int original_groups=group_count;assert(!load_cloud("{\"devices\":[],\"datasets\":{},\"bindings\":[]}"));assert(group_count==original_groups);
     SetWindowTextW(name_edit,L"Unsaved user name");nova_english=TRUE;sync_manager_language_changed();wchar_t value[256];GetWindowTextW(window,value,256);assert(wcsstr(value,L"Devices and synchronization"));GetWindowTextW(name_edit,value,256);assert(!wcscmp(value,L"Unsaved user name"));GetWindowTextW(pair_name,value,256);assert(!wcscmp(value,L"User folder name"));
     page=1;TabCtrl_SetCurSel(tab,1);layout();select_pair(0);SetWindowTextW(pair_name,L"Saved user pair");save_pair();finish();assert(!wcscmp(settings.pairs[0].name,L"Saved user pair")&&settings.pairs[0].paused);
@@ -55,6 +64,18 @@ int wmain(int argc,wchar_t **argv){
     select_pair(0);ListView_SetItemState(changes,0,LVIS_SELECTED|LVIS_FOCUSED,LVIS_SELECTED|LVIS_FOCUSED);resolve_choice=1;assert(start_job(SYNC_JOB_RESOLVE,FALSE));finish();assert(resolutions==1);
     assert(ListView_GetItemCount(changes)==2);nova_english=TRUE;sync_manager_language_changed();assert(ListView_GetItemCount(changes)==2);
     puts("PASS native workflow UI: hidden technical fields, all-folder inspection, checked-folder push/pull, version choice wiring and translated file states");
+    legacy_server=TRUE;start_batch(SYNC_JOB_PUSH);finish();assert(folder_codes[0]==SYNC_UPGRADE&&batch_failures==1&&!batch_action);
+    ListView_GetItemText(pairs,0,3,value,256);assert(wcsstr(value,L"Server update required"));assert(wcsstr(summary,L"Configure server")&&wcsstr(summary,L"Legacy broker request detail"));
+    assert(history_codes[0]==SYNC_UPGRADE&&!wcscmp(history_details[0],L"Legacy broker request detail"));
+    ListView_SetItemState(history,0,LVIS_SELECTED|LVIS_FOCUSED,LVIS_SELECTED|LVIS_FOCUSED);assert(wcsstr(summary,L"Legacy broker request detail"));
+    nova_english=FALSE;sync_manager_language_changed();ListView_GetItemText(pairs,0,3,value,256);assert(wcsstr(value,L"服务器版本较旧"));
+    legacy_server=FALSE;start_batch(SYNC_JOB_PUSH);finish();assert(folder_codes[0]==SYNC_OK&&batch_failures==0);
+    puts("PASS outdated-server guidance, persistent folder error, detailed transfer history, localization and successful retry reset");
+    rejected_server=TRUE;folder_checked[1]=TRUE;start_batch(SYNC_JOB_PUSH);finish();
+    assert(batch_failures==1&&folder_codes[0]==SYNC_REMOTE&&folder_codes[1]==SYNC_OK&&wcsstr(summary,L"Specific server rejection"));
+    assert(start_job(SYNC_JOB_REFRESH,FALSE));finish();assert(folder_codes[0]==SYNC_REMOTE);
+    rejected_server=FALSE;start_batch(SYNC_JOB_PUSH);finish();assert(batch_failures==0&&folder_codes[0]==SYNC_OK);folder_checked[1]=FALSE;
+    puts("PASS batch completion preserves first rejection detail across later successes and metadata refresh");
     if(argc>1&&!wcscmp(argv[1],L"--capture")){
         nova_english=FALSE;sync_manager_language_changed();capture(window,L"build\\sync-native-zh.bmp");
         nova_english=TRUE;sync_manager_language_changed();capture(window,L"build\\sync-native-en.bmp");

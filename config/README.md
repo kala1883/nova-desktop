@@ -1,52 +1,70 @@
 # Configuration / 配置
 
-SSH profiles use settings scope `ssh_servers`, `Servers/Version=1`, a bounded
-`Servers/Count` (0–16), and `ServerN/{Id,Name,Host,Port,User,Directory}`. Stable IDs
-are decimal strings. Remote file tabs/favorites retain `nova-ssh:<id>:/path` in
-the existing `files` scope. Profiles and paths are shared; credentials, key paths
-and local host trust pins are excluded. Restored tabs do not auto-connect.
+Daily data is saved in Git-ignored `runtime.json`: tasks/subtasks, commands and
+folders, workspaces, launch items, presets, saved tabs, favorites and language.
+Private UI/session state and device identity remain in `local.json`. Tracked
+`nova.json` is an explicit shared snapshot; normal saves never modify it.
+Repository executables use root `config/`; standalone executables use adjacent
+`config/`. Packages include the shared snapshot, server source and explicit snapshot tools;
+private runtime files are excluded.
 
-SSH 配置使用 `ssh_servers` scope，整体事务保存，版本和容量校验失败时不覆盖原文件。
-共享字段只有 ID、名称、主机、端口、用户名和初始目录；远程标签/收藏保存稳定 ID 和路径，
-恢复时不自动连接。密码、私钥口令、私钥路径和本机主机信任记录不进入 JSON。
+日常任务、子任务命令/目录、工作区、启动项、命令预设、目录标签、收藏和语言
+写入被忽略的 `runtime.json`，本机会话及设备身份仍在 `local.json`。
+`nova.json` 是纳入 Git 的共享快照，日常保存不修改它；程序包只携带共享快照。
+仓库内程序使用根 config，独立程序使用 exe 旁 config。
 
-`files/Pane0` through `files/Pane3` each have an optional `ServerMode` setting:
-`0` (local, default) or `1` (servers). It is written only to Git-ignored `local.json`.
-Each pane's add-tab action follows this preference without changing existing tabs.
-各窗格的本地/服务器模式独立保存，只改变新标签的选择流程；非法值拒绝加载，恢复不自动连接。
+On first launch, the old validated snapshot is migrated without altering its
+bytes, keeping all IDs, tasks, paths and commands. Its original copy is retained
+as `nova.migration.json`, with normalized seed `runtime.seed.json` and merge base
+`runtime.base.json`. Existing local state wins over legacy transient fields.
+If the snapshot is absent/uninitialized, the existing read-only AppData SQLite/INI
+migration still applies. Originals stay intact. Existing runtime data always wins
+on later launches; corrupt/newer runtime data is rejected without fallback.
+Startup backs up runtime/local to their respective `.backup.json` files.
 
-`nova.json` is the UTF-8 configuration read and written by NOVA. It is available
-for Git version control. Executables inside this checkout use the repository's
-`config/nova.json`; outside a checkout, a package uses `config/nova.json` beside
-its executable. Every build copies configuration alongside the latest executable;
-deployment archives include their own copy.
+首次启动校验并迁移旧配置，保留任务、路径、命令和全部 ID，旧 nova 的原始字节
+保留为 `nova.migration.json`，首次规范化结果为 `runtime.seed.json`，
+合并基线为 `runtime.base.json`。已有本机状态优先；无已初始化快照时仍只读迁移
+AppData 的 SQLite/INI，原文件保留。后续启动只使用 runtime，不自动应用拉取的快照；
+本机数据损坏或版本更新时拒绝加载，不退回旧快照。
+启动备份为 `runtime.backup.json` 和 `local.backup.json`，恢复前关闭 NOVA。
 
-`nova.json` 是 NOVA 实际读写的 UTF-8 配置，可以纳入 Git。在仓库内运行时使用
-仓库的 `config/nova.json`；独立发布包使用 exe 旁的 `config/nova.json`。
-每次编译将配置复制到最新程序目录，部署压缩包也包含配置副本。
+After building, close NOVA and run `deployment/config_snapshot.bat -Action Migrate`
+once to preserve existing data and clear the old dirty tracked JSON against HEAD.
+Staged/conflicted or subsequently edited snapshots are refused; exact backups
+remain. `--migrate-data` alone leaves Git files intact and never runs tasks.
 
-An empty initial file may have `initialized: false` and empty arrays. First launch imports
-existing SQLite or INI configuration from `%APPDATA%\NOVA Desktop`, preserving
-the originals. Without older data it creates defaults. It then writes
-`initialized: true`, and subsequent launches use JSON. Leave the initial file
-unchanged if you want to import existing configuration on first launch.
+编译后关闭 NOVA，执行一次 `deployment/config_snapshot.bat -Action Migrate`，
+迁移现有数据，再将旧的未提交 nova 恢复到 HEAD，保留本机新增及原始备份。
+已暂存、有冲突或迁移后再次编辑的快照拒绝清理；单独 `--migrate-data` 不操作 Git。
 
-空的初始文件可设置 `initialized: false`，数组为空。首次启动从
-`%APPDATA%\NOVA Desktop` 导入旧 SQLite 或 INI 配置，原文件保留；没有旧数据时
-生成默认配置。之后写入 `initialized: true`，后续启动使用 JSON。
-如需导入旧配置，请在首次启动前保留初始文件。
+## Explicit exchange / 显式交换
 
-This file stores actual saved data as well as preferences: named tasks, each
-subtask's command and folder, workspace launch items and task shortcuts, command
-presets, tabs and favorites. To populate the initial file without opening NOVA's
-UI, close NOVA and run `build/packages/nova-desktop.exe --migrate-data`.
-Re-running this command uses an already initialized JSON file; it does not
-overwrite it with older data or execute any task.
+Close NOVA, then use `deployment/config_snapshot.bat -Action Export` to merge and
+update the tracked snapshot; review/commit/push it explicitly. After pulling on
+another computer, use `-Action Import` to merge into local data. Either action
+supports `-Preview`. Both use the last shared baseline and stable IDs; independent
+additions survive, real conflicts stop before publication. Native validation
+checks raw documents and the merged result. Publication failures restore all
+original bytes; backups/previews remain under ignored `.snapshot-*/`. Import
+updates the remote baseline; Export advances it to the merged snapshot. Neither
+copies local state, credentials, identities or caches, nor commits/pushes.
+Ordinary Git pulls do not change runtime data and need no special sync script.
 
-这里保存的也包含实际使用数据：已命名任务、每个子任务的命令与目录、工作区
-启动项和任务入口、命令预设、标签及收藏。关闭 NOVA 后运行
-`build/packages/nova-desktop.exe --migrate-data`，可在不开界面的情况下填充初始文件。
-重复运行时使用已初始化的 JSON，不会用旧数据覆盖它，也不会执行任务。
+关闭 NOVA 后，`deployment/config_snapshot.bat -Action Export` 合并并导出共享快照，
+核对后自行提交、推送；目标电脑拉取后以 `-Action Import` 合并到本机数据。
+两者均支持 `-Preview`，按上次共享基线和稳定 ID 合并，保留独立新增，真实冲突停止。
+原生校验检查原始 JSON 及结果；写入失败恢复原始字节，备份/预览留在 `.snapshot-*/`。
+Import 基线推进到远端快照，Export 推进到合并快照。均不复制本机状态、凭据、身份或缓存，
+不自动提交/推送；普通拉代码不修改 runtime，也无需特殊同步脚本。
+
+SSH profiles (`ssh_servers`) and remote paths are shareable snapshot data;
+passwords, private key paths and host trust pins are excluded. Restoring remote
+tabs never connects automatically. `files/PaneN/ServerMode` is local-only.
+SSH 配置与远端路径可以显式共享；登录凭据、私钥路径、主机信任不进入 JSON。
+远端标签恢复不自动连接，各窗格 ServerMode 只存在 local.json。
+
+## JSON format / JSON 格式
 
 The root contains exactly six fields / 根对象包含以下六个字段：
 
@@ -79,65 +97,6 @@ over-capacity data are rejected. Reading configuration never executes commands.
 16 MiB。更新版本、重复键、缺失字段、无效 UTF-8、无对应工作区的启动项和超容量
 数据会被拒绝。读取配置本身不会执行命令。
 
-Startup backs up valid configuration as `nova.backup.json`. To restore, close NOVA
-and copy the backup over `nova.json`. Backups and `.nova-*.tmp` files are ignored
-by Git. The primary file includes your names, paths and command text.
-
-启动时备份为 `nova.backup.json`。恢复时关闭 NOVA，再将备份复制覆盖 `nova.json`。
-备份和 `.nova-*.tmp` 被 Git 忽略。主配置包含用户名称、路径和命令文本。
-
-For cross-computer use, close NOVA on both computers first. Commit/push the
-source computer's changed JSON, then pull it on the destination and rebuild.
-Building/deploying on the destination alone cannot retrieve uncommitted source
-data. Build/deploy output reports the configuration path, task/tab counts and
-SHA256. Copy the whole standalone package, including its config folder, when
-not using a Git checkout. Stored absolute folder paths must exist on that computer.
-
-跨电脑使用时先关闭两台电脑的 NOVA。在源电脑提交、推送已修改的 JSON，目标电脑
-再拉取并编译；仅在目标电脑编译或部署，无法取得源电脑未提交的数据。
-编译、部署会显示配置路径、任务/标签数量和 SHA256。使用独立程序包时，复制整个包，
-包括 config 文件夹；已保存的绝对目录路径需要在该电脑存在。
-
-## Shared data and local state / 共享数据与本机状态
-
-`nova.json` remains tracked and contains tasks, subtasks, workspaces, launch items,
-command presets, saved folder tabs, favorites and language. `local.json` is ignored
-by Git and contains active workspace, selected tab indices, window modes, sidebar,
-pane layout/navigation-tree state and splitter positions. Existing combined JSON
-is migrated automatically, preserving the current machine's state; existing local
-values override imported transient values. A synchronized tab deletion resets an
-out-of-range cached selection to zero. Local-only changes do not rewrite shared
-JSON. Transactions restore both files if publication fails. Each file has its own
-ignored startup backup (`nova.backup.json`, `local.backup.json`). Packages include
-shared data only, so the destination machine keeps its own local state.
-
-`nova.json` 继续纳入 Git，保存任务、子任务、工作区、启动项、命令预设、保存的目录
-标签、收藏和语言。`local.json` 被 Git 忽略，保存活动工作区、选中标签索引、窗口模式、
-侧边栏、窗格布局/目录树状态和分隔线位置。旧文件自动迁移并保留本机状态；已有本机
-值优先于旧共享文件中的临时状态。同步删除标签后，失效的本机选中索引重置为 0。
-仅改变本机状态不会重写共享 JSON，发布失败时事务恢复两份文件。
-两份文件分别备份为被忽略的 `nova.backup.json`、`local.backup.json`。
-发布包只携带共享数据，目标电脑保留自己的本机状态。
-
-For a Git conflict, close NOVA and run `deployment/resolve_config.bat` for a backed-up
-preview. `-Apply` applies/stages a clean semantic merge. Review conflicts reported
-for the same entity; do not use `git push --force` or blindly choose a full file.
-
-Git 冲突时，关闭 NOVA 后运行 `deployment/resolve_config.bat` 生成带备份的预览；
-加 `-Apply` 应用、暂存无冲突的语义合并。同一条数据的冲突需要核对，避免强制推送
-或直接选择整份文件覆盖另一边。
-
-For routine updates with uncommitted configuration on `main`, close NOVA and run
-`deployment/sync_config.bat` (`-Preview` for a read-only working-file preview).
-It backs up all three JSON versions, fast-forwards from `origin/main`, and merges
-local changes without using stashes or committing. Real conflicts stop before
-working files change. Item position compaction and closed-tab residue are ignored
-during semantic comparison; incompatible relative reorderings require review.
-
-`main` 分支有未提交配置时，关闭 NOVA 后运行 `deployment/sync_config.bat`；
-`-Preview` 只获取远端并生成预览，不修改工作文件。它备份三份 JSON，快进更新
-`origin/main` 并合并本机修改，不操作 stash 或提交。真正冲突会在工作文件修改前停止。
-语义比较忽略启动项编号压缩和关闭标签残留；不兼容的相对顺序调整仍需人工核对。
 
 ## Device synchronization / 设备同步
 

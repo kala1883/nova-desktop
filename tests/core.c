@@ -403,6 +403,6 @@ int wmain(int argc,wchar_t **argv) {
         file_manager_close();DestroyWindow(window);DeleteFileW(fm_settings);OleUninitialize();puts("PASS window control integration");
     }
     store_close();DeleteFileW(path);DeleteFileW(config_path);
-    wchar_t db_file[MAX_PATH];swprintf(db_file,MAX_PATH,L"%ls\\nova.json",dir);DeleteFileW(db_file);swprintf(db_file,MAX_PATH,L"%ls\\nova.backup.json",dir);DeleteFileW(db_file);swprintf(db_file,MAX_PATH,L"%ls\\local.json",dir);DeleteFileW(db_file);swprintf(db_file,MAX_PATH,L"%ls\\local.backup.json",dir);DeleteFileW(db_file);assert(RemoveDirectoryW(dir));
+    wchar_t db_file[MAX_PATH];swprintf(db_file,MAX_PATH,L"%ls\\nova.json",dir);DeleteFileW(db_file);swprintf(db_file,MAX_PATH,L"%ls\\nova.backup.json",dir);DeleteFileW(db_file);swprintf(db_file,MAX_PATH,L"%ls\\local.json",dir);DeleteFileW(db_file);swprintf(db_file,MAX_PATH,L"%ls\\local.backup.json",dir);DeleteFileW(db_file);{wchar_t cleanup[MAX_PATH];const wchar_t *names[]={L"runtime.json",L"runtime.backup.json",L"runtime.base.json",L"runtime.seed.json",L"nova.migration.json"};for(unsigned i=0;i<sizeof(names)/sizeof(names[0]);i++){swprintf(cleanup,MAX_PATH,L"%ls\\%ls",dir,names[i]);DeleteFileW(cleanup);}}assert(RemoveDirectoryW(dir));
     return 0;
 }

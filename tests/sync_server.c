@@ -43,6 +43,10 @@ int wmain(int argc,wchar_t **argv){
     SyncResult result=run(a,SYNC_JOB_SERVER_DEPLOY);attach(a,&result);a->settings.server_id=1;a->login.server.id=1;
     result=run(a,SYNC_JOB_REGISTER);assert(result.failure==SYNC_OK);sync_result_dispose(&result);a->settings.registered=true;
     wcscpy(b->settings.server_instance,a->settings.server_instance);result=run(b,SYNC_JOB_REGISTER);assert(result.failure==SYNC_OK);sync_result_dispose(&result);b->settings.registered=true;
+    result=run(a,SYNC_JOB_BIND);assert(result.failure==SYNC_OK);sync_result_dispose(&result);
+    result=run(a,SYNC_JOB_SERVER_DEPLOY);assert(result.failure==SYNC_OK&&result.installed&&result.switched);
+    sqlite3 *publisher_db=NULL;assert(sqlite3_open(":memory:",&publisher_db)==SQLITE_OK);char *publisher=sync_json_string(publisher_db,result.cloud,"$.datasets[0].publisher");assert(publisher&&!strcmp(publisher,"A"));free(publisher);sqlite3_close(publisher_db);sync_result_dispose(&result);
+    puts("PASS Configure server retains publication identity in its returned cloud view before the first upload");
     wchar_t first[SYNC_PATH_CAP],second[SYNC_PATH_CAP],received[SYNC_PATH_CAP];swprintf(first,SYNC_PATH_CAP,L"%ls\\ready.bin",a->pair.directory);swprintf(second,SYNC_PATH_CAP,L"%ls\\partial.bin",a->pair.directory);
     file(first,902);result=run(a,SYNC_JOB_RUN);assert(result.failure==SYNC_OK);sync_result_dispose(&result);
     file(second,715);result=run(a,SYNC_JOB_RUN);assert(result.failure==SYNC_NETWORK);sync_result_dispose(&result);
