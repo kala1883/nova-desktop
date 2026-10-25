@@ -16,6 +16,10 @@ required.
   and manage incremental, resumable SSH transfers in **Settings → Devices and
   synchronization**. The server stages missing chunks and reclaims them after
   receipt. No Windows Python or local web service is needed; see [sync](sync/README.md).
+- **Clear multi-device folder state** — Folders separates local bindings from
+  available publications, shows participation and automatic scheduling separately
+  from file changes, and offers per-device receipt details. Every connected device
+  can edit, push and pull; batch transfers act on checked local folders.
 - **12 resizable file-manager layouts** — four panes, two columns, two rows, a
   single pane, four three-pane arrangements, and three/four-column or row
   layouts. Drag pane dividers to resize them; proportions are restored locally.

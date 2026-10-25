@@ -198,6 +198,24 @@ def active_queue(root):
         yield
 
 
+def binding_status(db, delivery=True):
+    """Receipt counts describe queued versions, never peer liveness or local edits."""
+    if not delivery:
+        return [dict(r) for r in db.execute('SELECT * FROM bindings ORDER BY dataset,device')]
+    return [dict(r) for r in db.execute('''
+        SELECT b.*,
+          (SELECT count(*) FROM jobs j WHERE j.dataset=b.dataset AND j.state='READY'
+             AND j.origin!=b.device AND NOT EXISTS
+             (SELECT 1 FROM receipts r WHERE r.job=j.id AND r.device=b.device)) AS pending,
+          (SELECT count(*) FROM jobs j WHERE j.dataset=b.dataset AND j.state='READY'
+             AND j.origin!=b.device AND NOT EXISTS
+             (SELECT 1 FROM receipts r WHERE r.job=j.id AND r.device=b.device)
+             AND EXISTS(SELECT 1 FROM job_chunks c WHERE c.job=j.id
+               AND NOT EXISTS(SELECT 1 FROM objects o WHERE o.hash=c.hash AND o.complete=1)
+               AND NOT EXISTS(SELECT 1 FROM inventory i WHERE i.device=b.device AND i.hash=c.hash))) AS waiting
+        FROM bindings b ORDER BY b.dataset,b.device''')]
+
+
 def database_status(root):
     db_path = root / "queue.sqlite3"
     if not db_path.exists():
@@ -214,7 +232,7 @@ def database_status(root):
                 "datasets": [dict(r) for r in db.execute(
                     "SELECT d.*,p.device AS publisher FROM datasets d LEFT JOIN publishers p ON p.dataset=d.id ORDER BY d.id"
                     if "publishers" in tables else "SELECT *,NULL AS publisher FROM datasets ORDER BY id")],
-                "bindings": [dict(r) for r in db.execute("SELECT * FROM bindings")] if "bindings" in tables else [],
+                "bindings": binding_status(db, "recipients" in tables) if "bindings" in tables else [],
                 "jobs": {r[0]: r[1] for r in db.execute("SELECT state,count(*) FROM jobs GROUP BY state")},
                 "stored_bytes": db.execute("SELECT coalesce(sum(progress),0) FROM objects").fetchone()[0]}
 

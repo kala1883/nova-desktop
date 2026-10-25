@@ -3,6 +3,8 @@
 *.o
 *.obj
 *.res
+__pycache__/
+*.py[cod]
 !/config/
 !/config/nova.json
 /config/nova.backup.json

@@ -3,7 +3,7 @@ import os
 from pathlib import Path
 import shutil
 import time
-from .control import active_queue, control
+from .control import active_queue, control, binding_status
 
 from .common import (PROJECT, FORMAT, MAX_CHUNK, PACKET, SyncError, atomic_json,
                      canonical, checked_hash, checked_id, database, fsync_dir,
@@ -403,7 +403,7 @@ class Broker:
                 return {"control":control(self.root) if (self.root/'.nova-control.json').exists() else None,
                         "devices":[dict(r) for r in db.execute("SELECT * FROM devices ORDER BY role")],
                         "datasets":[dict(r) for r in db.execute("SELECT d.*,p.device AS publisher FROM datasets d LEFT JOIN publishers p ON p.dataset=d.id ORDER BY name")],
-                        "bindings":[dict(r) for r in db.execute("SELECT * FROM bindings ORDER BY dataset,device")],
+                        "bindings":binding_status(db),
                         "jobs":{r[0]:r[1] for r in db.execute("SELECT state,count(*) FROM jobs GROUP BY state")},
                         "allocated_bytes":db.execute("SELECT coalesce(sum(size),0) FROM objects").fetchone()[0],
                         "stored_bytes":db.execute("SELECT coalesce(sum(progress),0) FROM objects").fetchone()[0],

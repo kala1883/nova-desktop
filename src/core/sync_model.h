@@ -28,6 +28,19 @@ typedef struct SyncSettings {
     SyncPair pairs[SYNC_PAIR_LIMIT];
 } SyncSettings;
 typedef struct SyncChunker { uint64_t hash; size_t size; } SyncChunker;
+/* Relationship, automatic scheduling and file differences are independent facts.
+   Server receipts never imply that another device's working tree was inspected. */
+typedef enum SyncRelation { SYNC_REL_UNKNOWN,SYNC_REL_LOCAL,SYNC_REL_PUBLISHER,SYNC_REL_SUBSCRIBER,SYNC_REL_CONNECTED } SyncRelation;
+typedef enum SyncFolderPhase { SYNC_FOLDER_UNKNOWN,SYNC_FOLDER_BIND,SYNC_FOLDER_CHECK,
+    SYNC_FOLDER_WORKING,SYNC_FOLDER_ERROR,SYNC_FOLDER_CONFLICT,SYNC_FOLDER_WAIT,
+    SYNC_FOLDER_CHANGES,SYNC_FOLDER_CURRENT } SyncFolderPhase;
+typedef struct SyncFolderFacts {
+    bool metadata_known,bound,publisher,inspected,busy,failed;
+    int pushes,pulls,conflicts,waiting;
+    bool publisher_known;
+} SyncFolderFacts;
+typedef struct SyncFolderState { SyncRelation relation; SyncFolderPhase phase; } SyncFolderState;
+SyncFolderState sync_folder_state(const SyncFolderFacts *facts);
 bool sync_identifier(const wchar_t *text);
 bool sync_relative_path(const wchar_t *text);
 bool sync_settings_valid(const SyncSettings *value);

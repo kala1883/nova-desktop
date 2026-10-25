@@ -88,6 +88,28 @@ class Workflow(unittest.TestCase):
         self.ack(a, plan)
         self.assertGreater(self.call(a, 'status')['stored_bytes'], 0)
 
+    def test_per_device_receipts_and_late_subscriber_waiting(self):
+        a, b, c = [self.register(node) for node in ('source', 'home', 'office')]
+        for role in (a, b, c):
+            self.bind(role)
+        plan, _ = self.publish(a, 'first')
+        def receipts():
+            status = self.call(a, 'status')
+            admin = control_module.database_status(self.broker.root)
+            self.assertEqual(status['bindings'], admin['bindings'])
+            return {row['device']: (row['pending'], row['waiting']) for row in status['bindings']}
+        self.assertEqual(receipts(), {a: (0, 0), b: (1, 0), c: (1, 0)})
+        self.ack(b, plan)
+        self.assertEqual(receipts()[b], (0, 0))
+        self.assertEqual(receipts()[c], (1, 0))
+        self.ack(c, plan)
+        d = self.register('late')
+        self.bind(d)
+        self.assertEqual(receipts()[d], (1, 1))
+        self.call(d, 'unbind', dataset='work')
+        self.assertNotIn(d, receipts())
+        self.assertEqual(self.call(a, 'status')['datasets'][0]['publisher'], a)
+
     def test_admin_status_preserves_publication_identity(self):
         a, b = [self.register(node) for node in ('laptop', 'desktop')]
         self.bind(a)

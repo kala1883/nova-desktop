@@ -1,6 +1,20 @@
 #include "sync_model.h"
 #include <string.h>
 #include <wctype.h>
+SyncFolderState sync_folder_state(const SyncFolderFacts *f){
+    SyncFolderState state={SYNC_REL_UNKNOWN,SYNC_FOLDER_UNKNOWN};
+    if(!f)return state;
+    if(f->metadata_known)state.relation=!f->bound?SYNC_REL_LOCAL:!f->publisher_known?SYNC_REL_CONNECTED:f->publisher?SYNC_REL_PUBLISHER:SYNC_REL_SUBSCRIBER;
+    if(f->busy)state.phase=SYNC_FOLDER_WORKING;
+    else if(f->failed)state.phase=SYNC_FOLDER_ERROR;
+    else if(f->metadata_known&&!f->bound)state.phase=SYNC_FOLDER_BIND;
+    else if(!f->inspected)state.phase=SYNC_FOLDER_CHECK;
+    else if(f->conflicts)state.phase=SYNC_FOLDER_CONFLICT;
+    else if(f->waiting)state.phase=SYNC_FOLDER_WAIT;
+    else if(f->pushes||f->pulls)state.phase=SYNC_FOLDER_CHANGES;
+    else state.phase=SYNC_FOLDER_CURRENT;
+    return state;
+}
 static bool bounded(const wchar_t *s,size_t cap){return wmemchr(s,0,cap)!=NULL;
     }
 static bool equal_path(const wchar_t *a,const wchar_t *b){

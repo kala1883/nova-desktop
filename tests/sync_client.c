@@ -47,10 +47,10 @@ int wmain(int argc,wchar_t **argv){
     assert(DeleteFileW(pa));result=action(a,SYNC_JOB_RUN);assert(result.failure==SYNC_OK);sync_result_dispose(&result);result=action(b,SYNC_JOB_RUN);assert(result.failure==SYNC_OK&&GetFileAttributesW(pb)==INVALID_FILE_ATTRIBUTES);sync_result_dispose(&result);wchar_t recovered[MAX_PATH];swprintf(recovered,MAX_PATH,L"%ls\\recovery.bin",root);assert(GetFileAttributesW(recovered)!=INVALID_FILE_ATTRIBUTES);
     write_text(pa,"initial published content");
     result=action(a,SYNC_JOB_CHECK);assert(result.failure==SYNC_OK&&result.pushes==1&&result.stats.sent==0&&result.stats.published==0);sync_result_dispose(&result);
-    result=action(a,SYNC_JOB_PUSH);assert(result.failure==SYNC_OK);sync_result_dispose(&result);
+    result=action(a,SYNC_JOB_PUSH);assert(result.failure==SYNC_OK&&result.changes&&result.pushes==0);sync_result_dispose(&result);
     wchar_t local_only[SYNC_PATH_CAP];swprintf(local_only,SYNC_PATH_CAP,L"%ls\\local-only.txt",b->pair.directory);write_text(local_only,"must not upload during pull");
     result=action(b,SYNC_JOB_CHECK);assert(result.failure==SYNC_OK&&result.pulls==1&&result.pushes==1);sync_result_dispose(&result);
-    result=action(b,SYNC_JOB_PULL);assert(result.failure==SYNC_OK&&result.stats.published==0);sync_result_dispose(&result);assert(DeleteFileW(local_only));
+    result=action(b,SYNC_JOB_PULL);assert(result.failure==SYNC_OK&&result.stats.published==0&&result.changes&&result.pushes==1&&result.pulls==0);sync_result_dispose(&result);assert(DeleteFileW(local_only));
     SyncRequest *c=calloc(1,sizeof(*c));assert(c);setup(c,2,argv[1],_wtoi(argv[2]),pin);
     result=action(c,SYNC_JOB_REGISTER);assert(result.failure==SYNC_OK&&result.registered_role==2);sync_result_dispose(&result);
     result=action(c,SYNC_JOB_BIND);assert(result.failure==SYNC_OK);sync_result_dispose(&result);

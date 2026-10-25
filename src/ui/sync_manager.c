@@ -16,6 +16,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <limits.h>
 #include "sync_manager.h"
 #include "ssh_view.h"
 #include "../platform/sync_settings.h"
@@ -34,12 +35,13 @@
 enum { C_TAB=6100,C_SERVER,C_NAME,C_ROLE,C_REGISTER,C_REFRESH,C_IMPORT,C_SERVER_TEXT,C_DEVICES,
  C_PAIRS,C_NEW,C_REMOVE,C_PAIR_NAME,C_GROUP,C_PATH,C_BROWSE,C_FILTER,C_DELETE,C_SAVE,C_RUN,C_AUTO,C_PAUSE,C_PROGRESS,C_LOG,C_CLOSE,C_PROJECT,C_BROKER,C_CLOUD,
  C_TARGET,C_TARGET_PROJECT,C_TARGET_ROOT,C_QUOTA,C_RESERVE,C_PROBE,C_DEPLOY,C_ATTACH,C_MIGRATE,C_RESTORE,C_FOLLOW,C_TARGET_TEXT,C_ADMIN_NOTE,
- C_CHECK_ALL,C_PUSH_ALL,C_PULL_ALL,C_SYNC_ALL,C_SUBSCRIBE,C_EDIT,C_ADVANCED,C_SERVER_ADVANCED,C_LOCAL,C_REMOTE,C_CHANGES,C_EMPTY,C_HEADING,C_RECOVERY };
+ C_CHECK_ALL,C_PUSH_ALL,C_PULL_ALL,C_SYNC_ALL,C_SUBSCRIBE,C_EDIT,C_ADVANCED,C_SERVER_ADVANCED,C_LOCAL,C_REMOTE,C_CHANGES,C_EMPTY,C_HEADING,C_RECOVERY,
+ C_MY_FOLDERS,C_CATALOG,C_DETAIL,C_FILES_VIEW,C_DEVICES_VIEW,C_PARTICIPANTS,C_CANCEL_EDIT,C_BIND,C_SCOPE,C_DETAIL_EMPTY };
 typedef struct CloudGroup { wchar_t id[SYNC_ID_CAP],name[SYNC_NAME_CAP];
     int publisher;
     } CloudGroup;
 typedef struct CloudBinding { wchar_t dataset[SYNC_ID_CAP],path[SYNC_PATH_CAP];
-    int role;
+    int role,pending,waiting;
     } CloudBinding;
 typedef struct SyncJob {
     SyncRequest request;
@@ -69,6 +71,7 @@ static CloudBinding bindings[SYNC_PAIR_LIMIT*SYNC_DEVICE_LIMIT];
 static int binding_count;
 static ULONGLONG last_run[SYNC_PAIR_LIMIT];
 static SyncFailure history_codes[24];
+static int history_actions[24];
 static wchar_t history_details[24][1800];
 static SyncFailure folder_codes[SYNC_PAIR_LIMIT];
 static wchar_t folder_details[SYNC_PAIR_LIMIT][1800],batch_error[2048];
@@ -90,6 +93,10 @@ static BOOL batch_checked[SYNC_PAIR_LIMIT],folder_checked[SYNC_PAIR_LIMIT];
 static char *plans[SYNC_PAIR_LIMIT];
 static int pending_push[SYNC_PAIR_LIMIT],pending_pull[SYNC_PAIR_LIMIT],pending_conflict[SYNC_PAIR_LIMIT],pending_wait[SYNC_PAIR_LIMIT];
 static BOOL inspected[SYNC_PAIR_LIMIT];
+static BOOL bind_failed[SYNC_PAIR_LIMIT];
+static BOOL catalog_mode,devices_mode,metadata_known;
+static HWND detail_text,participants,scope_text,detail_empty;
+static void render_folder_detail(void);
 static void render_changes(void);
 static const wchar_t *publisher_name(int role);
 static void start_batch(int action);
@@ -219,6 +226,17 @@ static const wchar_t *failure_name(SyncFailure f){switch(f){case SYNC_CANCELLED:
 static void failure_message(wchar_t out[2048],SyncFailure code,const wchar_t *detail){
     swprintf(out,2048,L"%ls%ls%.1800ls",failure_name(code),detail[0]?L"\r\n":L"",detail);
 }
+static const wchar_t *action_name(int action){
+    switch(action){
+    case SYNC_JOB_PUSH:return nova_text(L"推送",L"Push");
+    case SYNC_JOB_PULL:return nova_text(L"拉取",L"Pull");
+    case SYNC_JOB_CHECK:return nova_text(L"检查",L"Check");
+    case SYNC_JOB_RESOLVE:return nova_text(L"解决冲突",L"Resolve conflict");
+    case SYNC_JOB_BIND:return nova_text(L"接入目录",L"Connect folder");
+    case SYNC_JOB_UNBIND:return nova_text(L"断开本机",L"Disconnect here");
+    default:return nova_text(L"双向同步",L"Sync");
+    }
+}
 static BOOL persist(const SyncSettings *next){if(!sync_settings_save(next)){text(store_error());
         return FALSE;
         }settings=*next;
@@ -227,13 +245,17 @@ static BOOL persist(const SyncSettings *next){if(!sync_settings_save(next)){text
 static void forget_folder_view(int index){
     free(plans[index]);
     for(int i=index;i<SYNC_PAIR_LIMIT-1;i++){
-        plans[i]=plans[i+1];inspected[i]=inspected[i+1];folder_checked[i]=folder_checked[i+1];
+        plans[i]=plans[i+1];inspected[i]=inspected[i+1];folder_checked[i]=folder_checked[i+1];bind_failed[i]=bind_failed[i+1];
         folder_codes[i]=folder_codes[i+1];lstrcpyW(folder_details[i],folder_details[i+1]);
         pending_push[i]=pending_push[i+1];pending_pull[i]=pending_pull[i+1];pending_conflict[i]=pending_conflict[i+1];pending_wait[i]=pending_wait[i+1];last_run[i]=last_run[i+1];
     }
-    int last=SYNC_PAIR_LIMIT-1;plans[last]=NULL;inspected[last]=folder_checked[last]=FALSE;
+    int last=SYNC_PAIR_LIMIT-1;plans[last]=NULL;inspected[last]=folder_checked[last]=bind_failed[last]=FALSE;
     folder_codes[last]=SYNC_OK;folder_details[last][0]=0;
     pending_push[last]=pending_pull[last]=pending_conflict[last]=pending_wait[last]=0;last_run[last]=0;
+}
+static void invalidate_comparison(int i){
+    free(plans[i]);plans[i]=NULL;inspected[i]=FALSE;
+    pending_push[i]=pending_pull[i]=pending_conflict[i]=pending_wait[i]=0;
 }
 static void new_id(wchar_t *out){unsigned char data[16];
     sqlite3_randomness(16,data);
@@ -260,12 +282,39 @@ static void select_pair(int index){
     SendMessageW(group_combo,CB_SETCURSEL,choice,0);
     refreshing=FALSE;
     render_changes();
+    render_folder_detail();
     controls();
+}
+static int group_for_pair(int index){
+    for(int i=0;i<group_count;i++)if(!wcscmp(groups[i].id,settings.pairs[index].dataset))return i;
+    return -1;
+}
+static BOOL bound_here(const SyncPair *pair){
+    for(int i=0;i<binding_count;i++)if(bindings[i].role==settings.role&&!wcscmp(bindings[i].dataset,pair->dataset)&&!_wcsicmp(bindings[i].path,pair->directory))return TRUE;
+    return FALSE;
+}
+static SyncFolderState folder_state(int i){
+    int group=group_for_pair(i);
+    SyncFolderFacts f={.metadata_known=metadata_known,.bound=bound_here(&settings.pairs[i])&&!bind_failed[i],
+        .publisher=group>=0&&groups[group].publisher==settings.role,.publisher_known=group>=0&&groups[group].publisher>=0&&groups[group].publisher<SYNC_DEVICE_LIMIT,
+        .inspected=inspected[i],.busy=job&&job->index==i,.failed=folder_codes[i]!=SYNC_OK,
+        .pushes=pending_push[i],.pulls=pending_pull[i],.conflicts=pending_conflict[i],.waiting=pending_wait[i]};
+    return sync_folder_state(&f);
+}
+static const wchar_t *relation_name(SyncRelation relation){
+    switch(relation){
+    case SYNC_REL_LOCAL:return nova_text(L"待接入",L"Local only");
+    case SYNC_REL_PUBLISHER:return nova_text(L"本机发布",L"Published here");
+    case SYNC_REL_SUBSCRIBER:return nova_text(L"本机订阅",L"Subscribed here");
+    case SYNC_REL_CONNECTED:return nova_text(L"已接入",L"Connected");
+    default:return nova_text(L"待确认",L"Unverified");
+    }
 }
 static void populate_pairs(void){
     refreshing=TRUE;
     ListView_DeleteAllItems(pairs);
-    for(int i=0;i<settings.count;i++){SyncPair *p=&settings.pairs[i];
+    ListView_SetExtendedListViewStyle(pairs,LVS_EX_FULLROWSELECT|LVS_EX_DOUBLEBUFFER|LVS_EX_LABELTIP|(catalog_mode?0:LVS_EX_CHECKBOXES));
+    for(int i=0;!catalog_mode&&i<settings.count;i++){SyncPair *p=&settings.pairs[i];
         row(pairs,i,p->name);
         ListView_SetItemText(pairs,i,1,p->directory);
         int publisher=-1;
@@ -273,28 +322,38 @@ static void populate_pairs(void){
         wchar_t source[192],state[192];
         lstrcpynW(source,publisher_name(publisher),192);
         ListView_SetItemText(pairs,i,2,source);
-        if(job&&job->index==i)lstrcpyW(state,nova_text(L"处理中…",L"Working…"));
-        else if(folder_codes[i]!=SYNC_OK)lstrcpynW(state,failure_name(folder_codes[i]),192);
-        else if(!inspected[i])lstrcpyW(state,nova_text(L"待检查",L"Check for changes"));
-        else if(pending_conflict[i])swprintf(state,192,nova_text(L"%d 个冲突",L"%d conflicts"),pending_conflict[i]);
-        else if(pending_wait[i])swprintf(state,192,nova_text(L"等待源设备补发 · %d",L"Awaiting source · %d"),pending_wait[i]);
-        else if(pending_push[i]||pending_pull[i])swprintf(state,192,nova_text(L"↑ %d 推送   ↓ %d 拉取",L"↑ %d push   ↓ %d pull"),pending_push[i],pending_pull[i]);
-        else lstrcpyW(state,nova_text(L"已同步",L"Up to date"));
+        SyncFolderState view=folder_state(i);
+        switch(view.phase){
+        case SYNC_FOLDER_WORKING:lstrcpyW(state,nova_text(L"处理中…",L"Working…"));break;
+        case SYNC_FOLDER_ERROR:lstrcpynW(state,failure_name(folder_codes[i]),192);break;
+        case SYNC_FOLDER_BIND:lstrcpyW(state,nova_text(L"请重试接入",L"Retry connection"));break;
+        case SYNC_FOLDER_CHECK:case SYNC_FOLDER_UNKNOWN:lstrcpyW(state,nova_text(L"待检查",L"Check for changes"));break;
+        case SYNC_FOLDER_CURRENT:lstrcpyW(state,nova_text(L"本机与服务器一致",L"Matches server"));break;
+        case SYNC_FOLDER_CONFLICT:swprintf(state,192,nova_text(L"%d 个冲突",L"%d conflicts"),pending_conflict[i]);break;
+        case SYNC_FOLDER_WAIT:swprintf(state,192,nova_text(L"%d 个等待源设备补发",L"%d awaiting source"),pending_wait[i]);break;
+        default:swprintf(state,192,nova_text(L"推送 %d / 拉取 %d",L"%d push / %d pull"),pending_push[i],pending_pull[i]);break;
+        }
         ListView_SetItemText(pairs,i,3,state);
+        ListView_SetItemText(pairs,i,4,(LPWSTR)relation_name(view.relation));
+        ListView_SetItemText(pairs,i,5,(LPWSTR)(p->paused?nova_text(L"已关闭",L"Off"):nova_text(L"已开启",L"On")));
         ListView_SetCheckState(pairs,i,folder_checked[i]);
         LVITEMW item={0};item.mask=LVIF_PARAM;item.iItem=i;item.lParam=i;ListView_SetItem(pairs,&item);
         }
-    for(int i=0;i<group_count;i++){BOOL bound=FALSE;
+    for(int i=0;catalog_mode&&i<group_count;i++){BOOL bound=FALSE;
         for(int j=0;j<settings.count;j++)if(!wcscmp(groups[i].id,settings.pairs[j].dataset))bound=TRUE;
         if(bound)continue;
         int at=ListView_GetItemCount(pairs);row(pairs,at,groups[i].name);
         ListView_SetItemText(pairs,at,1,(LPWSTR)nova_text(L"选择本机目录后订阅",L"Choose a local folder to subscribe"));
         ListView_SetItemText(pairs,at,2,(LPWSTR)publisher_name(groups[i].publisher));
         ListView_SetItemText(pairs,at,3,(LPWSTR)nova_text(L"可订阅",L"Available"));
+        ListView_SetItemText(pairs,at,4,(LPWSTR)nova_text(L"未接入本机",L"Not connected"));
+        ListView_SetItemText(pairs,at,5,L"—");
         LVITEMW item={0};item.mask=LVIF_PARAM;item.iItem=at;item.lParam=-i-1;ListView_SetItem(pairs,&item);
+        if(catalog_choice==i)ListView_SetItemState(pairs,at,LVIS_SELECTED|LVIS_FOCUSED,LVIS_SELECTED|LVIS_FOCUSED);
     }
-    if(selected>=0&&selected<settings.count)ListView_SetItemState(pairs,selected,LVIS_SELECTED|LVIS_FOCUSED,LVIS_SELECTED|LVIS_FOCUSED);
+    if(!catalog_mode&&selected>=0&&selected<settings.count)ListView_SetItemState(pairs,selected,LVIS_SELECTED|LVIS_FOCUSED,LVIS_SELECTED|LVIS_FOCUSED);
     refreshing=FALSE;
+    render_folder_detail();
 }
 typedef struct SyncCloudView {
     CloudGroup groups[SYNC_PAIR_LIMIT];
@@ -311,6 +370,48 @@ static const wchar_t *publisher_name(int role){
     if(cloud_view&&role>=0&&role<SYNC_DEVICE_LIMIT&&cloud_view->present[role])return cloud_view->names[role];
     if(settings.registered&&role==settings.role&&settings.name[0])return settings.name;
     return nova_text(L"发布设备未知",L"Publisher unknown");
+}
+static void clear_cloud(void){
+    free(cloud_view);cloud_view=NULL;metadata_known=FALSE;
+    group_count=binding_count=0;catalog_choice=-1;
+    ListView_DeleteAllItems(devices);ListView_DeleteAllItems(participants);
+    SetWindowTextW(cloud_text,nova_text(L"尚未连接云端",L"Cloud not connected"));
+}
+static void render_folder_detail(void){
+    if(!detail_text)return;
+    int checked=0;for(int i=0;i<settings.count;i++)if(folder_checked[i])checked++;
+    wchar_t value[768];
+    swprintf(value,768,nova_text(L"批量范围：勾选 %d / %d 个目录",L"Batch scope: %d / %d folders checked"),checked,settings.count);
+    SetWindowTextW(scope_text,value);
+    if(editing){
+        if(selected==new_index&&subscribing)swprintf(value,768,nova_text(L"订阅：%ls\r\n选择本机路径；保存只登记关系，接入后各设备均可推送和拉取。",L"Subscribe to: %ls\r\nChoose a local path. Saving connects metadata; all devices can push and pull."),draft_pair.group);
+        else lstrcpyW(value,selected==new_index?nova_text(L"让其他设备发现此目录，再由各设备选择自己的本机路径。\r\n发布只登记元数据；检查并同步后才传输文件。",L"Make this folder discoverable; each device chooses its own local path.\r\nPublishing saves metadata. Check and sync to transfer files."):nova_text(L"修改本机的目录绑定；更改路径会关闭自动同步和删除传播。",L"Edit this device's binding; a path change turns off automatic sync and deletion propagation."));
+        SetWindowTextW(detail_text,value);return;
+    }
+    ListView_DeleteAllItems(participants);
+    const wchar_t *dataset=NULL,*name=NULL;
+    if(catalog_mode&&catalog_choice>=0&&catalog_choice<group_count){dataset=groups[catalog_choice].id;name=groups[catalog_choice].name;}
+    else if(!catalog_mode&&selected>=0&&selected<settings.count){dataset=settings.pairs[selected].dataset;name=settings.pairs[selected].name;}
+    if(!dataset){SetWindowTextW(detail_text,nova_text(L"选择目录查看文件差异与参与设备。",L"Choose a folder to view changes and participating devices."));
+        SetWindowTextW(detail_empty,nova_text(L"选择上方的一个目录。",L"Select a folder above."));return;}
+    int peers=0;
+    for(int i=0;i<binding_count;i++){CloudBinding *b=&bindings[i];
+        if(wcscmp(b->dataset,dataset))continue;
+        int at=peers++;wchar_t label[192],state[192];
+        swprintf(label,192,L"%.125ls%ls",publisher_name(b->role),b->role==settings.role?nova_text(L"（本机）",L" (this device)"):L"");
+        row(participants,at,label);ListView_SetItemText(participants,at,1,b->path);
+        if(b->pending<0)lstrcpyW(state,nova_text(L"接收情况未知，请更新服务器",L"Receipts unknown; update server"));
+        else if(b->waiting>0)swprintf(state,192,nova_text(L"%d 个待接收，其中 %d 个等待源设备补发",L"%d pending; %d awaiting source"),b->pending,b->waiting);
+        else if(b->pending>0)swprintf(state,192,nova_text(L"%d 个版本待接收",L"%d versions pending"),b->pending);
+        else lstrcpyW(state,nova_text(L"无待接收版本",L"No pending versions"));
+        ListView_SetItemText(participants,at,2,state);
+    }
+    if(catalog_mode)swprintf(value,768,nova_text(L"%ls · %d 台设备已接入\r\n订阅只绑定本机路径；接入后可推送或拉取。",L"%ls · %d connected devices\r\nSubscribe binds a local path; connected devices can push and pull."),name,peers);
+    else if(inspected[selected])swprintf(value,768,nova_text(L"%ls · 推送 %d / 拉取 %d / 冲突 %d / 等待补发 %d\r\n这是最近一次检查；其他设备的接收情况见“参与设备”。",L"%ls · Push %d / pull %d / conflicts %d / awaiting source %d\r\nLast comparison; see Devices for other devices' receipts."),name,pending_push[selected],pending_pull[selected],pending_conflict[selected],pending_wait[selected]);
+    else swprintf(value,768,nova_text(L"%ls · 尚无有效的文件比较\r\n先检查文件差异，再推送本机修改或拉取服务器版本。",L"%ls · File comparison needed\r\nCheck changes, then push local edits or pull server versions."),name);
+    SetWindowTextW(detail_text,value);
+    if(devices_mode||catalog_mode)SetWindowTextW(detail_empty,nova_text(L"暂无已确认的设备绑定，请刷新服务器状态。",L"No confirmed device bindings; refresh server status."));
+    else SetWindowTextW(detail_empty,inspected[selected]?nova_text(L"此检查没有文件差异。",L"No file differences in this comparison."):nova_text(L"点击“检查全部”获取文件差异；检查不会传输文件。",L"Use Check all to compare files without transferring them."));
 }
 static void render_cloud(void){
     if(!cloud_view)return;
@@ -381,6 +482,10 @@ static BOOL load_cloud(const char *json){
         int at=next->bindings_count;
         ok=at<SYNC_PAIR_LIMIT*SYNC_DEVICE_LIMIT&&dataset&&path&&role&&strlen(role)==1&&role[0]>='A'&&role[0]<'A'+SYNC_DEVICE_LIMIT&&sync_wide(dataset,next->bindings[at].dataset,SYNC_ID_CAP)&&sync_identifier(next->bindings[at].dataset)&&sync_wide(path,next->bindings[at].path,SYNC_PATH_CAP);
         if(ok){next->bindings[at].role=role[0]-'A';
+            int64_t pending=sync_json_int(db,record,"$.pending",-1),waiting=sync_json_int(db,record,"$.waiting",-1);
+            ok=pending>=-1&&pending<=INT_MAX&&waiting>=-1&&waiting<=INT_MAX&&((pending==-1&&waiting==-1)||(pending>=0&&waiting>=0&&waiting<=pending));
+            next->bindings[at].pending=(int)pending;next->bindings[at].waiting=(int)waiting;
+            for(int i=0;ok&&i<at;i++)if(next->bindings[i].role==next->bindings[at].role&&!wcscmp(next->bindings[i].dataset,next->bindings[at].dataset))ok=FALSE;
             next->bindings_count++;
             }free(dataset);
         free(path);
@@ -394,15 +499,21 @@ static BOOL load_cloud(const char *json){
         }
     if(ok){
         wchar_t choice_id[SYNC_ID_CAP]=L"";
+        wchar_t catalog_id[SYNC_ID_CAP]=L"";
+        if(catalog_choice>=0&&catalog_choice<group_count)lstrcpyW(catalog_id,groups[catalog_choice].id);
         int choice=(int)SendMessageW(group_combo,CB_GETCURSEL,0,0);
         if(choice>0&&choice<=group_count)lstrcpyW(choice_id,groups[choice-1].id);
         free(cloud_view);
         cloud_view=next;
         next=NULL;
+        metadata_known=TRUE;
         group_count=cloud_view->groups_count;
         binding_count=cloud_view->bindings_count;
         memcpy(groups,cloud_view->groups,sizeof(groups));
         memcpy(bindings,cloud_view->bindings,sizeof(bindings));
+        for(int i=0;i<settings.count;i++)if(bind_failed[i]&&bound_here(&settings.pairs[i])){bind_failed[i]=FALSE;folder_codes[i]=SYNC_OK;folder_details[i][0]=0;}
+        catalog_choice=-1;
+        for(int i=0;i<group_count;i++)if(!wcscmp(catalog_id,groups[i].id))catalog_choice=i;
         render_cloud();
         if(!settings.registered&&cloud_view->present[0]&&!cloud_view->present[1]&&wcscmp(cloud_view->nodes[0],settings.node_id))SendMessageW(role_combo,CB_SETCURSEL,1,0);
         populate_pairs();
@@ -435,21 +546,7 @@ static BOOL recycle_callback(void *context,const wchar_t *path,uint64_t size,uin
     return j->delete_ok;
 }
 static DWORD WINAPI worker(void *context){SyncJob *j=context;
-    SshLogin login=j->request.login;
     run_backend(&j->request,j->action,&j->result);
-    if(j->action==SYNC_JOB_RUN||j->action==SYNC_JOB_PUSH||j->action==SYNC_JOB_PULL||j->action==SYNC_JOB_RESOLVE){
-        if(j->result.failure==SYNC_OK||j->result.failure==SYNC_CONFLICT){
-            SyncResult checked={0};j->request.login=login;
-            if(run_backend(&j->request,SYNC_JOB_CHECK,&checked)){
-                free(j->result.changes);
-                j->result.changes=checked.changes;checked.changes=NULL;
-                j->result.pushes=checked.pushes;j->result.pulls=checked.pulls;
-                j->result.conflicts=checked.conflicts;j->result.waiting=checked.waiting;
-            }
-            sync_result_dispose(&checked);
-        }
-    }
-    SecureZeroMemory(&login,sizeof(login));
     PostMessageW(j->target,DONE_MESSAGE,0,0);
     return 0;
     }
@@ -566,7 +663,7 @@ static BOOL start_job(int action,BOOL interactive){
         return FALSE;
         }
     job=j;
-    if(action==SYNC_JOB_CHECK){int i=j->index;inspected[i]=FALSE;free(plans[i]);plans[i]=NULL;pending_push[i]=pending_pull[i]=pending_conflict[i]=pending_wait[i]=0;render_changes();}
+    if(action==SYNC_JOB_CHECK||action==SYNC_JOB_RUN||action==SYNC_JOB_PUSH||action==SYNC_JOB_PULL||action==SYNC_JOB_RESOLVE){invalidate_comparison(j->index);render_changes();}
     ResumeThread(j->worker);
     controls();
     populate_pairs();
@@ -629,6 +726,8 @@ static void finish_job(void){
                     lstrcpyW(next.broker,j->request.target_broker);
                     lstrcpyW(next.server_instance,j->result.server_instance);
                     if(persist(&next)){sync_server_commit_local(j->request.state_directory);
+                        clear_cloud();
+                        for(int i=0;i<SYNC_PAIR_LIMIT;i++)invalidate_comparison(i);
                         free(server_route);
                         server_route=NULL;
                         SetWindowTextW(project_edit,settings.project);
@@ -667,10 +766,12 @@ static void finish_job(void){
             pending_server();
             server_labels();
         }else {
-        if(j->result.failure==SYNC_OK){if(j->action==SYNC_JOB_UNBIND&&j->index>=0&&j->index<settings.count){SyncSettings next=settings;
+        if(j->result.failure==SYNC_OK){
+            if(j->action==SYNC_JOB_REFRESH){for(int i=0;i<settings.count;i++)invalidate_comparison(i);render_changes();}
+            if(j->action==SYNC_JOB_UNBIND&&j->index>=0&&j->index<settings.count){SyncSettings next=settings;
                 sync_pair_remove(&next,j->index);
                 if(!persist(&next))j->result.failure=SYNC_STORAGE;
-                else forget_folder_view(j->index);
+                else {forget_folder_view(j->index);editing=FALSE;}
                 selected=min(selected,settings.count-1);
                 new_index=-1;
                 }
@@ -681,23 +782,31 @@ static void finish_job(void){
                 else {page=1;TabCtrl_SetCurSel(tab,1);layout();}
                 }if(j->result.failure!=SYNC_OK)text(failure_name(j->result.failure));
             else if(j->result.cloud&&!load_cloud(j->result.cloud))text(nova_text(L"云端结果超限或不完整，未截断显示。",L"Cloud results exceed limits or are incomplete; no truncated view was installed."));
-            else text(nova_text(L"完成",L"Completed"));
+            else text(j->action==SYNC_JOB_UNBIND?nova_text(L"已断开本机；本机文件、其他设备及服务器发布目录均保留。",L"Disconnected here; local files, other devices and the publication are retained."):nova_text(L"完成",L"Completed"));
             }
         else if(!retry){wchar_t message[2048];
             swprintf(message,2048,L"%ls\r\n%.1000ls%.700ls",failure_name(j->result.failure),j->result.detail,j->result.ssh.error);
             text(message);
-            if(j->index>=0&&j->index<settings.count){SyncSettings next=settings;
+            if(j->index>=0&&j->index<settings.count&&j->action!=SYNC_JOB_CHECK){SyncSettings next=settings;
                 next.pairs[j->index].paused=true;
                 persist(&next);
                 }}
-        if(j->index>=0&&j->index<settings.count&&j->result.changes){int i=j->index;
+        if(j->index>=0&&j->index<settings.count&&j->result.changes&&(j->result.failure==SYNC_OK||j->action==SYNC_JOB_PUSH)){int i=j->index;
             free(plans[i]);plans[i]=j->result.changes;j->result.changes=NULL;
             inspected[i]=TRUE;pending_push[i]=j->result.pushes;pending_pull[i]=j->result.pulls;
             pending_conflict[i]=j->result.conflicts;pending_wait[i]=j->result.waiting;
             if(selected==i)render_changes();
         }
-        if(j->action==SYNC_JOB_RUN||j->action==SYNC_JOB_PUSH||j->action==SYNC_JOB_PULL||j->action==SYNC_JOB_RESOLVE||j->action==SYNC_JOB_CHECK){memmove(&history_codes[1],&history_codes[0],23*sizeof(history_codes[0]));
-            if(j->index>=0&&j->index<settings.count){int i=j->index;
+        if(j->action==SYNC_JOB_BIND&&j->index>=0&&j->index<settings.count){
+            bind_failed[j->index]=j->result.failure!=SYNC_OK;
+            folder_codes[j->index]=j->result.failure;
+            swprintf(folder_details[j->index],1800,L"%.1000ls%.700ls",j->result.detail,j->result.ssh.error);
+            if(j->result.failure==SYNC_OK)text(nova_text(L"目录已接入；保存只登记元数据，请检查后同步文件。",L"Folder connected; metadata saved. Check changes before transferring files."));
+            else {wchar_t message[2048];swprintf(message,2048,nova_text(L"本机配置已保留，服务器接入失败。请点击“重试接入”。\r\n%.1600ls",L"Local settings retained; server connection failed. Choose Retry connection.\r\n%.1600ls"),summary);text(message);}
+        }
+        if(j->action==SYNC_JOB_RUN||j->action==SYNC_JOB_PUSH||j->action==SYNC_JOB_PULL||j->action==SYNC_JOB_RESOLVE||j->action==SYNC_JOB_CHECK||j->action==SYNC_JOB_BIND||j->action==SYNC_JOB_UNBIND){memmove(&history_codes[1],&history_codes[0],23*sizeof(history_codes[0]));
+            memmove(&history_actions[1],&history_actions[0],23*sizeof(history_actions[0]));history_actions[0]=j->action;
+            if(j->action!=SYNC_JOB_UNBIND&&j->index>=0&&j->index<settings.count){int i=j->index;
                 folder_codes[i]=j->result.failure;
                 swprintf(folder_details[i],1800,L"%.1000ls%.700ls",j->result.detail,j->result.ssh.error);
             }
@@ -716,7 +825,8 @@ static void finish_job(void){
             ListView_SetItemText(history,0,2,received);
             ListView_SetItemText(history,0,3,reused);
             ListView_SetItemText(history,0,4,(LPWSTR)(j->result.failure==SYNC_OK?nova_text(L"完成",L"Completed"):failure_name(j->result.failure)));
-            if(j->index>=0)last_run[j->index]=GetTickCount64();
+            ListView_SetItemText(history,0,5,(LPWSTR)action_name(j->action));
+            if(j->action!=SYNC_JOB_UNBIND&&j->index>=0)last_run[j->index]=GetTickCount64();
             }
         }
         if(j->result.failure==SYNC_OK&&j->result.cloud&&j->action<SYNC_JOB_SERVER_PROBE){sqlite3 *db=NULL;
@@ -874,7 +984,7 @@ static void new_pair(void){
     ZeroMemory(&draft_pair,sizeof(draft_pair));
     new_id(draft_pair.id);
     new_id(draft_pair.dataset);
-    subscribing=FALSE;
+    subscribing=FALSE;catalog_mode=FALSE;catalog_choice=-1;
     lstrcpyW(draft_pair.name,nova_text(L"新同步目录",L"New sync folder"));
     lstrcpyW(draft_pair.group,draft_pair.name);
     lstrcpyW(draft_pair.excludes,L".git;node_modules;.venv;__pycache__;.next;.nova-sync-*;.cloudsync-*;*.tmp");
@@ -884,6 +994,7 @@ static void new_pair(void){
     ListView_SetItemState(pairs,-1,0,LVIS_SELECTED|LVIS_FOCUSED);
     refreshing=FALSE;
     select_pair(new_index);
+    populate_pairs();
     editing=TRUE;advanced=FALSE;page=1;TabCtrl_SetCurSel(tab,1);layout();
     text(L"");
     SetFocus(path_edit);
@@ -915,7 +1026,7 @@ static void save_pair(void){
         }
     if(persist(&next)){new_index=-1;
         folder_checked[selected]=TRUE;editing=FALSE;
-        free(plans[selected]);plans[selected]=NULL;inspected[selected]=FALSE;
+        invalidate_comparison(selected);bind_failed[selected]=FALSE;folder_codes[selected]=SYNC_OK;folder_details[selected][0]=0;
         populate_pairs();
         select_pair(selected);
         layout();
@@ -934,7 +1045,9 @@ static void import_legacy(void){wchar_t path[MAX_PATH]=L"";
     if(!GetOpenFileNameW(&f))return;
     SyncSettings *next=malloc(sizeof(*next));
     if(!next)return;
-    if(sync_settings_import(path,next)&&persist(next)){populate_pairs();
+    if(sync_settings_import(path,next)&&persist(next)){clear_cloud();
+        for(int i=0;i<SYNC_PAIR_LIMIT;i++){invalidate_comparison(i);bind_failed[i]=FALSE;folder_codes[i]=SYNC_OK;folder_details[i][0]=0;folder_checked[i]=i<settings.count;last_run[i]=0;}
+        populate_pairs();
         select_pair(settings.count?0:-1);
         localize();
         text(nova_text(L"已导入设备身份和目录；所有目录保持暂停。",L"Device identity and folders imported; every folder remains paused."));
@@ -971,7 +1084,7 @@ static void render_changes(void){
     ListView_DeleteAllItems(changes);
     if(selected<0||selected>=settings.count||!plans[selected]){refreshing=was_refreshing;return;}
     sqlite3 *db=NULL;sqlite3_stmt *s=NULL;
-    BOOL ok=sqlite3_open(":memory:",&db)==SQLITE_OK&&sqlite3_prepare_v2(db,"SELECT key,value FROM json_each(?1) ORDER BY CASE json_extract(value,'$.state') WHEN 'conflict' THEN 0 WHEN 'waiting' THEN 1 WHEN 'pull' THEN 2 WHEN 'push' THEN 3 ELSE 4 END,json_extract(value,'$.path')",-1,&s,NULL)==SQLITE_OK;
+    BOOL ok=sqlite3_open(":memory:",&db)==SQLITE_OK&&sqlite3_prepare_v2(db,"SELECT key,value FROM json_each(?1) WHERE json_extract(value,'$.state')!='synced' ORDER BY CASE json_extract(value,'$.state') WHEN 'conflict' THEN 0 WHEN 'waiting' THEN 1 WHEN 'pull' THEN 2 WHEN 'push' THEN 3 ELSE 4 END,json_extract(value,'$.path')",-1,&s,NULL)==SQLITE_OK;
     if(ok)sqlite3_bind_text(s,1,plans[selected],-1,SQLITE_STATIC);
     while(ok&&sqlite3_step(s)==SQLITE_ROW){const char *record=(const char*)sqlite3_column_text(s,1);
         char *p=sync_json_string(db,record,"$.path"),*local=sync_json_string(db,record,"$.local_version"),*remote=sync_json_string(db,record,"$.remote_version"),*state=sync_json_string(db,record,"$.state");
@@ -980,19 +1093,27 @@ static void render_changes(void){
         if(ok){int at=ListView_GetItemCount(changes);row(changes,at,path);
             version_label(db,record,FALSE,a);version_label(db,record,TRUE,b);
             ListView_SetItemText(changes,at,1,a);ListView_SetItemText(changes,at,2,b);ListView_SetItemText(changes,at,3,(LPWSTR)change_name(state));
-            LVITEMW item={0};item.mask=LVIF_PARAM;item.iItem=at;item.lParam=((LPARAM)sqlite3_column_int(s,0)<<1)|(remote[0]!=0);ListView_SetItem(changes,&item);
+            char *origin=sync_json_string(db,record,"$.origin");
+            ListView_SetItemText(changes,at,4,(LPWSTR)(origin&&strlen(origin)==1?publisher_name(origin[0]-'A'):L"—"));free(origin);
+            LVITEMW item={0};item.mask=LVIF_PARAM;item.iItem=at;item.lParam=((LPARAM)sqlite3_column_int(s,0)<<1)|(remote[0]!=0&&!strcmp(state,"conflict"));ListView_SetItem(changes,&item);
             if((!chosen[0]&&at==0)||!wcscmp(path,chosen))ListView_SetItemState(changes,at,LVIS_SELECTED|LVIS_FOCUSED,LVIS_SELECTED|LVIS_FOCUSED);
         }
         free(p);free(local);free(remote);free(state);
     }
     sqlite3_finalize(s);if(db)sqlite3_close(db);
     refreshing=was_refreshing;
+    render_folder_detail();
+}
+static BOOL start_folder_job(int action,int index,BOOL interactive){
+    int visible=selected;selected=index;
+    BOOL ok=start_job(action,interactive);
+    selected=visible;render_changes();populate_pairs();controls();
+    return ok;
 }
 static void continue_batch(void){
     while(batch_next<settings.count){int i=batch_next++;
         if(!batch_checked[i])continue;
-        select_pair(i);
-        if(start_job(batch_action,TRUE))return;
+        if(start_folder_job(batch_action,i,TRUE))return;
         batch_action=0;text(nova_text(L"已停止批量操作",L"Batch stopped"));controls();return;
     }
     batch_action=0;
@@ -1004,7 +1125,10 @@ static void continue_batch(void){
     text(value);controls();
 }
 static void start_batch(int action){
-    if(job||!settings.registered||!settings.count||migration_pending)return;
+    if(job||editing||catalog_mode||!settings.registered||!settings.count||migration_pending)return;
+    BOOL any=action==SYNC_JOB_CHECK;
+    for(int i=0;i<settings.count;i++)if(folder_checked[i])any=TRUE;
+    if(!any){text(nova_text(L"请先勾选要传输的本机目录。",L"Check the local folders to transfer first."));return;}
     batch_action=action;batch_next=0;batch_failures=0;
     batch_error[0]=0;
     for(int i=0;i<settings.count;i++)batch_checked[i]=action==SYNC_JOB_CHECK||folder_checked[i];
@@ -1021,11 +1145,11 @@ static void subscribe_folder(void){
         choice=(int)TrackPopupMenu(menu,TPM_RETURNCMD|TPM_LEFTALIGN,area.left,area.bottom,0,window,NULL)-1;DestroyMenu(menu);
     }
     if(choice<0||choice>=group_count){text(nova_text(L"暂无可订阅目录。请先刷新，或在另一台电脑发布目录。",L"No folders available. Refresh, or publish a folder on another device."));return;}
-    new_pair();subscribing=TRUE;SetWindowTextW(pair_name,groups[choice].name);SendMessageW(group_combo,CB_SETCURSEL,choice+1,0);controls();layout();
+    new_pair();subscribing=TRUE;lstrcpyW(draft_pair.group,groups[choice].name);lstrcpyW(draft_pair.dataset,groups[choice].id);SetWindowTextW(pair_name,groups[choice].name);SendMessageW(group_combo,CB_SETCURSEL,choice+1,0);controls();layout();
 }
 static void controls(void){
     BOOL idle=job==NULL,has=selected>=0&&(selected<settings.count||(selected==new_index&&selected==settings.count));
-    EnableWindow(pairs,idle);
+    EnableWindow(pairs,idle&&!editing);
     const int edit_ids[]={C_SERVER,C_NAME,C_ROLE,C_REGISTER,C_REFRESH,C_IMPORT,C_NEW,C_REMOVE,C_PAIR_NAME,C_GROUP,C_PATH,C_BROWSE,C_FILTER,C_DELETE,C_SAVE,C_RUN,C_AUTO,C_PROJECT,C_BROKER};
     for(size_t i=0;i<sizeof(edit_ids)/sizeof(edit_ids[0]);i++)EnableWindow(GetDlgItem(window,edit_ids[i]),idle);
     EnableWindow(role_combo,idle&&!settings.registered);
@@ -1033,7 +1157,7 @@ static void controls(void){
     EnableWindow(group_combo,idle&&has&&selected==new_index);
     EnableWindow(GetDlgItem(window,C_RUN),idle&&!migration_pending&&has&&selected<settings.count&&settings.registered);
     EnableWindow(GetDlgItem(window,C_AUTO),idle&&!migration_pending&&has&&selected<settings.count&&settings.registered);
-    EnableWindow(GetDlgItem(window,C_PAUSE),job!=NULL||has);
+    EnableWindow(GetDlgItem(window,C_PAUSE),job!=NULL);
     const int admin_ids[]={C_TARGET,C_TARGET_PROJECT,C_TARGET_ROOT,C_QUOTA,C_RESERVE,C_PROBE,C_DEPLOY,C_ATTACH,C_MIGRATE,C_RESTORE,C_FOLLOW};
     for(size_t i=0;i<sizeof(admin_ids)/sizeof(admin_ids[0]);i++)EnableWindow(GetDlgItem(window,admin_ids[i]),idle);
     if(migration_pending){EnableWindow(target_project_edit,FALSE);
@@ -1045,16 +1169,26 @@ static void controls(void){
     EnableWindow(GetDlgItem(window,C_RESTORE),idle&&migration_pending);
     EnableWindow(GetDlgItem(window,C_FOLLOW),idle&&server_route!=NULL);
     if(GetDlgItem(window,C_AUTO))SetWindowTextW(GetDlgItem(window,C_AUTO),has&&selected<settings.count&&!settings.pairs[selected].paused?nova_text(L"暂停自动",L"Pause automatic"):nova_text(L"开启自动",L"Enable automatic"));
-    const int batch_ids[]={C_CHECK_ALL,C_PUSH_ALL,C_PULL_ALL,C_SYNC_ALL};
-    for(size_t i=0;i<sizeof(batch_ids)/sizeof(batch_ids[0]);i++)EnableWindow(GetDlgItem(window,batch_ids[i]),idle&&settings.registered&&settings.count>0&&!migration_pending);
+    BOOL checked=FALSE;for(int i=0;i<settings.count;i++)if(folder_checked[i])checked=TRUE;
+    const int batch_ids[]={C_PUSH_ALL,C_PULL_ALL,C_SYNC_ALL};
+    for(size_t i=0;i<sizeof(batch_ids)/sizeof(batch_ids[0]);i++)EnableWindow(GetDlgItem(window,batch_ids[i]),idle&&!editing&&!catalog_mode&&checked&&settings.registered&&!migration_pending);
+    EnableWindow(GetDlgItem(window,C_CHECK_ALL),idle&&!editing&&!catalog_mode&&settings.registered&&settings.count>0&&!migration_pending);
     EnableWindow(GetDlgItem(window,C_NEW),idle&&settings.registered&&settings.count<SYNC_PAIR_LIMIT);
     EnableWindow(GetDlgItem(window,C_SUBSCRIBE),idle&&settings.registered&&group_count>0&&settings.count<SYNC_PAIR_LIMIT);
-    EnableWindow(GetDlgItem(window,C_EDIT),idle&&has&&selected<settings.count);
+    EnableWindow(GetDlgItem(window,C_EDIT),idle&&!editing&&!catalog_mode&&has&&selected<settings.count);
+    EnableWindow(GetDlgItem(window,C_REMOVE),idle&&!editing&&!catalog_mode&&has&&selected<settings.count);
+    EnableWindow(GetDlgItem(window,C_AUTO),idle&&!editing&&!catalog_mode&&has&&selected<settings.count&&settings.registered&&!migration_pending);
+    EnableWindow(GetDlgItem(window,C_CANCEL_EDIT),idle);
+    EnableWindow(GetDlgItem(window,C_MY_FOLDERS),idle&&!editing);
+    EnableWindow(GetDlgItem(window,C_CATALOG),idle&&!editing);
+    EnableWindow(GetDlgItem(window,C_NEW),idle&&!editing&&settings.registered&&settings.count<SYNC_PAIR_LIMIT);
+    EnableWindow(GetDlgItem(window,C_SUBSCRIBE),idle&&!editing&&settings.registered&&catalog_choice>=0&&settings.count<SYNC_PAIR_LIMIT);
+    EnableWindow(GetDlgItem(window,C_BIND),idle&&!editing&&!catalog_mode&&has&&selected<settings.count&&settings.registered&&!migration_pending&&(!metadata_known||!bound_here(&settings.pairs[selected])||bind_failed[selected]));
     EnableWindow(GetDlgItem(window,C_REGISTER),idle&&settings.server_id>0&&!migration_pending);
     LVITEMW version={0};version.mask=LVIF_PARAM;version.iItem=ListView_GetNextItem(changes,-1,LVNI_SELECTED);
     BOOL can_resolve=version.iItem>=0&&ListView_GetItem(changes,&version)&&(version.lParam&1);
-    EnableWindow(GetDlgItem(window,C_LOCAL),idle&&has&&can_resolve);
-    EnableWindow(GetDlgItem(window,C_REMOTE),idle&&has&&can_resolve);
+    EnableWindow(GetDlgItem(window,C_LOCAL),idle&&!editing&&!catalog_mode&&has&&inspected[selected]&&can_resolve);
+    EnableWindow(GetDlgItem(window,C_REMOTE),idle&&!editing&&!catalog_mode&&has&&inspected[selected]&&can_resolve);
     SetWindowTextW(GetDlgItem(window,C_SAVE),selected==new_index?(subscribing?nova_text(L"订阅",L"Subscribe"):nova_text(L"发布",L"Publish")):nova_text(L"保存",L"Save"));
     SetWindowTextW(GetDlgItem(window,C_REGISTER),settings.registered?nova_text(L"保存名称",L"Save name"):nova_text(L"注册本设备",L"Register this device"));
 }
@@ -1062,7 +1196,7 @@ static void localize(void){
     if(!window)return;
     SetWindowTextW(window,nova_text(L"设备与同步 · NOVA Desktop",L"Devices and synchronization · NOVA Desktop"));
     SetWindowTextW(devices,nova_text(L"已登记设备",L"Registered devices"));
-    SetWindowTextW(pairs,nova_text(L"同步目录与可订阅目录",L"Sync folders and publications"));
+    SetWindowTextW(pairs,catalog_mode?nova_text(L"可订阅目录",L"Available publications"):nova_text(L"本机同步目录",L"Local sync folders"));
     SetWindowTextW(history,nova_text(L"同步记录",L"Synchronization history"));
     SetWindowTextW(progress,nova_text(L"同步及服务器管理进度",L"Synchronization and server management progress"));
     const wchar_t *tabs[]={nova_text(L"设备",L"Devices"),nova_text(L"同步目录",L"Folders"),nova_text(L"传输记录",L"Transfers"),nova_text(L"服务器",L"Server")};
@@ -1072,7 +1206,7 @@ static void localize(void){
         TabCtrl_SetItem(tab,i,&item);
         }
     const int ids[]={C_SERVER,C_REGISTER,C_REFRESH,C_IMPORT,C_NEW,C_REMOVE,C_BROWSE,C_SAVE,C_RUN,C_AUTO,C_PAUSE,C_CLOSE};
-    const wchar_t *names[]={nova_text(L"配置服务器",L"Configure server"),nova_text(L"注册本设备",L"Register this device"),nova_text(L"刷新",L"Refresh"),nova_text(L"导入旧配置…",L"Import legacy…"),nova_text(L"发布目录",L"Publish folder"),nova_text(L"移除",L"Remove"),nova_text(L"选择目录…",L"Choose folder…"),nova_text(L"保存",L"Save"),nova_text(L"同步此目录",L"Sync folder"),nova_text(L"开启自动",L"Enable automatic"),nova_text(L"停止",L"Stop"),nova_text(L"关闭",L"Close")};
+    const wchar_t *names[]={nova_text(L"配置服务器",L"Configure server"),nova_text(L"注册本设备",L"Register this device"),nova_text(L"刷新",L"Refresh"),nova_text(L"导入旧配置…",L"Import legacy…"),nova_text(L"发布目录",L"Publish folder"),nova_text(L"断开本机",L"Disconnect here"),nova_text(L"选择目录…",L"Choose folder…"),nova_text(L"保存",L"Save"),nova_text(L"同步此目录",L"Sync folder"),nova_text(L"开启自动",L"Enable automatic"),nova_text(L"停止任务",L"Stop task"),nova_text(L"关闭",L"Close")};
     for(size_t i=0;i<sizeof(ids)/sizeof(ids[0]);i++)SetWindowTextW(GetDlgItem(window,ids[i]),names[i]);
     SetWindowTextW(GetDlgItem(window,C_SERVER),nova_text(L"配置服务器",L"Configure server"));
     const int admin_ids[]={C_TARGET,C_PROBE,C_DEPLOY,C_ATTACH,C_MIGRATE,C_RESTORE,C_FOLLOW};
@@ -1091,24 +1225,33 @@ static void localize(void){
     SetWindowTextW(project_edit,settings.project);
     SetWindowTextW(broker_edit,settings.broker);
     const wchar_t *device_columns[]={nova_text(L"设备",L"Device"),nova_text(L"状态",L"Status"),nova_text(L"目录",L"Folders")};
-    const wchar_t *pair_columns[]={nova_text(L"目录",L"Folder"),nova_text(L"本机位置",L"Local location"),nova_text(L"发布设备",L"Published by"),nova_text(L"状态",L"Status")};
+    const wchar_t *pair_columns[]={nova_text(L"目录",L"Folder"),nova_text(L"本机位置",L"Local location"),nova_text(L"发布设备",L"Published by"),nova_text(L"文件差异",L"File changes"),nova_text(L"本机关系",L"Participation"),nova_text(L"自动同步",L"Automatic")};
     const int extra_ids[]={C_CHECK_ALL,C_PUSH_ALL,C_PULL_ALL,C_SYNC_ALL,C_SUBSCRIBE,C_EDIT,C_ADVANCED,C_SERVER_ADVANCED,C_LOCAL,C_REMOTE};
-    const wchar_t *extra_names[]={nova_text(L"检查全部",L"Check all"),nova_text(L"↑ 推送所选",L"↑ Push selected"),nova_text(L"↓ 拉取所选",L"↓ Pull selected"),nova_text(L"同步所选",L"Sync selected"),nova_text(L"订阅目录",L"Subscribe"),nova_text(L"编辑",L"Edit"),nova_text(L"高级选项",L"Advanced"),nova_text(L"高级设置",L"Advanced"),nova_text(L"保留本机版本",L"Keep local version"),nova_text(L"采用服务器版本",L"Use server version")};
+    const wchar_t *extra_names[]={nova_text(L"检查全部",L"Check all"),nova_text(L"推送勾选项",L"Push checked"),nova_text(L"拉取勾选项",L"Pull checked"),nova_text(L"同步勾选项",L"Sync checked"),nova_text(L"订阅此目录",L"Subscribe folder"),nova_text(L"编辑",L"Edit"),nova_text(L"高级选项",L"Advanced"),nova_text(L"高级设置",L"Advanced"),nova_text(L"保留本机版本",L"Keep local version"),nova_text(L"采用服务器版本",L"Use server version")};
     for(size_t i=0;i<sizeof(extra_ids)/sizeof(extra_ids[0]);i++)SetWindowTextW(GetDlgItem(window,extra_ids[i]),extra_names[i]);
+    SetWindowTextW(GetDlgItem(window,C_MY_FOLDERS),nova_text(L"本机目录",L"Local folders"));
+    SetWindowTextW(GetDlgItem(window,C_CATALOG),nova_text(L"可订阅目录",L"Available folders"));
+    SetWindowTextW(GetDlgItem(window,C_FILES_VIEW),nova_text(L"文件差异",L"File changes"));
+    SetWindowTextW(GetDlgItem(window,C_DEVICES_VIEW),nova_text(L"参与设备",L"Devices"));
+    SetWindowTextW(GetDlgItem(window,C_CANCEL_EDIT),nova_text(L"取消编辑",L"Cancel edit"));
+    SetWindowTextW(GetDlgItem(window,C_BIND),nova_text(L"重试接入",L"Retry connection"));
+    SetWindowTextW(participants,nova_text(L"此目录的设备绑定和接收记录",L"Folder device bindings and receipts"));
+    const wchar_t *participant_columns[]={nova_text(L"设备",L"Device"),nova_text(L"设备上的目录",L"Folder on device"),nova_text(L"服务器接收记录",L"Server receipts")};
+    for(int i=0;i<3;i++){LVCOLUMNW c={0};c.mask=LVCF_TEXT;c.pszText=(LPWSTR)participant_columns[i];ListView_SetColumn(participants,i,&c);}
     SetWindowTextW(GetDlgItem(window,C_RECOVERY),nova_text(L"打开恢复副本",L"Open recovery copies"));
     SetWindowTextW(changes,nova_text(L"文件版本与冲突",L"File versions and conflicts"));
-    const wchar_t *change_columns[]={nova_text(L"文件",L"File"),nova_text(L"本机版本",L"Local version"),nova_text(L"服务器版本",L"Server version"),nova_text(L"状态",L"Status")};
-    for(int i=0;i<4;i++){LVCOLUMNW c={0};c.mask=LVCF_TEXT;c.pszText=(LPWSTR)change_columns[i];ListView_SetColumn(changes,i,&c);}
-    const wchar_t *history_columns[]={nova_text(L"同步目录",L"Folder"),nova_text(L"发送内容",L"Sent content"),nova_text(L"接收内容",L"Received content"),nova_text(L"复用内容",L"Reused content"),nova_text(L"结果",L"Result")};
+    const wchar_t *change_columns[]={nova_text(L"文件",L"File"),nova_text(L"本机版本",L"Local version"),nova_text(L"服务器版本",L"Server version"),nova_text(L"状态",L"Status"),nova_text(L"版本来源设备",L"Version source")};
+    for(int i=0;i<5;i++){LVCOLUMNW c={0};c.mask=LVCF_TEXT;c.pszText=(LPWSTR)change_columns[i];ListView_SetColumn(changes,i,&c);}
+    const wchar_t *history_columns[]={nova_text(L"同步目录",L"Folder"),nova_text(L"发送内容",L"Sent content"),nova_text(L"接收内容",L"Received content"),nova_text(L"复用内容",L"Reused content"),nova_text(L"结果",L"Result"),nova_text(L"操作",L"Action")};
     for(int i=0;i<3;i++){LVCOLUMNW c={0};
         c.mask=LVCF_TEXT;
         c.pszText=(LPWSTR)device_columns[i];
         ListView_SetColumn(devices,i,&c);
-        }for(int i=0;i<4;i++){LVCOLUMNW c={0};
+        }for(int i=0;i<6;i++){LVCOLUMNW c={0};
         c.mask=LVCF_TEXT;
         c.pszText=(LPWSTR)pair_columns[i];
         ListView_SetColumn(pairs,i,&c);
-        }for(int i=0;i<5;i++){LVCOLUMNW c={0};
+        }for(int i=0;i<6;i++){LVCOLUMNW c={0};
         c.mask=LVCF_TEXT;
         c.pszText=(LPWSTR)history_columns[i];
         ListView_SetColumn(history,i,&c);
@@ -1141,42 +1284,60 @@ static void layout(void){
     ListView_SetColumnWidth(devices,0,px(w-420));
     ListView_SetColumnWidth(devices,1,px(200));ListView_SetColumnWidth(devices,2,px(160));
 
-    const int pair_ids[]={C_PAIRS,C_NEW,C_REMOVE,C_SUBSCRIBE,C_EDIT,C_CHECK_ALL,C_SYNC_ALL};
-    for(size_t i=0;i<sizeof(pair_ids)/sizeof(pair_ids[0]);i++)show_control(pair_ids[i],page==1);
-    move(GetDlgItem(window,C_NEW),26,156,112,34);move(GetDlgItem(window,C_SUBSCRIBE),148,156,100,34);
-    move(GetDlgItem(window,C_EDIT),258,156,64,34);move(GetDlgItem(window,C_REMOVE),332,156,64,34);
-    move(GetDlgItem(window,C_CHECK_ALL),w-562,156,110,34);move(GetDlgItem(window,C_SYNC_ALL),w-166,156,140,34);
-    int table_height=max(128,(h-340)/2);
-    move(pairs,26,206,w-52,table_height);
-    ListView_SetColumnWidth(pairs,0,px(174));
-    ListView_SetColumnWidth(pairs,1,px(w-624));
-    ListView_SetColumnWidth(pairs,2,px(200));ListView_SetColumnWidth(pairs,3,px(190));
-    int y=226+table_height;
-    const int edit_ids[]={C_PAIR_NAME,C_PATH,C_BROWSE,C_SAVE,C_ADVANCED};
+    const int pair_ids[]={C_PAIRS,C_NEW,C_MY_FOLDERS,C_CATALOG};
+    for(size_t i=0;i<sizeof(pair_ids)/sizeof(pair_ids[0]);i++)show_control(pair_ids[i],page==1&&!editing);
+    move(GetDlgItem(window,C_MY_FOLDERS),26,152,150,34);move(GetDlgItem(window,C_CATALOG),186,152,180,34);
+    move(GetDlgItem(window,C_NEW),w-186,152,160,34);
+    BOOL local=page==1&&!catalog_mode&&!editing;
+    const int local_ids[]={C_REMOVE,C_EDIT,C_AUTO,C_BIND,C_CHECK_ALL,C_SYNC_ALL,C_PUSH_ALL,C_PULL_ALL,C_SCOPE};
+    for(size_t i=0;i<sizeof(local_ids)/sizeof(local_ids[0]);i++)show_control(local_ids[i],local);
+    show_control(C_SUBSCRIBE,page==1&&catalog_mode&&!editing);
+    move(GetDlgItem(window,C_EDIT),26,198,74,32);move(GetDlgItem(window,C_REMOVE),110,198,150,32);
+    move(GetDlgItem(window,C_AUTO),270,198,174,32);move(GetDlgItem(window,C_BIND),454,198,174,32);
+    move(GetDlgItem(window,C_CHECK_ALL),w-156,198,130,32);
+    move(scope_text,26,244,w-500,28);
+    move(GetDlgItem(window,C_PUSH_ALL),w-456,240,136,32);move(GetDlgItem(window,C_PULL_ALL),w-310,240,136,32);move(GetDlgItem(window,C_SYNC_ALL),w-164,240,138,32);
+    move(GetDlgItem(window,C_SUBSCRIBE),w-216,212,190,34);
+    int table_height=editing?max(90,(h-560)/2):max(110,(h-490)/2);
+    move(pairs,26,284,w-52,table_height);
+    ListView_SetColumnWidth(pairs,0,px(140));ListView_SetColumnWidth(pairs,1,px(w-712));
+    ListView_SetColumnWidth(pairs,2,px(140));ListView_SetColumnWidth(pairs,3,px(180));
+    ListView_SetColumnWidth(pairs,4,px(110));ListView_SetColumnWidth(pairs,5,px(90));
+    if(catalog_mode){ListView_SetColumnWidth(pairs,0,px(w-392));ListView_SetColumnWidth(pairs,1,0);ListView_SetColumnWidth(pairs,2,px(180));ListView_SetColumnWidth(pairs,3,px(160));ListView_SetColumnWidth(pairs,4,0);ListView_SetColumnWidth(pairs,5,0);}
+    int y=editing?222:300+table_height;
+    const int edit_ids[]={C_PAIR_NAME,C_PATH,C_BROWSE,C_SAVE,C_ADVANCED,C_CANCEL_EDIT};
     for(size_t i=0;i<sizeof(edit_ids)/sizeof(edit_ids[0]);i++)show_control(edit_ids[i],page==1&&editing);
     ShowWindow(labels[4],page==1&&editing?SW_SHOW:SW_HIDE);ShowWindow(labels[6],page==1&&editing?SW_SHOW:SW_HIDE);
     move(labels[4],26,y+6,100,24);move(pair_name,140,y,w-166,32);
     move(labels[6],26,y+50,110,24);move(path_edit,140,y+44,w-326,32);
     move(GetDlgItem(window,C_BROWSE),w-176,y+44,150,32);
     move(GetDlgItem(window,C_ADVANCED),26,y+90,150,32);
+    move(GetDlgItem(window,C_CANCEL_EDIT),w-410,y+90,164,34);
     move(GetDlgItem(window,C_SAVE),w-236,y+90,210,34);
     show_control(C_FILTER,page==1&&editing&&advanced);show_control(C_DELETE,page==1&&editing&&advanced);
-    show_control(C_AUTO,page==1&&editing&&advanced&&selected<settings.count);
     ShowWindow(labels[7],page==1&&editing&&advanced?SW_SHOW:SW_HIDE);
     move(labels[7],26,y+140,110,24);move(filter_edit,140,y+134,w-166,32);
-    move(delete_check,26,y+177,w-260,28);move(GetDlgItem(window,C_AUTO),w-216,y+174,190,32);
-    const int detail_ids[]={C_CHANGES,C_PUSH_ALL,C_PULL_ALL,C_LOCAL,C_REMOTE};
-    for(size_t i=0;i<sizeof(detail_ids)/sizeof(detail_ids[0]);i++)show_control(detail_ids[i],page==1&&!editing);
-    move(GetDlgItem(window,C_PUSH_ALL),w-442,156,128,34);move(GetDlgItem(window,C_PULL_ALL),w-304,156,128,34);
-    move(GetDlgItem(window,C_LOCAL),w-396,y,175,32);move(GetDlgItem(window,C_REMOTE),w-211,y,185,32);
-    move(changes,26,y+46,w-52,max(66,h-y-162));
-    ListView_SetColumnWidth(changes,0,px(w-612));ListView_SetColumnWidth(changes,1,px(190));
-    ListView_SetColumnWidth(changes,2,px(190));ListView_SetColumnWidth(changes,3,px(180));
-    ShowWindow(empty_text,page==1&&!ListView_GetItemCount(pairs)?SW_SHOW:SW_HIDE);
-    SetWindowTextW(empty_text,nova_text(L"发布第一个目录，或订阅其他设备的目录。",L"Publish a folder, or subscribe to one from another device."));
-    move(empty_text,56,258,w-112,36);
+    move(delete_check,26,y+177,w-52,28);
+    BOOL detail=page==1&&!editing,files=detail&&!catalog_mode&&!devices_mode;
+    show_control(C_DETAIL,page==1);show_control(C_FILES_VIEW,detail&&!catalog_mode);show_control(C_DEVICES_VIEW,detail);
+    show_control(C_CHANGES,files);show_control(C_PARTICIPANTS,detail&&!files);
+    show_control(C_LOCAL,files);show_control(C_REMOTE,files);
+    move(detail_text,26,editing?156:y,w-52,48);
+    move(GetDlgItem(window,C_FILES_VIEW),26,y+56,144,32);move(GetDlgItem(window,C_DEVICES_VIEW),180,y+56,144,32);
+    move(GetDlgItem(window,C_LOCAL),w-396,y+56,175,32);move(GetDlgItem(window,C_REMOTE),w-211,y+56,185,32);
+    move(changes,26,y+100,w-52,max(50,h-y-210));move(participants,26,y+100,w-52,max(50,h-y-210));
+    ListView_SetColumnWidth(changes,0,px(w-722));ListView_SetColumnWidth(changes,1,px(180));
+    ListView_SetColumnWidth(changes,2,px(180));ListView_SetColumnWidth(changes,3,px(160));ListView_SetColumnWidth(changes,4,px(150));
+    ListView_SetColumnWidth(participants,0,px(210));ListView_SetColumnWidth(participants,1,px(w-612));ListView_SetColumnWidth(participants,2,px(350));
+    show_control(C_DETAIL_EMPTY,detail&&(files?ListView_GetItemCount(changes):ListView_GetItemCount(participants))==0);
+    move(detail_empty,50,y+136,w-100,40);
+    ShowWindow(empty_text,page==1&&!editing&&!ListView_GetItemCount(pairs)?SW_SHOW:SW_HIDE);
+    SetWindowTextW(empty_text,catalog_mode?nova_text(L"暂无可订阅目录。请刷新，或在另一台设备发布目录。",L"No available folders. Refresh, or publish from another device."):nova_text(L"发布本机目录，或切换到“可订阅目录”接入其他设备。",L"Publish a local folder, or open Available folders to subscribe."));
+    move(empty_text,56,326,w-112,36);
 
     show_control(C_LOG,page==2);move(history,26,202,w-52,h-326);
+    ListView_SetColumnWidth(history,0,px(w-792));ListView_SetColumnWidth(history,1,px(120));ListView_SetColumnWidth(history,2,px(120));
+    ListView_SetColumnWidth(history,3,px(120));ListView_SetColumnWidth(history,4,px(260));ListView_SetColumnWidth(history,5,px(120));
     wchar_t recovery_path[SYNC_PATH_CAP];swprintf(recovery_path,SYNC_PATH_CAP,L"%ls\\sync\\client\\recovery",store_directory());
     DWORD recovery_attr=GetFileAttributesW(recovery_path);show_control(C_RECOVERY,page==2&&recovery_attr!=INVALID_FILE_ATTRIBUTES&&(recovery_attr&FILE_ATTRIBUTE_DIRECTORY));
     move(GetDlgItem(window,C_RECOVERY),26,156,230,34);
@@ -1202,6 +1363,8 @@ static void layout(void){
     move(status_text,26,h-70,w-350,58);
     show_control(C_PAUSE,job!=NULL);move(GetDlgItem(window,C_PAUSE),w-310,h-64,130,34);
     move(GetDlgItem(window,C_CLOSE),w-166,h-64,140,34);
+    render_folder_detail();
+    controls();
 }
 static LRESULT CALLBACK window_proc(HWND h,UINT message,WPARAM wp,LPARAM lp){
     switch(message){
@@ -1259,14 +1422,19 @@ static LRESULT CALLBACK window_proc(HWND h,UINT message,WPARAM wp,LPARAM lp){
             add_column(pairs,1,L"",340);
             add_column(pairs,2,L"",340);
             add_column(pairs,3,L"",120);
+            add_column(pairs,4,L"",110);add_column(pairs,5,L"",90);
         button(C_NEW,L"");
             button(C_REMOVE,L"");
             button(C_RUN,L"");
             button(C_AUTO,L"");
             button(C_PAUSE,L"");
-            const int extra_buttons[]={C_CHECK_ALL,C_PUSH_ALL,C_PULL_ALL,C_SYNC_ALL,C_SUBSCRIBE,C_EDIT,C_ADVANCED,C_SERVER_ADVANCED,C_LOCAL,C_REMOTE,C_RECOVERY};
+            const int extra_buttons[]={C_CHECK_ALL,C_PUSH_ALL,C_PULL_ALL,C_SYNC_ALL,C_SUBSCRIBE,C_EDIT,C_ADVANCED,C_SERVER_ADVANCED,C_LOCAL,C_REMOTE,C_RECOVERY,C_MY_FOLDERS,C_CATALOG,C_FILES_VIEW,C_DEVICES_VIEW,C_CANCEL_EDIT,C_BIND};
             for(size_t i=0;i<sizeof(extra_buttons)/sizeof(extra_buttons[0]);i++)button(extra_buttons[i],L"");
-            changes=table(C_CHANGES);for(int i=0;i<4;i++)add_column(changes,i,L"",200);
+            changes=table(C_CHANGES);for(int i=0;i<5;i++)add_column(changes,i,L"",200);
+            participants=table(C_PARTICIPANTS);for(int i=0;i<3;i++)add_column(participants,i,L"",200);
+            detail_text=control(L"STATIC",L"",0,C_DETAIL);
+            scope_text=control(L"STATIC",L"",0,C_SCOPE);
+            detail_empty=control(L"STATIC",L"",SS_CENTER,C_DETAIL_EMPTY);
             heading=control(L"STATIC",L"",0,C_HEADING);SendMessageW(heading,WM_SETFONT,(WPARAM)title_font,TRUE);
             empty_text=control(L"STATIC",L"",SS_CENTER,C_EMPTY);
             pair_name=control(L"EDIT",L"",WS_TABSTOP|WS_BORDER|ES_AUTOHSCROLL,C_PAIR_NAME);
@@ -1277,7 +1445,7 @@ static LRESULT CALLBACK window_proc(HWND h,UINT message,WPARAM wp,LPARAM lp){
             delete_check=control(L"BUTTON",L"",WS_TABSTOP|BS_AUTOCHECKBOX,C_DELETE);
             button(C_SAVE,L"");
         history=table(C_LOG);
-            for(int i=0;i<5;i++)add_column(history,i,L"",i==0?240:i==4?300:140);
+            for(int i=0;i<6;i++)add_column(history,i,L"",i==0?240:i==4?300:140);
             for(int i=0;i<9;i++)labels[i]=control(L"STATIC",L"",0,6200+i);
             progress=control(PROGRESS_CLASSW,L"",PBS_SMOOTH,C_PROGRESS);
             SendMessageW(progress,PBM_SETRANGE,0,MAKELPARAM(0,100));
@@ -1316,8 +1484,8 @@ static LRESULT CALLBACK window_proc(HWND h,UINT message,WPARAM wp,LPARAM lp){
             return 0;
             }
     case WM_NOTIFY:{NMHDR *n=(NMHDR*)lp;
-        HWND lists[]={devices,pairs,history,changes};
-        for(int i=0;i<4;i++){
+        HWND lists[]={devices,pairs,history,changes,participants};
+        for(int i=0;i<5;i++){
             if(n->hwndFrom==lists[i]&&n->code==NM_CUSTOMDRAW){NMLVCUSTOMDRAW *d=(NMLVCUSTOMDRAW*)lp;
                     if(d->nmcd.dwDrawStage==CDDS_PREPAINT)return CDRF_NOTIFYITEMDRAW;
                     if(d->nmcd.dwDrawStage==CDDS_ITEMPREPAINT){d->clrText=RGB(236,241,249);
@@ -1359,6 +1527,7 @@ static LRESULT CALLBACK window_proc(HWND h,UINT message,WPARAM wp,LPARAM lp){
                     }
                     else if(item.lParam<0){selected=-1;catalog_choice=(int)-item.lParam-1;editing=FALSE;render_changes();controls();layout();}
                 }
+                render_folder_detail();controls();
                 }
             if(n->hwndFrom==changes&&n->code==LVN_ITEMCHANGED&&!refreshing)controls();
             if(n->hwndFrom==history&&(n->code==LVN_ITEMCHANGED||n->code==NM_DBLCLK)){
@@ -1380,6 +1549,15 @@ static LRESULT CALLBACK window_proc(HWND h,UINT message,WPARAM wp,LPARAM lp){
             break;
         case C_SERVER_ADVANCED:server_advanced=!server_advanced;layout();break;
         case C_ADVANCED:advanced=!advanced;layout();break;
+        case C_MY_FOLDERS:case C_CATALOG:
+            if(job||editing)break;
+            catalog_mode=LOWORD(wp)==C_CATALOG;catalog_choice=-1;
+            select_pair(catalog_mode?-1:settings.count?0:-1);populate_pairs();layout();
+            if(catalog_mode&&ListView_GetItemCount(pairs))ListView_SetItemState(pairs,0,LVIS_SELECTED|LVIS_FOCUSED,LVIS_SELECTED|LVIS_FOCUSED);
+            break;
+        case C_FILES_VIEW:case C_DEVICES_VIEW:devices_mode=LOWORD(wp)==C_DEVICES_VIEW;render_folder_detail();layout();break;
+        case C_CANCEL_EDIT:editing=advanced=FALSE;new_index=-1;select_pair(selected<settings.count?selected:settings.count?0:-1);populate_pairs();layout();break;
+        case C_BIND:start_job(SYNC_JOB_BIND,TRUE);break;
         case C_EDIT:editing=!editing;layout();break;
         case C_SUBSCRIBE:subscribe_folder();break;
         case C_CHECK_ALL:start_batch(SYNC_JOB_CHECK);break;
@@ -1444,13 +1622,7 @@ static LRESULT CALLBACK window_proc(HWND h,UINT message,WPARAM wp,LPARAM lp){
                     populate_pairs();
                     controls();
                     }}break;
-        case C_PAUSE:batch_action=0;if(job)SetEvent(job->cancel);
-            if(selected>=0&&selected<settings.count){SyncSettings next=settings;
-                next.pairs[selected].paused=true;
-                persist(&next);
-                populate_pairs();
-                controls();
-                }break;
+        case C_PAUSE:batch_action=0;if(job)SetEvent(job->cancel);controls();break;
         case C_CLOSE:SendMessageW(h,WM_CLOSE,0,0);
             break;
         }return 0;
@@ -1471,9 +1643,8 @@ static LRESULT CALLBACK window_proc(HWND h,UINT message,WPARAM wp,LPARAM lp){
         return 0;
     case DONE_MESSAGE:if(!shutting_down)finish_job();
         return 0;
-    case WM_TIMER:if(wp==AUTO_TIMER&&!job&&!batch_action&&ready&&settings.registered&&!shutting_down&&!migration_pending){for(int i=0;i<settings.count;i++)if(!settings.pairs[i].paused&&GetTickCount64()-last_run[i]>=(ULONGLONG)settings.interval*1000){selected=i;
-                select_pair(i);
-                if(!start_job(SYNC_JOB_RUN,FALSE)){SyncSettings next=settings;
+    case WM_TIMER:if(wp==AUTO_TIMER&&!job&&!batch_action&&!editing&&ready&&settings.registered&&!shutting_down&&!migration_pending){for(int i=0;i<settings.count;i++)if(!settings.pairs[i].paused&&GetTickCount64()-last_run[i]>=(ULONGLONG)settings.interval*1000){
+                if(!start_folder_job(SYNC_JOB_RUN,i,FALSE)){SyncSettings next=settings;
                     next.pairs[i].paused=true;
                     persist(&next);
                     }break;
@@ -1492,6 +1663,7 @@ static LRESULT CALLBACK window_proc(HWND h,UINT message,WPARAM wp,LPARAM lp){
         else if(d->CtlType==ODT_BUTTON)GetWindowTextW(d->hwndItem,label,160);
             else break;
         BOOL primary=d->CtlID==C_SYNC_ALL||d->CtlID==C_DEPLOY||d->CtlID==C_REGISTER||d->CtlID==C_SAVE;
+        if((d->CtlID==C_MY_FOLDERS&&!catalog_mode)||(d->CtlID==C_CATALOG&&catalog_mode)||(d->CtlID==C_FILES_VIEW&&!devices_mode&&!catalog_mode)||(d->CtlID==C_DEVICES_VIEW&&(devices_mode||catalog_mode)))selected_state=TRUE;
         COLORREF color=selected_state?RGB(53,77,122):primary&&!(d->itemState&ODS_DISABLED)?RGB(42,96,175):RGB(25,34,49);
             HBRUSH brush=CreateSolidBrush(color);
             FillRect(d->hDC,&d->rcItem,brush);
@@ -1602,7 +1774,7 @@ void sync_manager_language_changed(void){
     render_admin_note();
     render_changes();layout();
     if(!cloud_view)SetWindowTextW(cloud_text,nova_text(L"尚未连接云端",L"Cloud not connected"));
-    for(int i=0;i<ListView_GetItemCount(history)&&i<24;i++)ListView_SetItemText(history,i,4,(LPWSTR)(history_codes[i]==SYNC_OK?nova_text(L"完成",L"Completed"):failure_name(history_codes[i])));
+    for(int i=0;i<ListView_GetItemCount(history)&&i<24;i++){ListView_SetItemText(history,i,4,(LPWSTR)(history_codes[i]==SYNC_OK?nova_text(L"完成",L"Completed"):failure_name(history_codes[i])));ListView_SetItemText(history,i,5,(LPWSTR)action_name(history_actions[i]));}
     if(job)PostMessageW(window,PROGRESS_MESSAGE,0,0);
     else text(nova_text(L"就绪",L"Ready"));
 }
@@ -1621,8 +1793,9 @@ void sync_manager_shutdown(void){
     shutting_down=FALSE;
     loaded=FALSE;
     binding_count=group_count=0;
+    catalog_mode=devices_mode=metadata_known=FALSE;
     batch_action=batch_next=0;editing=advanced=server_advanced=FALSE;catalog_choice=-1;
-    for(int i=0;i<SYNC_PAIR_LIMIT;i++){free(plans[i]);plans[i]=NULL;folder_checked[i]=inspected[i]=FALSE;pending_push[i]=pending_pull[i]=pending_conflict[i]=pending_wait[i]=0;}
+    for(int i=0;i<SYNC_PAIR_LIMIT;i++){free(plans[i]);plans[i]=NULL;folder_checked[i]=inspected[i]=bind_failed[i]=FALSE;pending_push[i]=pending_pull[i]=pending_conflict[i]=pending_wait[i]=0;}
     ZeroMemory(folder_codes,sizeof(folder_codes));ZeroMemory(folder_details,sizeof(folder_details));
     ZeroMemory(history_codes,sizeof(history_codes));ZeroMemory(history_details,sizeof(history_details));batch_error[0]=0;
     free(cloud_view);
