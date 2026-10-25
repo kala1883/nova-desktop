@@ -1,4 +1,6 @@
 #define _WIN32_WINNT 0x0601
+/* Older MinGW defaults to MSVCRT formatting without C99 integer specifiers. */
+#define __USE_MINGW_ANSI_STDIO 1
 #include "sync_internal.h"
 #include "../i18n.h"
 #include <openssl/evp.h>

@@ -1,5 +1,7 @@
 #define _WIN32_WINNT 0x0601
 #define WIN32_LEAN_AND_MEAN
+/* Older MinGW defaults to MSVCRT formatting without C99 integer specifiers. */
+#define __USE_MINGW_ANSI_STDIO 1
 #include "sync_internal.h"
 #include <openssl/evp.h>
 #include <shlwapi.h>

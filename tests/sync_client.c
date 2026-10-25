@@ -1,4 +1,6 @@
 #define _WIN32_WINNT 0x0601
+/* Match the native sync client's C99 integer formatting on older MinGW. */
+#define __USE_MINGW_ANSI_STDIO 1
 #include <windows.h>
 #include <stdio.h>
 #include <assert.h>
