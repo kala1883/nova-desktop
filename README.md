@@ -16,6 +16,10 @@ required.
   and manage incremental, resumable SSH transfers in **Settings → Devices and
   synchronization**. The server stages missing chunks and reclaims them after
   receipt. No Windows Python or local web service is needed; see [sync](sync/README.md).
+- **Clear multi-device folder state** — Folders separates local bindings from
+  available publications, shows participation and automatic scheduling separately
+  from file changes, and offers per-device receipt details. Every connected device
+  can edit, push and pull; batch transfers act on checked local folders.
 - **12 resizable file-manager layouts** — four panes, two columns, two rows, a
   single pane, four three-pane arrangements, and three/four-column or row
   layouts. Drag pane dividers to resize them; proportions are restored locally.
@@ -36,9 +40,9 @@ required.
 - **Saved batch tasks** — up to 16 named tasks, each with up to 24 subtasks with
   individually editable working folders and commands, and sequential or parallel execution. Launch a selected
   task from **Settings → Batch tasks**.
-- **JSON configuration** — workspaces, launch items, tasks, commands, tabs,
-  layout, navigation-tree state, favorites and preferences are saved together
-  in `config/nova.json`, which is available for Git version control.
+- **Local runtime data and shared snapshots** — daily tasks, folders and preferences
+  are saved in Git-ignored JSON. `config/nova.json` is an explicit shared snapshot;
+  normal use never modifies it.
 - **Window modes** — normal, always on top, and desktop-fence mode, plus tray
   behavior and optional startup with Windows.
 - **Simplified Chinese and English UI** — switch instantly from
@@ -125,16 +129,14 @@ It stops on any failure. A build failure after pushing leaves the source commit
 on the remote; rerunning can build it without creating an empty commit. It never
 closes a running NOVA instance. Run relevant tests before deploying.
 
-To carry usage data to another computer, close NOVA on the source computer so
-pending task/session edits are saved, then deploy there to commit and push the
-updated `config/nova.json`. On the destination computer, close NOVA **before**
-`git pull --ff-only`, then run `deployment/build.bat` and start the new executable.
-Deploy commits/pushes the current checkout; it does not pull remote updates.
-The deployment/build output prints the JSON path, initialization state, task
-count, per-pane tab counts and SHA256; the archive records the configuration hash
-in `revision.txt`. A “no changes” deployment cannot publish another computer's
-uncommitted configuration. Only directory paths are stored: the actual files
-and folders must exist on the destination computer.
+To carry usage data to another computer, close NOVA and explicitly export with
+`deployment/config_snapshot.bat -Action Export`, review the `config/nova.json`
+diff, then commit/push it (or deploy). On the destination, pull and rebuild;
+close NOVA and use `deployment/config_snapshot.bat -Action Import` to merge that
+snapshot into local data. A code pull alone never replaces saved local data.
+Packages contain the shared snapshot, never private runtime data or identities.
+Build/deploy counts and hashes describe that snapshot, not unsaved local changes.
+Stored directory paths must exist on the destination computer.
 
 Optional Make entry point, from the repository root:
 `mingw32-make -f deployment/Makefile` (delegates to the same build script).
@@ -145,40 +147,39 @@ Open directly in file-manager mode:
 .\build\nova-desktop.exe --files
 ```
 
-When run inside this repository, the application reads and writes:
+Repository executables use the root `config/` folder; standalone packages use
+`config/` beside the executable. Daily data lives in Git-ignored `runtime.json`
+(tasks, subtask commands/folders, workspaces, launch items, presets, saved tabs,
+favorites and language). `local.json` retains private window/session state and
+device identities. Startup backs up these files as `runtime.backup.json` and
+`local.backup.json`; close NOVA before manually restoring them.
 
-```text
-config\nova.json
+On the first new-version launch, an existing `nova.json` is validated and migrated
+to runtime data, preserving IDs, names, commands, paths, task shortcuts and private
+state. Its exact original bytes remain in `nova.migration.json`; `runtime.seed.json`
+retains the initial normalized data and `runtime.base.json` tracks snapshot merges.
+None of these local files enter Git or packages. If no initialized snapshot exists,
+read-only migration from `%APPDATA%\NOVA Desktop` SQLite/INI files still applies.
+Original legacy files stay intact. Existing runtime data always wins on later
+launches, even after `nova.json` changes. Corrupt/newer runtime data is rejected;
+it is never silently replaced by an older shared snapshot.
+
+After upgrading an existing checkout, close NOVA and run:
+
+```powershell
+.\deployment\build.bat
+.\deployment\config_snapshot.bat -Action Migrate
 ```
 
-Outside the repository it uses `config/nova.json` beside the executable.
-An absent JSON file or an empty `initialized: false` file imports existing configuration from
-`%APPDATA%\NOVA Desktop\nova.sqlite`, or from the legacy `config.ini` and
-`file-manager.ini`, on first launch; original files and their backups stay intact.
-Without older data it creates the default configuration. Subsequent launches
-use JSON only. All paths, names, commands and stable IDs survive migration.
+This first saves/validates all local data, then restores only the old migration
+source `nova.json` to Git HEAD, with backups. It refuses staged/unmerged or newly
+edited snapshots. Local additions remain in runtime data, relative to the HEAD
+baseline. This clears old uncommitted configuration so future ordinary pulls
+are not blocked by daily use. It does not commit or push. `--migrate-data` alone
+also migrates without opening UI or executing tasks, but leaves Git files intact.
 
-JSON is UTF-8 with a versioned format. IDs are decimal strings to preserve all
-64 bits. Saves atomically replace the file; invalid, duplicate, over-capacity or
-newer-format data is rejected without being overwritten. Startup creates
-`config/nova.backup.json`. Close NOVA before editing or restoring the JSON file.
-The primary JSON is not Git-ignored; backups and temporary files are ignored.
-Frequently changing state is stored separately in Git-ignored `config/local.json`:
-active workspace, selected tabs, window modes, sidebar state, pane layout,
-navigation-tree visibility and divider positions. Tasks, launch items, presets,
-saved tab folders, favorites and language remain in the shared `nova.json`.
-Older combined files are split automatically on first startup. Local values take
-precedence for transient state. Startup backs up both files separately.
-
-Configuration includes user paths and command text, so review its Git diff when
-committing or deploying. See [configuration format](config/README.md).
-
-The same file contains saved usage data: tasks and subtask folders/commands,
-workspace launch items and task shortcuts, command presets, folder tabs and
-favorites. These are saved when you use NOVA, not just copied from a template.
-To migrate existing usage data before opening the UI, close NOVA and run
-`build/packages/nova-desktop.exe --migrate-data`. This only migrates/saves data
-and updates its backup; it does not run tasks or open launch items.
+JSON remains UTF-8, version 1, with decimal-string 64-bit IDs, bounded validation,
+atomic publication and rollback. See [configuration format](config/README.md).
 
 ## Using workspaces
 
@@ -267,8 +268,8 @@ The server needs SSH exec, SFTP and POSIX `sh`, with no NOVA agent or extra list
 port. This release targets Linux/POSIX servers. Save up to 16 profiles and use at
 most four remote-tab workers; disconnect or close a tab to release its worker.
 Restoring tabs never connects automatically. Profiles and remote tab paths use
-shared transactional `nova.json`; review hosts, usernames and paths before
-committing it. Removing a profile never deletes server files.
+transactional local `runtime.json` and are included only on explicit Export; review
+hosts, usernames and paths before sharing the snapshot. Removing a profile never deletes server files.
 
 Remote tabs share layouts, history, favorites, refresh and parent navigation, with
 case-sensitive paths. Enter absolute/relative directories, or `> command` to force
@@ -393,6 +394,7 @@ window in the current monitor's work area (up to 1100 × 760 logical pixels).
 .\deployment\test-storage.bat
 .\deployment\test-files.bat
 .\deployment\test-deployment.bat
+.\deployment\test-snapshots.bat
 ```
 
 The deployment test uses a temporary repository, a local bare remote, and a
@@ -429,36 +431,33 @@ domain software; see [`third_party/sqlite/README.md`](third_party/sqlite/README.
 for provenance. Product names mentioned for compatibility or comparison belong
 to their respective owners.
 
-## Configuration merge conflicts
+## Sharing configuration snapshots
 
-For routine updates on `main`, close NOVA and run
-`deployment/sync_config.bat`. It fetches `origin/main`, backs up the base, local
-and remote JSON under ignored `build/config-sync/`, then fast-forwards and merges
-uncommitted configuration changes. Independent additions and deletions merge;
-renumbering item positions and leftover closed-tab keys do not count as edits.
-Real conflicting edits stop before changing working files. `-Preview` only fetches
-and creates a backed-up preview. The command does not commit, push, or touch
-existing stashes; review and commit retained local changes before publishing.
-Staged configuration, unfinished Git operations and diverged commits require
-separate handling. Shared task or folder edits can still block ordinary `git pull`;
-the local-state split only prevents transient UI state from doing so.
+Daily saves never modify tracked `config/nova.json`. After the one-time migration,
+use ordinary `git pull --ff-only` for code updates. To explicitly exchange data,
+close NOVA and run:
 
-If pull is blocked by uncommitted `config/nova.json`, first close NOVA, then save
-that file with `git stash push -m "nova config before pull" -- config/nova.json`.
-Pull after the source computer has published its changes, then use
-`git stash apply 'stash@{0}'` to retain the stash while restoring local edits.
-If apply conflicts, use the semantic merge tool below before building or running
-NOVA. Keep the stash until the merged data has been verified. Directly running
-`deployment/configuration_info.ps1` now prints diagnostics; dot-sourcing it only
-loads its reusable functions.
+```powershell
+.\deployment\config_snapshot.bat -Action Export -Preview
+.\deployment\config_snapshot.bat -Action Export
+# Review, commit and push config/nova.json when you want to share it.
+# On the destination, after pulling and building:
+.\deployment\config_snapshot.bat -Action Import -Preview
+.\deployment\config_snapshot.bat -Action Import
+```
 
-Close NOVA, then run `deployment/resolve_config.bat` to back up Git's base/local/
-remote versions and generate a merged preview under ignored `build/config-merge/`.
-`deployment/resolve_config.bat -Apply` applies and stages a conflict-free result;
-commit the merge before pushing. It merges independently added tasks by stable ID,
-even when both computers used the same Task1 index, and preserves task shortcuts.
-Conflicting edits/deletion of the same task or over-capacity data require review;
-it never forces a side or truncates entries. Runtime `local.json` is not synchronized.
+Both directions merge the last baseline, current local data and shared snapshot
+by stable IDs. Independent additions survive; edits/deletions of the same entity,
+incompatible orders or over-capacity results stop for review. The native loader
+validates each raw document and the result before publication. Backups and the
+preview remain under ignored `config/.snapshot-*/`. Preview never changes input
+files. Failed publication restores exact previous bytes. Local state, credentials,
+identities and synchronization caches are never imported/exported. No command
+commits or pushes automatically. Export intentionally changes the tracked snapshot.
+
+`sync_config.bat` and `resolve_config.bat` remain available for legacy/shared-snapshot
+Git conflicts; they do not import into runtime data. After resolving a shared
+snapshot conflict, use explicit Import. Ordinary pulls do not need those tools.
 
 ## Native device synchronization
 
@@ -473,6 +472,14 @@ source device. Saving exchanges metadata; click **Sync selected** to transfer.
 **Check all** hashes every local sync folder without transferring work files.
 Check the folders to **Push selected**, **Pull selected**, or synchronize both ways.
 New and migrated folders keep automatic synchronization paused.
+
+If an older server rejects a synchronization request, update it with **Server →
+Configure server** using its existing paths; existing queues are retained. Folder
+status shows the failure, and selecting a transfer shows its details. Double-click
+a failed transfer to open the complete detail dialog. Checks are recorded too.
+**Refresh** reloads server state; it does not update the server component.
+**Published by** shows the registered device name, including this computer's name.
+Missing publication metadata is shown as **Publisher unknown**.
 
 The file table compares current local/server versions. Choose **Keep local
 version** or **Use server version** for a conflict; changed local content is

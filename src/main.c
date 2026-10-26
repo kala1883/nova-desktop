@@ -822,11 +822,19 @@ static BOOL resolve_config_directory(const wchar_t *executable,wchar_t *director
 }
 int WINAPI wWinMain(HINSTANCE instance,HINSTANCE previous,PWSTR command,int show){
     (void)previous;SetProcessDPIAware();OleInitialize(NULL);
+    /* Explicit snapshot tools validate isolated copies without opening UI or
+       reading the user's legacy AppData. The caller owns this directory. */
+    int argument_count=0;wchar_t **arguments=CommandLineToArgvW(GetCommandLineW(),&argument_count);
+    if(arguments&&argument_count>=2&&!wcscmp(arguments[1],L"--check-data")){
+        BOOL ok=argument_count==3&&wcslen(arguments[2])<=MAX_PATH-80&&store_open_from(arguments[2],arguments[2]);
+        store_close();LocalFree(arguments);OleUninitialize();return ok?0:4;
+    }
+    if(arguments)LocalFree(arguments);
     BOOL migrate_only=command&&!wcscmp(command,L"--migrate-data");
     HDC screen=GetDC(NULL);dpi=GetDeviceCaps(screen,LOGPIXELSX);ReleaseDC(NULL,screen);
     HANDLE mutex=CreateMutexW(NULL,FALSE,L"NOVA_DESKTOP_SINGLE_INSTANCE");
     if(GetLastError()==ERROR_ALREADY_EXISTS){
-        if(migrate_only){MessageBoxW(NULL,nova_text(L"请先关闭 NOVA，再迁移使用数据。",L"Close NOVA before migrating usage data."),APP_NAME,MB_OK|MB_ICONWARNING);CloseHandle(mutex);OleUninitialize();return 5;}
+        if(migrate_only){CloseHandle(mutex);OleUninitialize();return 5;}
         HWND existing=FindWindowW(APP_CLASS,NULL);if(existing){PostMessageW(existing,WM_RESTORE_NOVA,0,0);if(command&&wcsstr(command,L"--files"))PostMessageW(existing,WM_COMMAND,ID_FILES,0);if(command&&wcsstr(command,L"--sync"))PostMessageW(existing,WM_COMMAND,ID_SYNC_MANAGER,0);}CloseHandle(mutex);OleUninitialize();return 0;
     }
     wchar_t dir[MAX_PATH];if(FAILED(SHGetFolderPathW(NULL,CSIDL_APPDATA,NULL,SHGFP_TYPE_CURRENT,dir))||wcslen(dir)>MAX_PATH-40)return 1;
@@ -840,7 +848,7 @@ int WINAPI wWinMain(HINSTANCE instance,HINSTANCE previous,PWSTR command,int show
     }
     load_config();
     if(!storage_failed&&!file_manager_migrate_settings(dir)){storage_failed=TRUE;set_notice(store_error());}
-    if(storage_failed){MessageBoxW(NULL,notice,APP_NAME,MB_OK|MB_ICONERROR);store_close();CloseHandle(mutex);OleUninitialize();return 4;}
+    if(storage_failed){if(!migrate_only)MessageBoxW(NULL,notice,APP_NAME,MB_OK|MB_ICONERROR);store_close();CloseHandle(mutex);OleUninitialize();return 4;}
     BOOL backed_up=store_backup();
     if(migrate_only){store_close();CloseHandle(mutex);OleUninitialize();return backed_up?0:6;}
     if(!backed_up)set_notice(nova_text(L"无法更新 JSON 配置备份，请检查配置目录权限。",L"Unable to update the JSON configuration backup. Check permissions for the configuration folder."));

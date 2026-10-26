@@ -5,7 +5,8 @@ function Copy-NovaSyncAssets {
     $assetPaths = @('sync/README.md','sync/PROTOCOL.md','sync/server/sync_server.py',
         'sync/server/chunksync/__init__.py','sync/server/chunksync/common.py',
         'sync/server/chunksync/wire.py','sync/server/chunksync/broker.py','sync/server/chunksync/control.py',
-        'deployment/deploy-sync-server.ps1')
+        'deployment/deploy-sync-server.ps1','deployment/config_snapshot.bat',
+        'deployment/config_snapshot.ps1','deployment/configuration_merge.ps1')
     foreach ($assetPath in $assetPaths) {
         $assetSource = Join-Path $RepositoryRoot $assetPath
         $assetTarget = Join-Path $Destination $assetPath

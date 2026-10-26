@@ -116,11 +116,20 @@ static char *read_document(sqlite3 *db,const wchar_t *directory,const wchar_t *n
     if(!ok){free(data);invalid(error);return NULL;}
     return data;
 }
-BOOL config_json_load(sqlite3 *db,const wchar_t *directory,BOOL *initialized,wchar_t *error){
-    *initialized=FALSE;BOOL missing;char *json=read_document(db,directory,L"nova.json",&missing,error);
+BOOL config_json_load(sqlite3 *db,const wchar_t *directory,BOOL *initialized,BOOL *migrate,wchar_t *error){
+    *initialized=FALSE;*migrate=FALSE;BOOL missing;
+    char *json=read_document(db,directory,L"runtime.json",&missing,error);
+    if(!json&&!missing)return FALSE;
+    if(missing){
+        /* A baseline without runtime data indicates deletion, not first use. */
+        wchar_t baseline[MAX_PATH];swprintf(baseline,MAX_PATH,L"%ls\\runtime.base.json",directory);
+        if(GetFileAttributesW(baseline)!=INVALID_FILE_ATTRIBUTES||GetLastError()!=ERROR_FILE_NOT_FOUND)return invalid(error);
+        *migrate=TRUE;json=read_document(db,directory,L"nova.json",&missing,error);
+    }
     if(!json)return missing;
     sqlite3_stmt *s=NULL;BOOL ok=sqlite3_prepare_v2(db,"SELECT json_extract(?1,'$.initialized')",-1,&s,NULL)==SQLITE_OK;
     if(ok){sqlite3_bind_text(s,1,json,-1,SQLITE_TRANSIENT);ok=sqlite3_step(s)==SQLITE_ROW;if(ok)*initialized=sqlite3_column_int(s,0)!=0;}sqlite3_finalize(s);
+    if(ok&&!*initialized&&!*migrate)ok=FALSE;
     if(ok&&*initialized)ok=import_json(db,json);
     free(json);return ok?TRUE:invalid(error);
 }
@@ -185,24 +194,33 @@ static BOOL prepare_publication(const wchar_t *directory,const wchar_t *name,con
     return write_temp(publication->temporary,json);
 }
 BOOL config_json_commit(sqlite3 *db,const wchar_t *directory,wchar_t *error){
-    char *shared=snapshot(db,FALSE),*local=snapshot(db,TRUE);ConfigPublication publications[2];ZeroMemory(publications,sizeof(publications));
+    char *shared=snapshot(db,FALSE),*local=snapshot(db,TRUE);ConfigPublication publications[4];ZeroMemory(publications,sizeof(publications));
+    wchar_t runtime[MAX_PATH];swprintf(runtime,MAX_PATH,L"%ls\\runtime.json",directory);
+    BOOL first=GetFileAttributesW(runtime)==INVALID_FILE_ATTRIBUTES&&GetLastError()==ERROR_FILE_NOT_FOUND;
     BOOL ok=shared&&local;
-    if(ok)ok=prepare_publication(directory,L"local.json",local,&publications[0])&&prepare_publication(directory,L"nova.json",shared,&publications[1]);
+    if(ok&&first){
+        wchar_t source[MAX_PATH],backup[MAX_PATH];swprintf(source,MAX_PATH,L"%ls\\nova.json",directory);swprintf(backup,MAX_PATH,L"%ls\\nova.migration.json",directory);
+        /* Never replace the original migration evidence on subsequent launches. */
+        ok=CopyFileW(source,backup,TRUE)||GetLastError()==ERROR_FILE_EXISTS||GetLastError()==ERROR_FILE_NOT_FOUND;
+    }
+    if(ok)ok=prepare_publication(directory,L"local.json",local,&publications[0])&&prepare_publication(directory,L"runtime.json",shared,&publications[1]);
+    if(ok&&first)ok=prepare_publication(directory,L"runtime.base.json",shared,&publications[2]);
+    if(ok&&first)ok=prepare_publication(directory,L"runtime.seed.json",shared,&publications[3]);
     free(shared);free(local);
-    for(int i=0;i<2&&ok;i++)if(publications[i].changed){
+    for(int i=0;i<4&&ok;i++)if(publications[i].changed){
         ConfigPublication *p=&publications[i];ok=p->existed?ReplaceFileW(p->path,p->temporary,p->previous,0,NULL,NULL):MoveFileExW(p->temporary,p->path,MOVEFILE_WRITE_THROUGH);p->published=ok;
     }
     DWORD code=ok?0:GetLastError();
     if(ok)ok=sqlite3_exec(db,"COMMIT",NULL,NULL,NULL)==SQLITE_OK;
     if(!ok){
         sqlite3_exec(db,"ROLLBACK",NULL,NULL,NULL);
-        for(int i=1;i>=0;i--){ConfigPublication *p=&publications[i];if(p->published){if(p->existed)MoveFileExW(p->previous,p->path,MOVEFILE_REPLACE_EXISTING|MOVEFILE_WRITE_THROUGH);else DeleteFileW(p->path);}}
+        for(int i=3;i>=0;i--){ConfigPublication *p=&publications[i];if(p->published){if(p->existed)MoveFileExW(p->previous,p->path,MOVEFILE_REPLACE_EXISTING|MOVEFILE_WRITE_THROUGH);else DeleteFileW(p->path);}}
     }
-    for(int i=0;i<2;i++){if(publications[i].temporary[0])DeleteFileW(publications[i].temporary);if(ok&&publications[i].previous[0])DeleteFileW(publications[i].previous);}
+    for(int i=0;i<4;i++){if(publications[i].temporary[0])DeleteFileW(publications[i].temporary);if(ok&&publications[i].previous[0])DeleteFileW(publications[i].previous);}
     if(!ok){SetLastError(code);return file_error(error);}return TRUE;
 }
 BOOL config_json_backup(const wchar_t *directory,wchar_t *error){
-    const wchar_t *names[]={L"nova",L"local"};
+    const wchar_t *names[]={L"runtime",L"local"};
     for(int i=0;i<2;i++){
         wchar_t path[MAX_PATH],backup[MAX_PATH],temporary[MAX_PATH];swprintf(path,MAX_PATH,L"%ls\\%ls.json",directory,names[i]);swprintf(backup,MAX_PATH,L"%ls\\%ls.backup.json",directory,names[i]);temp_path(directory,L"backup",temporary);
         BOOL ok=CopyFileW(path,temporary,TRUE)&&MoveFileExW(temporary,backup,MOVEFILE_REPLACE_EXISTING|MOVEFILE_WRITE_THROUGH);

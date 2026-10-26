@@ -3,7 +3,7 @@
 #include "ssh_client.h"
 #include "../core/sync_model.h"
 typedef struct sqlite3 sqlite3;
-typedef enum SyncFailure { SYNC_OK,SYNC_CANCELLED,SYNC_STORAGE,SYNC_PATH,SYNC_CACHE,SYNC_PROTOCOL,SYNC_CONFLICT,SYNC_REMOTE,SYNC_NETWORK,SYNC_DELETE,SYNC_MOVED,SYNC_FROZEN } SyncFailure;
+typedef enum SyncFailure { SYNC_OK,SYNC_CANCELLED,SYNC_STORAGE,SYNC_PATH,SYNC_CACHE,SYNC_PROTOCOL,SYNC_CONFLICT,SYNC_REMOTE,SYNC_NETWORK,SYNC_DELETE,SYNC_MOVED,SYNC_FROZEN,SYNC_UPGRADE } SyncFailure;
 typedef enum SyncPhase { SYNC_CONNECT,SYNC_SCAN,SYNC_UPLOAD,SYNC_DOWNLOAD,SYNC_APPLY,SYNC_CONFIRM,SYNC_FINISH,SYNC_DEPLOY,SYNC_FREEZE,SYNC_COPY_SERVER,SYNC_VERIFY_SERVER,SYNC_CUTOVER } SyncPhase;
 typedef struct SyncStats { uint64_t sent,received,reused,resumed,reclaimed; int published,downloaded,unchanged; } SyncStats;
 typedef struct SyncProgress { SyncPhase phase; uint64_t done,total; wchar_t path[SYNC_PATH_CAP]; SyncStats stats; } SyncProgress;

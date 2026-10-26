@@ -16,6 +16,9 @@ Python 仅用于服务器。关闭同步窗口会隐藏窗口，自动同步随 
    key and verify the host fingerprint. Click **Configure server**. It installs
    and connects to the embedded broker; existing queue data and quotas survive.
    A new queue uses `/opt/nova-sync`, 15 GiB staging and 5 GiB free reserve.
+   Use the same **Configure server** action to update its embedded server component.
+   **Refresh** reloads state. **Published by** shows registered device names;
+   missing legacy publication metadata is shown as **Publisher unknown**.
 2. The remote account needs write permission to its project/queue paths. Under
    **Advanced**, use a writable home directory for a non-root account. On Linux,
    configuration can install Python using apt-get/dnf/yum/apk when the SSH account
@@ -25,13 +28,14 @@ Python 仅用于服务器。关闭同步窗口会隐藏窗口，自动同步随 
    computers with their own keys and identities. Up to 16 devices are allocated
    automatically. Never copy another device's local.json or cache as enrollment.
 4. **Publish folder** chooses the source directory and name. Other computers
-   **Refresh**, select its publication and **Subscribe**, choosing their own
+   **Refresh**, open **Available folders**, select its publication and **Subscribe folder**, choosing their own
    absolute local path. Saving only exchanges metadata. New folders start with
    automatic mode paused. There are at most 16 publications and 16 local bindings.
 5. **Check all** compares every local sync folder and current server versions;
    it hashes contents without publishing or applying files. The upper table shows
    pending pushes, pulls, conflicts or missing source content. Check folders and
-   choose **Push selected**, **Pull selected**, or **Sync selected** for both.
+   choose **Push checked**, **Pull checked**, or **Sync checked** for both. Selecting
+   a row opens its details; only checkboxes set the batch transfer scope.
 6. The lower table shows file versions. Select a conflict and choose **Keep local
    version** (publish it as a child of the received server version) or **Use server
    version**. Existing local content is verified and copied to
@@ -42,10 +46,55 @@ Python 仅用于服务器。关闭同步窗口会隐藏窗口，自动同步随 
 每台电脑先将自己的 SSH 公钥加入服务器，然后在原生界面**配置服务器 → 注册本设备**，
 自动分配身份，最多 16 台。源电脑**发布目录**；其他电脑刷新后选择该目录并**订阅**，
 本机路径可以不同。保存只登记元数据，明确点击同步才会传文件。
+后续更新服务器组件仍使用**配置服务器**；**刷新**只读取状态。
+**发布设备**显示登记的设备名称，包括本机；缺失的旧发布信息显示为**发布设备未知**。
 
 日常使用**检查全部**检查本机所有目录，勾选后选择推送、拉取或双向同步。文件表提供
 本机/服务器版本选择；先保留本机恢复副本，再处理冲突。默认关闭自动同步和删除传播。
-路径、配额、旧队列连接、迁移与自动同步选项均收在高级设置。
+本机目录与可订阅目录分开展示。选中行查看详情，勾选框决定批量传输范围；自动同步
+在本机目录工具栏独立开启/关闭。路径、配额、旧队列连接与迁移收在高级设置。
+
+## Folder lifecycle / 目录状态与操作
+
+Every connected device can edit, push and pull. **Published by** identifies the
+original creator, not a primary writer or read-only policy. Three independent
+facts describe a local folder:
+
+| Fact / 事实 | States / 状态 | Action / 操作 |
+| --- | --- | --- |
+| Participation / 接入关系 | Unverified, local only, published here, subscribed here; legacy creator unknown shows Connected / 待确认、待接入、本机发布、本机订阅；旧记录来源未知显示已接入 | Refresh or retry connection / 刷新或重试接入 |
+| Automatic / 自动同步 | On or off, independent of manual transfer / 开启或关闭，与手动传输独立 | Toggle for the current folder / 切换当前目录开关 |
+| Last comparison / 最近比较 | Needs check, changes, conflicts, awaiting source, matches server / 待检查、有差异、冲突、等待补发、与服务器一致 | Check; push, pull or sync checked folders; explicitly resolve conflicts / 检查，推送、拉取或同步勾选项，明确选择冲突版本 |
+
+**File changes** lists differences and the device that authored each server
+version. **Devices** lists bindings, local paths and outstanding receipt counts.
+No pending versions means the server has no unreceived queued version for that
+device; it says nothing about its connectivity or unpublished local edits. Older
+servers without receipt counts show Unknown; use **Server → Configure server** to
+update the embedded component. No schema or device identity migration is needed.
+
+Successful transfers return a new comparison using the same connection. Starting
+a file operation, refreshing successfully or switching servers invalidates older
+comparisons. A failed check does not turn off automatic mode; a failed transfer
+pauses automatic work for that folder. Batch and automatic work retain the user's
+detail selection; automatic work waits while a folder is being edited.
+
+Saving a binding can succeed locally while the server is unreachable. The folder
+retains its local settings and offers **Retry connection**. **Cancel edit** discards
+an unsaved draft. **Disconnect here** removes only this device's binding, retaining
+local files, other devices and the discoverable publication; it does not withdraw
+the publication globally. Global publication deletion is not currently exposed.
+
+各参与设备均可修改并推送、拉取；发布者只是最初创建目录的设备，不是唯一写入者。
+目录关系、自动调度、文件比较独立展示。下方“文件差异”显示两端版本与来源设备，只有
+冲突可选择版本；“参与设备”显示路径、待接收数与等待补发数。无待接收版本不等于设备
+在线，也不代表其本机没有尚未推送的修改。旧服务器缺少回执统计时显示未知，可通过
+“服务器 → 配置服务器”更新内置组件，无需迁移身份或数据格式。
+
+传输成功后在同一连接内重新比较；开始文件操作、成功刷新或切换服务器会清除失效
+比较。检查失败不关闭自动同步，传输失败暂停该目录自动同步。批量及自动任务保留当前
+查看的目录，编辑期间等待自动任务。接入失败保留本机配置并支持重试，取消编辑丢弃未保存
+草稿。“断开本机”保留本机文件、其他设备及服务器发布信息，目前没有全局撤销发布入口。
 
 服务器已有 Python 时直接配置；缺失时，SSH 账户本身为 root 才会使用支持的系统
 包管理器安装，不会提权。非 root 账户需管理员预先准备 Python 3.9+、SQLite JSON、
@@ -69,7 +118,7 @@ an already registered computer. This pauses its local pairs and:
    unreceived/partial jobs are retained. The local active server changes only after
    verified activation; failed local settings writes leave a resumable checkpoint.
 5. Keeps the old server and its data. Local pairs remain paused for review; test
-   **Sync selected**, then re-enable automatic pairs as desired.
+   **Sync checked**, then re-enable automatic pairs as desired.
 
 A dropped connection or closed NOVA preserves `config/sync/client/server-migration.json`.
 Open the manager again and choose **Advanced → Migrate and switch**. A crash between
@@ -102,7 +151,7 @@ The migration lineage is bounded to 64 moves and manifests to 50,000 queue files
   with optional zlib compression. This is block reuse: compressed/encrypted files
   or widely changed data may still require most of the file.
 - Upload and download retain flushed 128 KiB packet offsets across interruption.
-  Resume using **Sync selected**. Received files are verified, atomically replaced and
+  Resume using **Sync checked**. Received files are verified, atomically replaced and
   journaled before ack. The server then reclaims unreferenced content; unreceived
   content is never deleted on a timer. Quotas reject new allocations safely.
 - Device identity, SSH profile ID and pairs live in Git-ignored `config/local.json`.

@@ -57,7 +57,9 @@ $taskAlias = [string]$taskConfig.connection.host
 if ($taskAlias -match '^[A-Za-z0-9_][A-Za-z0-9_.@:-]{0,199}$') {
     $taskResolved=@{}
     & ssh -G $taskAlias 2>$null | ForEach-Object { if ($_ -match '^(hostname|user|port) (.+)$') { $taskResolved[$Matches[1]]=$Matches[2] } }
-    $taskShared=Get-Content -LiteralPath (Join-Path $taskRepo 'config\nova.json') -Raw -Encoding UTF8 | ConvertFrom-Json
+    $taskDataPath=Join-Path $taskRepo 'config\runtime.json'
+    if (-not (Test-Path -LiteralPath $taskDataPath -PathType Leaf)) { $taskDataPath=Join-Path $taskRepo 'config\nova.json' }
+    $taskShared=Get-Content -LiteralPath $taskDataPath -Raw -Encoding UTF8 | ConvertFrom-Json
     $taskProfiles=@{}
     foreach($taskEntry in $taskShared.settings){if($taskEntry.scope -eq 'ssh_servers' -and $taskEntry.section -match '^Server[0-9]+$') { if(-not $taskProfiles.ContainsKey($taskEntry.section)){$taskProfiles[$taskEntry.section]=@{}}; $taskProfiles[$taskEntry.section][$taskEntry.key]=$taskEntry.value }}
     $taskMatch=@($taskProfiles.Values | Where-Object { $_.Host -eq $taskResolved.hostname -and $_.User -ceq $taskResolved.user -and $_.Port -eq $taskResolved.port })

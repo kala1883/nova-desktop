@@ -12,7 +12,7 @@ function Publish([string]$Executable) {
 }
 New-Item -ItemType Directory -Path (Join-Path $fixtureRoot 'deployment'),(Join-Path $fixtureRoot 'config'),(Join-Path $fixtureRoot 'build/packages') -Force | Out-Null
 try {
-    foreach ($name in @('publish_latest.ps1','configuration_info.ps1','package_sync.ps1','deploy-sync-server.ps1')) {
+    foreach ($name in @('publish_latest.ps1','configuration_info.ps1','package_sync.ps1','deploy-sync-server.ps1','config_snapshot.bat','config_snapshot.ps1','configuration_merge.ps1')) {
         Copy-Item -LiteralPath (Join-Path $sourceRoot "deployment/$name") -Destination (Join-Path $fixtureRoot "deployment/$name")
     }
     Copy-Item -LiteralPath (Join-Path $sourceRoot 'sync') -Destination (Join-Path $fixtureRoot 'sync') -Recurse

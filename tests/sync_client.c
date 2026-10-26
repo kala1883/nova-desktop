@@ -32,6 +32,10 @@ int wmain(int argc,wchar_t **argv){
     assert(argc==5);lstrcpyW(root,argv[4]);assert(GetFileAttributesW(root)&FILE_ATTRIBUTE_DIRECTORY);char pin[80];assert(WideCharToMultiByte(CP_UTF8,0,argv[3],-1,pin,sizeof(pin),NULL,NULL));assert(ssh_runtime_acquire());
     SyncRequest *a=calloc(1,sizeof(*a)),*b=calloc(1,sizeof(*b));assert(a&&b);setup(a,0,argv[1],_wtoi(argv[2]),pin);setup(b,1,argv[1],_wtoi(argv[2]),pin);SyncResult result=action(a,SYNC_JOB_REGISTER);assert(result.failure==SYNC_OK);sync_result_dispose(&result);result=action(b,SYNC_JOB_REGISTER);assert(result.failure==SYNC_OK);sync_result_dispose(&result);
     wchar_t pa[SYNC_PATH_CAP],pb[SYNC_PATH_CAP];swprintf(pa,SYNC_PATH_CAP,L"%ls\\中文.bin",a->pair.directory);swprintf(pb,SYNC_PATH_CAP,L"%ls\\中文.bin",b->pair.directory);source_file(pa);
+    wchar_t legacy[SYNC_PATH_CAP];swprintf(legacy,SYNC_PATH_CAP,L"%ls\\A\\legacy-server.flag",root);write_text(legacy,"old broker response");
+    result=action(a,SYNC_JOB_CHECK);assert(result.failure==SYNC_UPGRADE&&result.stats.sent==0&&result.stats.published==0);sync_result_dispose(&result);
+    result=action(a,SYNC_JOB_PUSH);assert(result.failure==SYNC_UPGRADE&&result.stats.sent==0&&result.stats.published==0);sync_result_dispose(&result);assert(DeleteFileW(legacy));
+    puts("PASS legacy server CHECK/PUSH refusal identifies required server update before uploading content");
     result=action(a,SYNC_JOB_RUN);assert(result.failure==SYNC_NETWORK);sync_result_dispose(&result);
     result=action(a,SYNC_JOB_RUN);assert(result.failure==SYNC_OK&&result.stats.resumed>=SYNC_PACKET_MAX);printf("PASS native upload resumed at %llu bytes\n",(unsigned long long)result.stats.resumed);sync_result_dispose(&result);
     result=action(b,SYNC_JOB_RUN);assert(result.failure==SYNC_NETWORK);sync_result_dispose(&result);
@@ -43,10 +47,10 @@ int wmain(int argc,wchar_t **argv){
     assert(DeleteFileW(pa));result=action(a,SYNC_JOB_RUN);assert(result.failure==SYNC_OK);sync_result_dispose(&result);result=action(b,SYNC_JOB_RUN);assert(result.failure==SYNC_OK&&GetFileAttributesW(pb)==INVALID_FILE_ATTRIBUTES);sync_result_dispose(&result);wchar_t recovered[MAX_PATH];swprintf(recovered,MAX_PATH,L"%ls\\recovery.bin",root);assert(GetFileAttributesW(recovered)!=INVALID_FILE_ATTRIBUTES);
     write_text(pa,"initial published content");
     result=action(a,SYNC_JOB_CHECK);assert(result.failure==SYNC_OK&&result.pushes==1&&result.stats.sent==0&&result.stats.published==0);sync_result_dispose(&result);
-    result=action(a,SYNC_JOB_PUSH);assert(result.failure==SYNC_OK);sync_result_dispose(&result);
+    result=action(a,SYNC_JOB_PUSH);assert(result.failure==SYNC_OK&&result.changes&&result.pushes==0);sync_result_dispose(&result);
     wchar_t local_only[SYNC_PATH_CAP];swprintf(local_only,SYNC_PATH_CAP,L"%ls\\local-only.txt",b->pair.directory);write_text(local_only,"must not upload during pull");
     result=action(b,SYNC_JOB_CHECK);assert(result.failure==SYNC_OK&&result.pulls==1&&result.pushes==1);sync_result_dispose(&result);
-    result=action(b,SYNC_JOB_PULL);assert(result.failure==SYNC_OK&&result.stats.published==0);sync_result_dispose(&result);assert(DeleteFileW(local_only));
+    result=action(b,SYNC_JOB_PULL);assert(result.failure==SYNC_OK&&result.stats.published==0&&result.changes&&result.pushes==1&&result.pulls==0);sync_result_dispose(&result);assert(DeleteFileW(local_only));
     SyncRequest *c=calloc(1,sizeof(*c));assert(c);setup(c,2,argv[1],_wtoi(argv[2]),pin);
     result=action(c,SYNC_JOB_REGISTER);assert(result.failure==SYNC_OK&&result.registered_role==2);sync_result_dispose(&result);
     result=action(c,SYNC_JOB_BIND);assert(result.failure==SYNC_OK);sync_result_dispose(&result);

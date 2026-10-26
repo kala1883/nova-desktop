@@ -48,6 +48,9 @@ def run(executable):
                 while not channel.closed:
                     request,payload,_=wire.read_message(reader)
                     try:
+                        if request.get('action') in ('overview', 'repairs') and (root / 'A/legacy-server.flag').exists():
+                            wire.write_message(writer, {"ok": False, "error": "不支持的请求"})
+                            continue
                         race_flag = root / 'B/change-before-receive.flag'
                         if request.get('action') == 'pending' and request.get('device') == 'B' and race_flag.exists():
                             race_flag.unlink()

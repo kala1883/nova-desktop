@@ -15,12 +15,24 @@ BOOL nova_english=FALSE;
 static DWORD contents(const wchar_t *file,char *data,DWORD cap){HANDLE h=CreateFileW(file,GENERIC_READ,FILE_SHARE_READ,NULL,OPEN_EXISTING,0,NULL);assert(h!=INVALID_HANDLE_VALUE);DWORD n=0;assert(ReadFile(h,data,cap-1,&n,NULL));data[n]=0;CloseHandle(h);return n;}
 static void fixture_pair(SyncPair *p){memset(p,0,sizeof(*p));wcscpy(p->id,L"fixture-pair");wcscpy(p->dataset,L"fixture-data");wcscpy(p->name,L"Synthetic pair");wcscpy(p->group,L"Synthetic group");wcscpy(p->directory,L"C:\\fixture-only");wcscpy(p->excludes,L".git;node_modules");p->paused=true;}
 static void model_tests(void){
+    SyncFolderFacts facts={0};SyncFolderState state=sync_folder_state(&facts);
+    assert(state.relation==SYNC_REL_UNKNOWN&&state.phase==SYNC_FOLDER_CHECK);
+    facts.metadata_known=true;facts.pushes=2;facts.pulls=3;facts.conflicts=1;facts.inspected=true;
+    state=sync_folder_state(&facts);assert(state.relation==SYNC_REL_LOCAL&&state.phase==SYNC_FOLDER_BIND);
+    facts.bound=true;assert(sync_folder_state(&facts).relation==SYNC_REL_CONNECTED);
+    facts.publisher_known=true;state=sync_folder_state(&facts);assert(state.relation==SYNC_REL_SUBSCRIBER&&state.phase==SYNC_FOLDER_CONFLICT);
+    facts.publisher=true;facts.busy=true;state=sync_folder_state(&facts);assert(state.relation==SYNC_REL_PUBLISHER&&state.phase==SYNC_FOLDER_WORKING);
+    facts.busy=false;facts.failed=true;assert(sync_folder_state(&facts).phase==SYNC_FOLDER_ERROR);
+    facts.failed=false;facts.conflicts=0;facts.waiting=1;assert(sync_folder_state(&facts).phase==SYNC_FOLDER_WAIT);
+    facts.waiting=0;assert(sync_folder_state(&facts).phase==SYNC_FOLDER_CHANGES);
+    facts.pushes=facts.pulls=0;assert(sync_folder_state(&facts).phase==SYNC_FOLDER_CURRENT);
+    facts.inspected=false;assert(sync_folder_state(&facts).phase==SYNC_FOLDER_CHECK);
     SyncSettings *s=malloc(sizeof(*s)),*before=malloc(sizeof(*before));assert(s&&before);sync_settings_default(s);assert(sync_settings_valid(s));SyncPair p;fixture_pair(&p);assert(sync_pair_set(s,0,&p)==0);*before=*s;assert(sync_pair_set(s,1,&p)<0&&!memcmp(s,before,sizeof(*s)));
     wcscpy(p.id,L"fixture-second");wcscpy(p.dataset,L"different-group");wcscpy(p.directory,L"c:\\FIXTURE-ONLY");assert(sync_pair_set(s,1,&p)<0&&!memcmp(s,before,sizeof(*s)));assert(sync_relative_path(L"folder/中文.txt"));assert(!sync_relative_path(L"../escape")&&!sync_relative_path(L"/absolute")&&!sync_relative_path(L".git/index"));
     s->version=2;assert(!sync_settings_valid(s));free(before);free(s);puts("PASS sync model: bounded collection, duplicates, immutable failures, Unicode and traversal checks");
 }
 static void settings_tests(const wchar_t *dir){
-    assert(store_open(dir));assert(store_set_int(L"app",L"Nova",L"Language",0));wchar_t shared[MAX_PATH],local[MAX_PATH];swprintf(shared,MAX_PATH,L"%ls\\nova.json",dir);swprintf(local,MAX_PATH,L"%ls\\local.json",dir);char before[65536],after[65536],private_json[65536];DWORD length=contents(shared,before,sizeof(before));
+    assert(store_open(dir));assert(store_set_int(L"app",L"Nova",L"Language",0));wchar_t shared[MAX_PATH],local[MAX_PATH];swprintf(shared,MAX_PATH,L"%ls\\runtime.json",dir);swprintf(local,MAX_PATH,L"%ls\\local.json",dir);char before[65536],after[65536],private_json[65536];DWORD length=contents(shared,before,sizeof(before));
     SyncSettings *s=malloc(sizeof(*s)),*loaded=malloc(sizeof(*loaded));assert(s&&loaded);sync_settings_default(s);wcscpy(s->node_id,L"synthetic-node");wcscpy(s->name,L"Synthetic private device");s->registered=true;fixture_pair(&s->pairs[0]);s->count=1;
     assert(sync_settings_save(s));assert(contents(shared,after,sizeof(after))==length&&!memcmp(before,after,length));contents(local,private_json,sizeof(private_json));assert(strstr(private_json,"synthetic-node")&&!strstr(after,"fixture-only"));assert(sync_settings_load(loaded)&&!memcmp(loaded,s,sizeof(*s)));
     assert(store_set_int(L"sync",L"Manager",L"Version",2));assert(!sync_settings_load(loaded));store_close();assert(store_open(dir));assert(!sync_settings_load(loaded));store_close();free(s);free(loaded);puts("PASS sync configuration: local.json only, exact reload and newer-version rejection");

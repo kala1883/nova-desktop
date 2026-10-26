@@ -779,6 +779,9 @@ BOOL sync_client_run(SyncRequest *request,int action,SyncResult *result){
         request->direction=action==SYNC_JOB_PUSH?1:action==SYNC_JOB_PULL?2:0;
         ok=sy_sync(&r);
     }
+    /* Transfer/preflight plans are snapshots from before mutation. Return only a
+       fresh comparison after successful work, never a stale "push" after upload. */
+    if(ok&&(action==SYNC_JOB_RUN||action==SYNC_JOB_PUSH||action==SYNC_JOB_PULL||action==SYNC_JOB_RESOLVE))ok=inspect(&r);
     if(ok&&action==SYNC_JOB_BIND)ok=bind_pair(&r);
     if(ok&&action==SYNC_JOB_UNBIND){char *dataset=sync_utf8(request->pair.dataset);
         ok=dataset&&command(&r,"unbind","dataset",dataset,&reply);

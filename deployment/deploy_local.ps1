@@ -47,7 +47,7 @@ try {
 
     $configPath = Join-Path $repoRoot 'config\nova.json'
     $configInfo = Get-NovaConfigurationInfo -Path $configPath
-    Write-Host '[data] Configuration included in this deployment / 本次部署携带的使用数据'
+    Write-Host '[snapshot] Shared snapshot included in this deployment / 本次部署携带的共享快照'
     Show-NovaConfigurationInfo -Info $configInfo
 
     Write-Host '[1/4] Commit source changes / 提交源码改动'
@@ -97,7 +97,7 @@ try {
     Write-Host "Latest EXE: $(Join-Path $repoRoot 'build\packages\nova-desktop.exe')"
     Write-Host "ZIP: $zip"
     Write-Host "Config JSON: $configPath"
-    Write-Host 'For another computer: close NOVA, pull the source computer''s configuration commit, then build. Deploy does not pull remote data / 在另一台电脑：先关闭 NOVA，拉取源电脑提交的配置，再编译。部署脚本不会拉取远程数据。'
+    Write-Host 'For another computer: pull/build, then explicitly Import the snapshot / 在另一台电脑：拉取并编译后，显式 Import 共享快照。'
     exit 0
 }
 catch {
