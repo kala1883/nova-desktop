@@ -19,6 +19,7 @@
 #include "ssh_view.h"
 #include "terminal_view.h"
 #include "../platform/storage.h"
+#include "../platform/app_log.h"
 #include "../platform/ssh_credentials.h"
 #include "../i18n.h"
 
@@ -66,16 +67,18 @@ static int persist_server_change(ServerDialog *d,const SshServers *next,const Ss
     *error=0;
     if(!ssh_servers_valid(next)){store_save_ssh_servers(next);return SERVER_SAVE_CONFIG_ERROR;}
     int64_t id=login?login->server.id:removed_id;SshCredentialSnapshot previous;
+    nova_log_write(NOVA_LOG_INFO,"ssh_view","profile_update",L"server=%lld remove=%d",(long long)id,login==NULL);
     if(!ssh_credentials_snapshot(id,&previous,error,d->credential_store))return SERVER_SAVE_LOGIN_ERROR;
     BOOL ok=login?ssh_credentials_save(login,error,d->credential_store):ssh_credentials_delete(id,error,d->credential_store);
     int result=SERVER_SAVE_LOGIN_ERROR;
     if(ok){
         if(store_save_ssh_servers(next)){d->servers=*next;result=SERVER_SAVE_OK;}
-        else result=ssh_credentials_restore(id,&previous,error,d->credential_store)?SERVER_SAVE_CONFIG_ERROR:SERVER_SAVE_ROLLBACK_ERROR;
+        else {BOOL restored=ssh_credentials_restore(id,&previous,error,d->credential_store);nova_log_write(restored?NOVA_LOG_WARN:NOVA_LOG_ERROR,"ssh_view","profile_rollback",L"server=%lld ok=%d win32=%lu",(long long)id,restored,*error);result=restored?SERVER_SAVE_CONFIG_ERROR:SERVER_SAVE_ROLLBACK_ERROR;}
     }
     SecureZeroMemory(&previous,sizeof(previous));return result;
 }
 static BOOL save_result(HWND h,int result,DWORD error){
+    nova_log_write(result==SERVER_SAVE_OK?NOVA_LOG_INFO:NOVA_LOG_ERROR,"ssh_view","profile_saved",L"result=%d win32=%lu",result,error);
     if(result==SERVER_SAVE_OK)return TRUE;
     if(result==SERVER_SAVE_LOGIN_ERROR)credential_error(h,error);
     else if(result==SERVER_SAVE_ROLLBACK_ERROR){
@@ -206,7 +209,7 @@ typedef struct RemoteView {
     int terminal_columns,terminal_rows;BOOL terminal_resize;
     int64_t server_id;wchar_t path[SSH_PATH_CAP],request_path[SSH_PATH_CAP],other[SSH_PATH_CAP],local[MAX_PATH],pending_command[SSH_PATH_CAP];
     SshLogin login;SshEntry *entries;int count,job;BOOL busy,connected,runtime;volatile LONG stopping;
-    HANDLE thread,event,cancel,input_event;SshResult result;
+    HANDLE thread,event,cancel,input_event;SshResult result;NovaLogSpan log_job;
 } RemoteView;
 static int worker_count;
 static struct { int64_t server_id;wchar_t path[SSH_PATH_CAP];BOOL cut,valid; } clipboard;
@@ -267,6 +270,8 @@ static DWORD WINAPI remote_worker(void *context){
     RemoteView *v=context;SshClient *client=NULL;BOOL terminal=FALSE,activity=FALSE;char pending[65536];size_t length=0,offset=0;int columns=80,rows=24;
     for(;;){DWORD wake=terminal?ssh_client_terminal_wait(client,v->event,v->input_event,activity?0:INFINITE):WaitForSingleObject(v->event,INFINITE);if(InterlockedCompareExchange(&v->stopping,0,0))break;
         if(wake!=WAIT_OBJECT_0){terminal=terminal_pump(v,client,pending,&length,&offset,&columns,&rows,&activity);if(!terminal){ssh_client_close(client);client=NULL;}continue;}
+        NovaLogSpan span=v->log_job;
+        nova_log_write(NOVA_LOG_INFO,"ssh_view","worker_started",L"op=%ld job=%d",span.id,v->job);
         SshResult *r=&v->result;ZeroMemory(r,sizeof(*r));
         if(v->job==J_CONNECT){terminal=FALSE;SecureZeroMemory(pending,sizeof(pending));length=offset=0;ssh_client_close(client);client=ssh_client_connect(&v->login,v->cancel,r);if(client){ssh_client_set_progress(client,report_progress,v);ssh_client_list(client,v->request_path,r);}}
         else if(!client){r->code=1;lstrcpyW(r->error,nova_text(L"SSH 已断开；未执行操作。",L"SSH is disconnected; no operation was executed."));}
@@ -283,21 +288,26 @@ static DWORD WINAPI remote_worker(void *context){
         }
         if(r->code==3||(r->code&&(!ssh_client_healthy(client)||v->job==J_TERMINAL))){terminal=FALSE;ssh_client_close(client);client=NULL;}
         if(InterlockedCompareExchange(&v->stopping,0,0))break;
-        if(!PostMessageW(v->window,DONE,client!=NULL,0))break;
+        nova_log_write(r->code?NOVA_LOG_WARN:NOVA_LOG_INFO,"ssh_view","worker_result",L"op=%ld connection=%ld status=%d",span.id,ssh_client_log_id(client),r->code);
+        BOOL posted=PostMessageW(v->window,DONE,client!=NULL,0);DWORD post_error=posted?0:GetLastError();
+        nova_log_write(posted?NOVA_LOG_INFO:NOVA_LOG_ERROR,"ssh_view","completion_posted",L"op=%ld ok=%d win32=%lu",span.id,posted,post_error);
+        if(!posted)break;
     }
     SecureZeroMemory(pending,sizeof(pending));ssh_client_close(client);return 0;
 }
 static BOOL submit(RemoteView *v,int job){
-    if(v->busy)return FALSE;
-    if(!v->connected&&job!=J_CONNECT){show_status(v,nova_text(L"请先连接此服务器；未在本机执行任何操作。",L"Connect to this server first; nothing was executed locally."));return FALSE;}
+    if(v->busy){nova_log_write(NOVA_LOG_WARN,"ssh_view","request_rejected",L"job=%d reason=busy",job);return FALSE;}
+    if(!v->connected&&job!=J_CONNECT){nova_log_write(NOVA_LOG_WARN,"ssh_view","request_rejected",L"job=%d reason=disconnected",job);show_status(v,nova_text(L"请先连接此服务器；未在本机执行任何操作。",L"Connect to this server first; nothing was executed locally."));return FALSE;}
     if(!v->thread){
-        if(worker_count>=4){show_status(v,nova_text(L"最多同时使用 4 个远程标签，请先断开一个连接。",L"At most 4 remote tabs can be active. Disconnect one first."));return FALSE;}
-        v->thread=CreateThread(NULL,0,remote_worker,v,0,NULL);if(!v->thread){show_status(v,nova_text(L"无法启动 SSH 工作线程。",L"Unable to start SSH worker."));return FALSE;}worker_count++;
+        if(worker_count>=4){nova_log_write(NOVA_LOG_WARN,"ssh_view","request_rejected",L"job=%d reason=worker_limit",job);show_status(v,nova_text(L"最多同时使用 4 个远程标签，请先断开一个连接。",L"At most 4 remote tabs can be active. Disconnect one first."));return FALSE;}
+        v->thread=CreateThread(NULL,0,remote_worker,v,0,NULL);if(!v->thread){nova_log_write(NOVA_LOG_ERROR,"ssh_view","worker_create_failed",L"job=%d win32=%lu",job,GetLastError());show_status(v,nova_text(L"无法启动 SSH 工作线程。",L"Unable to start SSH worker."));return FALSE;}worker_count++;
     }
+    v->log_job=nova_log_begin("ssh_view","request",0);nova_log_write(NOVA_LOG_INFO,"ssh_view","request_accepted",L"op=%ld server=%lld job=%d",v->log_job.id,(long long)v->server_id,job);
     ResetEvent(v->cancel);v->job=job;v->busy=TRUE;controls_enabled(v);show_status(v,nova_text(L"正在处理…（远程写操作和命令不会自动重试）",L"Working… (remote writes and commands are never retried automatically)"));SetEvent(v->event);return TRUE;
 }
 static void stop_worker(RemoteView *v){
     if(v->thread){InterlockedExchange(&v->stopping,TRUE);SetEvent(v->cancel);SetEvent(v->event);WaitForSingleObject(v->thread,INFINITE);CloseHandle(v->thread);v->thread=NULL;worker_count--;InterlockedExchange(&v->stopping,FALSE);}
+    if(v->log_job.id){nova_log_write(NOVA_LOG_WARN,"ssh_view","request_discarded",L"op=%ld reason=stopping",v->log_job.id);nova_log_end(v->log_job,FALSE,ERROR_CANCELLED);v->log_job.id=0;}
     v->busy=v->connected=v->terminal_running=FALSE;controls_enabled(v);ssh_result_dispose(&v->result);SecureZeroMemory(v->login.secret,sizeof(v->login.secret));SecureZeroMemory(v->login.key_file,sizeof(v->login.key_file));
     SecureZeroMemory(v->pending_command,sizeof(v->pending_command));
     terminal_drain(v);EnterCriticalSection(&v->terminal_lock);SecureZeroMemory(v->terminal_input,sizeof(v->terminal_input));v->input_length=0;LeaveCriticalSection(&v->terminal_lock);
@@ -320,6 +330,9 @@ static void populate(RemoteView *v,SshResult *r){
     lstrcpyW(v->path,r->path);SendMessageW(GetParent(v->window),SSH_VIEW_NAVIGATED,(WPARAM)v->window,0);
 }
 static void finish(RemoteView *v,BOOL connected){
+    NovaLogSpan span=v->log_job;v->log_job.id=0;
+    nova_log_write(NOVA_LOG_INFO,"ssh_view","completion_consumed",L"op=%ld status=%d connected=%d",span.id,v->result.code,connected);
+    if(span.id)nova_log_end(span,v->result.code==0,v->result.cancelled?ERROR_CANCELLED:(DWORD)v->result.native_error);
     v->busy=FALSE;v->connected=connected;if(!connected)v->terminal_running=FALSE;SshResult *r=&v->result;
     if(r->code==2){
         wchar_t hash[80],message[768];MultiByteToWideChar(CP_ACP,0,r->fingerprint,-1,hash,80);swprintf(message,768,nova_text(L"首次连接到 %ls:%d。\n\nSHA256（十六进制）：\n%ls\n\n请通过可信渠道核对指纹。信任并连接？",L"First connection to %ls:%d.\n\nSHA256 (hexadecimal):\n%ls\n\nVerify this fingerprint through a trusted channel. Trust and connect?"),v->login.server.host,v->login.server.port,hash);
@@ -445,7 +458,7 @@ static LRESULT CALLBACK remote_proc(HWND h,UINT msg,WPARAM wp,LPARAM lp){
     case WM_SIZE:layout_view(v);return 0;
     case DONE:finish(v,wp!=0);return 0;
     case TERMINAL_OUTPUT:terminal_drain(v);return 0;
-    case TERMINAL_ENDED:{SshResult *result=(SshResult*)lp;terminal_drain(v);v->terminal_running=v->connected=FALSE;controls_enabled(v);wchar_t text[1200];
+    case TERMINAL_ENDED:{SshResult *result=(SshResult*)lp;nova_log_write(NOVA_LOG_INFO,"ssh_view","terminal_ended",L"status=%d exit=%d cancelled=%d",result->code,result->exit_code,result->cancelled);terminal_drain(v);v->terminal_running=v->connected=FALSE;controls_enabled(v);wchar_t text[1200];
         if(result->code)swprintf(text,1200,nova_text(L"终端连接已中断：%ls\r\n点击连接以重新打开；命令不会自动重试。",L"Terminal disconnected: %ls\r\nConnect to reopen; commands are never retried automatically."),result->error);
         else swprintf(text,1200,nova_text(L"终端已退出（退出码 %d）。点击连接以重新打开。",L"Terminal exited (code %d). Connect to reopen."),result->exit_code);
         char encoded[4800];int n=WideCharToMultiByte(CP_UTF8,0,text,-1,encoded,sizeof(encoded),NULL,NULL);terminal_view_feed(v->terminal,"\r\n",2);if(n>0)terminal_view_feed(v->terminal,encoded,(size_t)n-1);
@@ -457,7 +470,7 @@ static LRESULT CALLBACK remote_proc(HWND h,UINT msg,WPARAM wp,LPARAM lp){
         case V_CONNECT:{SshLogin *login=calloc(1,sizeof(*login));if(login){if(ssh_choose_server(h,v->server_id,login))ssh_view_connect(h,login);SecureZeroMemory(login,sizeof(*login));free(login);}return 0;}
         case V_DISCONNECT:stop_worker(v);show_status(v,nova_text(L"已断开。远端运行中的命令可能继续执行。",L"Disconnected. Commands already running remotely may continue."));return 0;
         case V_UPLOAD:transfer_dialog(v,TRUE);return 0;case V_DOWNLOAD:transfer_dialog(v,FALSE);return 0;
-        case V_CANCEL:SecureZeroMemory(v->pending_command,sizeof(v->pending_command));SetEvent(v->cancel);show_status(v,nova_text(L"正在取消等待；请随后刷新确认远端状态。",L"Cancelling waiting; refresh afterwards to check remote state."));return 0;
+        case V_CANCEL:nova_log_write(NOVA_LOG_WARN,"ssh_view","cancel_requested",L"op=%ld",v->log_job.id);SecureZeroMemory(v->pending_command,sizeof(v->pending_command));SetEvent(v->cancel);show_status(v,nova_text(L"正在取消等待；请随后刷新确认远端状态。",L"Cancelling waiting; refresh afterwards to check remote state."));return 0;
         case SSH_REFRESH:refresh_remote(v);return 0;
         }break;
     case WM_NOTIFY:

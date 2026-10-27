@@ -3,6 +3,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include "../src/ui/sync_manager.c"
+#include "log_capture.h"
 BOOL nova_english=FALSE;
 /* Fixture callbacks ensure this executable never accesses real login records. */
 BOOL ssh_choose_server(HWND h,int64_t id,SshLogin *login){(void)h;(void)id;(void)login;return FALSE;}
@@ -33,7 +34,7 @@ static void capture(HWND h,const wchar_t *file){
     RECT r;GetWindowRect(h,&r);int w=r.right-r.left,height=r.bottom-r.top;HDC dc=GetDC(h),memory=CreateCompatibleDC(dc);BITMAPINFO info={0};info.bmiHeader.biSize=sizeof(info.bmiHeader);info.bmiHeader.biWidth=w;info.bmiHeader.biHeight=-height;info.bmiHeader.biPlanes=1;info.bmiHeader.biBitCount=32;void *pixels=NULL;HBITMAP bitmap=CreateDIBSection(dc,&info,DIB_RGB_COLORS,&pixels,NULL,0);assert(bitmap);HGDIOBJ old=SelectObject(memory,bitmap);RedrawWindow(h,NULL,NULL,RDW_INVALIDATE|RDW_ERASE|RDW_ALLCHILDREN|RDW_UPDATENOW);assert(PrintWindow(h,memory,0));BITMAPFILEHEADER header={0};header.bfType=0x4d42;header.bfOffBits=sizeof(header)+sizeof(info.bmiHeader);header.bfSize=header.bfOffBits+w*height*4;HANDLE output=CreateFileW(file,GENERIC_WRITE,0,NULL,CREATE_ALWAYS,0,NULL);DWORD n;assert(output!=INVALID_HANDLE_VALUE);assert(WriteFile(output,&header,sizeof(header),&n,NULL)&&WriteFile(output,&info.bmiHeader,sizeof(info.bmiHeader),&n,NULL)&&WriteFile(output,pixels,w*height*4,&n,NULL));CloseHandle(output);SelectObject(memory,old);DeleteObject(bitmap);DeleteDC(memory);ReleaseDC(h,dc);
 }
 int wmain(int argc,wchar_t **argv){
-    SetProcessDPIAware();assert(SUCCEEDED(OleInitialize(NULL)));wchar_t base[MAX_PATH],directory_path[MAX_PATH],work[MAX_PATH];assert(GetTempPathW(MAX_PATH,base));assert(GetTempFileNameW(base,L"nsu",0,directory_path));assert(DeleteFileW(directory_path)&&CreateDirectoryW(directory_path,NULL));assert(store_open(directory_path));swprintf(work,MAX_PATH,L"%ls\\synthetic-work",directory_path);assert(CreateDirectoryW(work,NULL));
+    SetProcessDPIAware();assert(SUCCEEDED(OleInitialize(NULL)));wchar_t base[MAX_PATH],directory_path[MAX_PATH],work[MAX_PATH];assert(GetTempPathW(MAX_PATH,base));assert(GetTempFileNameW(base,L"nsu",0,directory_path));assert(DeleteFileW(directory_path)&&CreateDirectoryW(directory_path,NULL));assert(nova_log_init(directory_path));assert(store_open(directory_path));swprintf(work,MAX_PATH,L"%ls\\synthetic-work",directory_path);assert(CreateDirectoryW(work,NULL));
     SyncSettings *initial=calloc(1,sizeof(*initial));assert(initial);sync_settings_default(initial);initial->server_id=1;wcscpy(initial->node_id,L"synthetic-node");wcscpy(initial->name,L"User device name");initial->count=1;SyncPair *p=&initial->pairs[0];wcscpy(p->id,L"fixture-pair");wcscpy(p->dataset,L"fixture-data");wcscpy(p->name,L"User folder name");wcscpy(p->group,L"Fixture group");lstrcpyW(p->directory,work);wcscpy(p->excludes,L".git;node_modules");p->paused=true;assert(sync_settings_save(initial));free(initial);
     SshServers fixture_servers={0};fixture_servers.count=3;for(int i=0;i<3;i++){SshServer *server=&fixture_servers.items[i];server->id=i+1;server->port=22;swprintf(server->name,SSH_NAME_CAP,L"Synthetic server %d",i+1);swprintf(server->host,256,L"server%d.example.invalid",i+1);wcscpy(server->user,L"fixture");wcscpy(server->directory,L"/");}assert(store_save_ssh_servers(&fixture_servers));
     login_backend=fake_login;target_login_backend=fake_target_login;run_backend=fake_run;HWND parent=CreateWindowExW(0,L"STATIC",L"NOVA sync fixture",WS_OVERLAPPEDWINDOW,0,0,400,300,NULL,NULL,GetModuleHandleW(NULL),NULL);assert(parent&&sync_manager_open(parent));pump();
@@ -119,5 +120,5 @@ int wmain(int argc,wchar_t **argv){
         assert(IsWindowVisible(GetDlgItem(window,C_CLOSE))&&IsWindowVisible(GetDlgItem(window,C_REFRESH)));
     }
     if(argc>1&&!wcscmp(argv[1],L"--show")){SetWindowTextW(window,L"NOVA 原生同步预览 · Synthetic data / no network");while(IsWindowVisible(window)){pump();Sleep(30);}}
-    sync_manager_shutdown();DestroyWindow(parent);store_close();OleUninitialize();puts("PASS native sync UI: registration, folder pairing/save, language, preserved user names, bounded cloud validation, worker lifecycle (fake backend/temporary state only)");return 0;
+    sync_manager_shutdown();DestroyWindow(parent);store_close();{const char *events[]={"component=sync_ui","event=worker_started","event=completion_consumed","event=request_result"};check_diagnostics(directory_path,events,4);}OleUninitialize();puts("PASS native sync UI: registration, folder pairing/save, language, preserved user names, bounded cloud validation, worker lifecycle (fake backend/temporary state only)");return 0;
 }

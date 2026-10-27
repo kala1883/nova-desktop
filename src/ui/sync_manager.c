@@ -23,6 +23,7 @@
 #include "../platform/sync_client.h"
 #include "../platform/sync_json.h"
 #include "../platform/storage.h"
+#include "../platform/app_log.h"
 #include "../platform/ssh_credentials.h"
 #include "../../third_party/sqlite/sqlite3.h"
 #include "../i18n.h"
@@ -45,7 +46,7 @@ typedef struct CloudBinding { wchar_t dataset[SYNC_ID_CAP],path[SYNC_PATH_CAP];
     } CloudBinding;
 typedef struct SyncJob {
     SyncRequest request;
-    SyncResult result;
+    SyncResult result;NovaLogSpan log;
     HANDLE worker,cancel,delete_done;
     CRITICAL_SECTION lock;
     SyncProgress latest;
@@ -198,7 +199,7 @@ static void bytes(wchar_t *out,size_t cap,uint64_t n){const wchar_t *units[]={L"
         }swprintf(out,cap,L"%.1f %ls",x,units[unit]);
     }
 static const wchar_t *phase_name(SyncPhase phase){switch(phase){case SYNC_CONNECT:return nova_text(L"连接服务器",L"Connecting");
-        case SYNC_SCAN:return nova_text(L"检查文件",L"Checking files");
+        case SYNC_SCAN:return nova_text(L"校验本机文件（无传输）",L"Checking local files (no transfer)");
         case SYNC_UPLOAD:return nova_text(L"上传缺失块",L"Uploading missing blocks");
         case SYNC_DOWNLOAD:return nova_text(L"下载缺失块",L"Downloading missing blocks");
         case SYNC_APPLY:return nova_text(L"校验并保存",L"Verifying and saving");
@@ -237,7 +238,7 @@ static const wchar_t *action_name(int action){
     default:return nova_text(L"双向同步",L"Sync");
     }
 }
-static BOOL persist(const SyncSettings *next){if(!sync_settings_save(next)){text(store_error());
+static BOOL persist(const SyncSettings *next){if(!sync_settings_save(next)){nova_log_write(NOVA_LOG_ERROR,"sync","settings_save_failed",L"win32=%lu",GetLastError());text(store_error());
         return FALSE;
         }settings=*next;
     return TRUE;
@@ -546,8 +547,10 @@ static BOOL recycle_callback(void *context,const wchar_t *path,uint64_t size,uin
     return j->delete_ok;
 }
 static DWORD WINAPI worker(void *context){SyncJob *j=context;
+    NovaLogSpan span=j->log;nova_log_write(NOVA_LOG_INFO,"sync_ui","worker_started",L"op=%ld action=%d",span.id,j->action);
     run_backend(&j->request,j->action,&j->result);
-    PostMessageW(j->target,DONE_MESSAGE,0,0);
+    BOOL posted=PostMessageW(j->target,DONE_MESSAGE,0,0);
+    nova_log_write(posted?NOVA_LOG_INFO:NOVA_LOG_ERROR,"sync_ui","completion_posted",L"op=%ld ok=%d win32=%lu",span.id,posted,posted?0:GetLastError());
     return 0;
     }
 static void pin_target(const SshServer *s,wchar_t *target){swprintf(target,384,L"NOVA Desktop SSH host:%ls:%d",s->host,s->port);
@@ -577,8 +580,8 @@ static BOOL login_from_profile(int64_t id,BOOL interactive,SshLogin *login){
 }
 static BOOL login_for_job(BOOL interactive,SshLogin *login){return login_from_profile(settings.server_id,interactive,login);
     }
-static BOOL start_job(int action,BOOL interactive){
-    if(job||!ready)return FALSE;
+static BOOL start_job_impl(int action,BOOL interactive,NovaLogSpan span){
+    if(job||!ready){nova_log_write(NOVA_LOG_WARN,"sync_ui","request_rejected",L"op=%ld action=%d reason=busy_or_not_ready",span.id,action);return FALSE;}
     if(action<SYNC_JOB_SERVER_PROBE&&migration_pending){text(nova_text(L"请先继续迁移或恢复旧服务器，断点未解决前暂停普通同步。",L"Resume migration or restore the source before ordinary synchronization."));
         return FALSE;
         }
@@ -592,21 +595,21 @@ static BOOL start_job(int action,BOOL interactive){
     if(folder_action&&(selected<0||selected>=settings.count))return FALSE;
     SyncJob *j=calloc(1,sizeof(*j));
     if(!j)return FALSE;
-    j->action=action;
+    j->action=action;j->log=span;j->request.log_parent=span.id;
     j->index=folder_action?selected:-1;
     j->interactive=interactive;
     j->target=window;
     BOOL admin=action>=SYNC_JOB_SERVER_PROBE;
     if(admin&&action!=SYNC_JOB_SERVER_RESTORE&&!candidate_id){select_server();
-        if(!candidate_id){free(j);
+        if(!candidate_id){nova_log_write(NOVA_LOG_WARN,"sync_ui","request_rejected",L"op=%ld reason=candidate_cancelled",span.id);free(j);
             return FALSE;
             }}
-    if((!admin||action==SYNC_JOB_SERVER_MIGRATE||action==SYNC_JOB_SERVER_RESTORE)&&!login_backend(interactive,&j->request.login)){SecureZeroMemory(j,sizeof(*j));
+    if((!admin||action==SYNC_JOB_SERVER_MIGRATE||action==SYNC_JOB_SERVER_RESTORE)&&!login_backend(interactive,&j->request.login)){nova_log_write(NOVA_LOG_WARN,"sync_ui","request_rejected",L"op=%ld reason=login_unavailable",span.id);SecureZeroMemory(j,sizeof(*j));
         free(j);
         text(nova_text(L"请选择服务器并在本机保存登录信息。自动任务未连接。",L"Select a server and save login details locally. Automatic work did not connect."));
         return FALSE;
         }
-    if(admin&&action!=SYNC_JOB_SERVER_RESTORE&&!target_login_backend(candidate_id,interactive,&j->request.target_login)){SecureZeroMemory(j,sizeof(*j));
+    if(admin&&action!=SYNC_JOB_SERVER_RESTORE&&!target_login_backend(candidate_id,interactive,&j->request.target_login)){nova_log_write(NOVA_LOG_WARN,"sync_ui","request_rejected",L"op=%ld reason=target_login_unavailable",span.id);SecureZeroMemory(j,sizeof(*j));
         free(j);
         return FALSE;
         }
@@ -670,6 +673,12 @@ static BOOL start_job(int action,BOOL interactive){
     text(nova_text(L"正在连接…",L"Connecting…"));
     return TRUE;
 }
+static BOOL start_job(int action,BOOL interactive){
+    NovaLogSpan span=nova_log_begin("sync_ui","request",0);BOOL ok=start_job_impl(action,interactive,span);
+    nova_log_write(ok?NOVA_LOG_INFO:NOVA_LOG_WARN,"sync_ui","request_result",L"op=%ld action=%d interactive=%d accepted=%d",span.id,action,interactive,ok);
+    if(!ok)nova_log_end(span,FALSE,GetLastError());
+    return ok;
+}
 static void recycle_on_ui(void){
     if(!job)return;
     SyncJob *j=job;
@@ -690,10 +699,11 @@ static void recycle_on_ui(void){
             if(SUCCEEDED(hr))hr=IFileOperation_PerformOperations(operation);
             if(SUCCEEDED(hr))hr=IFileOperation_GetAnyOperationsAborted(operation,&aborted);
             j->delete_ok=SUCCEEDED(hr)&&!aborted;
+            nova_log_write(j->delete_ok?NOVA_LOG_INFO:NOVA_LOG_WARN,"sync_ui","recycle_shell_result",L"op=%ld hresult=%lu aborted=%d",j->log.id,(DWORD)hr,aborted);
             if(item)IShellItem_Release(item);
             if(operation)IFileOperation_Release(operation);
         }
-    }SetEvent(j->delete_done);
+    }nova_log_write(j->delete_ok?NOVA_LOG_INFO:NOVA_LOG_WARN,"sync_ui","recycle_result",L"op=%ld ok=%d",j->log.id,j->delete_ok);SetEvent(j->delete_done);
 }
 static void finish_job(void){
     if(!job)return;
@@ -848,6 +858,8 @@ static void finish_job(void){
         }
         if(j->result.failure==SYNC_NETWORK||j->result.failure==SYNC_STORAGE||j->result.failure==SYNC_CANCELLED||j->result.failure==SYNC_MOVED||j->result.failure==SYNC_FROZEN||j->result.failure==SYNC_UPGRADE)batch_action=0;
     }
+    nova_log_write(NOVA_LOG_INFO,"sync_ui","completion_consumed",L"op=%ld failure=%d shutting_down=%d retry=%d",j->log.id,j->result.failure,shutting_down,retry);
+    nova_log_end(j->log,j->result.failure==SYNC_OK,j->result.failure==SYNC_CANCELLED?ERROR_CANCELLED:j->result.native_error);
     CloseHandle(j->worker);
     CloseHandle(j->cancel);
     CloseHandle(j->delete_done);
@@ -1024,7 +1036,9 @@ static void save_pair(void){
     if(!sync_settings_valid(&next)){text(nova_text(L"目录名称、同步组或路径重复/无效，原配置保留。",L"Duplicate or invalid folder name, group or path; configuration preserved."));
         return;
         }
+    BOOL path_changed=selected>=settings.count||wcscmp(settings.pairs[selected].directory,p->directory)!=0;
     if(persist(&next)){new_index=-1;
+        nova_log_write(NOVA_LOG_INFO,"sync","binding_saved",L"path_changed=%d metadata_only=1 deletes=%d automatic=%d",path_changed,p->sync_deletes,!p->paused);
         folder_checked[selected]=TRUE;editing=FALSE;
         invalidate_comparison(selected);bind_failed[selected]=FALSE;folder_codes[selected]=SYNC_OK;folder_details[selected][0]=0;
         populate_pairs();
@@ -1622,7 +1636,7 @@ static LRESULT CALLBACK window_proc(HWND h,UINT message,WPARAM wp,LPARAM lp){
                     populate_pairs();
                     controls();
                     }}break;
-        case C_PAUSE:batch_action=0;if(job)SetEvent(job->cancel);controls();break;
+        case C_PAUSE:batch_action=0;if(job){nova_log_write(NOVA_LOG_WARN,"sync_ui","cancel_requested",L"op=%ld",job->log.id);SetEvent(job->cancel);}controls();break;
         case C_CLOSE:SendMessageW(h,WM_CLOSE,0,0);
             break;
         }return 0;

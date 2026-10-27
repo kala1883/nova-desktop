@@ -44,6 +44,8 @@ try {
     }
     Copy-Item -LiteralPath (Join-Path $sourceRoot '.gitignore') -Destination $fixtureRepo
     foreach ($privateName in @('runtime.json','runtime.base.json','runtime.seed.json','runtime.backup.json','local.json','nova.migration.json')) { [IO.File]::WriteAllText((Join-Path $fixtureConfig $privateName),'synthetic private data') }
+    New-Item -ItemType Directory -Path (Join-Path $fixtureConfig 'logs') -Force | Out-Null
+    foreach ($logName in @('nova.log','nova.previous.log')) { [IO.File]::WriteAllText((Join-Path $fixtureConfig ('logs/'+$logName)),'synthetic private diagnostics') }
     New-Item -ItemType Directory -Path (Join-Path $fixtureRepo 'third_party\sqlite') -Force | Out-Null
     Set-Content -LiteralPath (Join-Path $fixtureRepo 'third_party\sqlite\sqlite3.c') -Value '/* fixture */' -Encoding ASCII
     New-Item -ItemType Directory -Path (Join-Path $fixtureRepo 'third_party/libssh2/src'), (Join-Path $fixtureRepo 'third_party/libssh2/include') -Force | Out-Null
@@ -118,7 +120,7 @@ int main(int argc,char **argv){
     try {
         # Windows PowerShell 5 uses backslashes in ZIP directory entries.
         $entryNames = @($archive.Entries | ForEach-Object { $_.FullName.Replace('\','/') })
-        foreach ($privateName in @('runtime.json','runtime.base.json','runtime.seed.json','runtime.backup.json','local.json','nova.migration.json')) { Check ($entryNames -notcontains ('config/'+$privateName)) "Private data leaked into package: $privateName"; Check (-not (Invoke-FixtureGit -gitArgs @('-C',$fixtureRepo,'ls-files','--',('config/'+$privateName)))) "Private data leaked into Git: $privateName" }
+        foreach ($privateName in @('runtime.json','runtime.base.json','runtime.seed.json','runtime.backup.json','local.json','nova.migration.json','logs/nova.log','logs/nova.previous.log')) { Check ($entryNames -notcontains ('config/'+$privateName)) "Private data leaked into package: $privateName"; Check (-not (Invoke-FixtureGit -gitArgs @('-C',$fixtureRepo,'ls-files','--',('config/'+$privateName)))) "Private data leaked into Git: $privateName" }
         foreach ($name in @('nova-desktop.exe','LICENSE','THIRD_PARTY_NOTICES.txt','NOTICE.md','NOTICE.zh-CN.md','revision.txt','config/nova.json','sync/README.md','sync/server/sync_server.py','deployment/deploy-sync-server.ps1','deployment/config_snapshot.bat','deployment/config_snapshot.ps1','deployment/configuration_merge.ps1')) { Check ($entryNames -contains $name) "Archive missing $name" }
     }
     finally { $archive.Dispose() }

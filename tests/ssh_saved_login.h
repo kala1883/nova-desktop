@@ -21,7 +21,7 @@ static void test_saved_login_dialog(const wchar_t *directory){
     SendMessageW(dialog,WM_COMMAND,S_FORGET,0);assert_login_field(dialog,S_KEY,L"");assert_login_field(dialog,S_SECRET,L"");server_fields(dialog,d);assert_login_field(dialog,S_SECRET,L"");
     SetDlgItemTextW(dialog,S_SECRET,L"original-synthetic-secret");assert(save_server(dialog,d));
     SshServers *next=malloc(sizeof(*next));assert(next);*next=d->servers;lstrcpyW(next->items[0].name,L"Must roll back");SshLogin changed={0};changed.server=next->items[0];lstrcpyW(changed.secret,L"must-not-survive-failed-save");
-    wchar_t file[MAX_PATH];swprintf(file,MAX_PATH,L"%ls\\nova.json",directory);HANDLE locked=CreateFileW(file,GENERIC_READ,FILE_SHARE_READ,NULL,OPEN_EXISTING,0,NULL);assert(locked!=INVALID_HANDLE_VALUE);DWORD error=0;
+    wchar_t file[MAX_PATH];swprintf(file,MAX_PATH,L"%ls\\runtime.json",directory);HANDLE locked=CreateFileW(file,GENERIC_READ,FILE_SHARE_READ,NULL,OPEN_EXISTING,0,NULL);assert(locked!=INVALID_HANDLE_VALUE);DWORD error=0;
     assert(persist_server_change(d,next,&changed,0,&error)==SERVER_SAVE_CONFIG_ERROR);assert(!wcscmp(d->servers.items[0].name,L"Renamed fixture"));SshLogin loaded={0};loaded.server=d->servers.items[0];BOOL found=FALSE;assert(ssh_credentials_load(&loaded,&found,&error,&backend)&&found&&!wcscmp(loaded.secret,L"original-synthetic-secret"));
     *next=d->servers;changed.server.id=999;lstrcpyW(changed.server.name,L"Fresh fixture");next->items[next->count++]=changed.server;
     assert(persist_server_change(d,next,&changed,0,&error)==SERVER_SAVE_CONFIG_ERROR);assert(ssh_credentials_load(&changed,&found,&error,&backend)&&!found);

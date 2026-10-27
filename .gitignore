@@ -18,3 +18,4 @@ __pycache__/
 /config/.snapshot-*/
 /config/.nova-*.tmp
 /config/sync/
+/config/logs/

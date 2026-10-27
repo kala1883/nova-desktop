@@ -18,6 +18,7 @@
 #include "file_manager.h"
 #include "ssh_view.h"
 #include "../platform/storage.h"
+#include "../platform/app_log.h"
 #include "../i18n.h"
 
 #define FM_CLASS L"NovaFileManager"
@@ -53,6 +54,7 @@ typedef struct Tab {
     HWND host;
     DWORD cookie;
     BOOL advised, pending, remote;
+    NovaLogSpan navigation_log;
     ULONGLONG hidden_since;
     wchar_t *history[HISTORY_LIMIT];
     int history_count, history_pos, travel_target;
@@ -123,13 +125,23 @@ static void focus_view(Tab *t){
         IShellView_UIActivate(view,SVUIA_ACTIVATE_FOCUS);IShellView_Release(view);
     }
 }
+static void navigation_end(Tab *t,BOOL ok,DWORD code){
+    if(t->navigation_log.id){NovaLogSpan span=t->navigation_log;t->navigation_log.id=0;nova_log_end(span,ok,code);}
+}
+static void log_tab(Tab *t,const char *event,LONG operation){
+    int pane=-1,tab=-1;
+    for(int i=0;t&&i<4;i++)if(t->pane==&fm.panes[i]){pane=i;for(int j=0;j<t->pane->count;j++)if(t->pane->items[j]==t){tab=j;break;}break;}
+    nova_log_write(NOVA_LOG_INFO,"files",event,L"op=%ld pane=%d tab=%d remote=%d",operation,pane,tab,t&&t->remote);
+}
 static HRESULT navigate(Tab *t,const wchar_t *location){
     if(t&&t->remote)return ensure_browser(t)&&ssh_view_navigate(t->host,location)?S_OK:E_FAIL;
     if(!t||!t->browser)return E_FAIL;
+    navigation_end(t,FALSE,ERROR_CANCELLED);t->navigation_log=nova_log_begin("files","navigate",0);
+    log_tab(t,"navigation_requested",t->navigation_log.id);
     PIDLIST_ABSOLUTE id=NULL;
     HRESULT hr=SHParseDisplayName(location,NULL,&id,0,NULL);
     if(SUCCEEDED(hr)){hr=IExplorerBrowser_BrowseToIDList(t->browser,id,SBSP_ABSOLUTE);CoTaskMemFree(id);}
-    if(FAILED(hr))failure(nova_text(L"无法打开目录",L"Unable to open the folder"),hr);
+    if(FAILED(hr)){navigation_end(t,FALSE,(DWORD)hr);failure(nova_text(L"无法打开目录",L"Unable to open the folder"),hr);}
     return hr;
 }
 static BOOL filesystem_directory(const wchar_t *location,wchar_t *directory){
@@ -162,7 +174,7 @@ static BOOL relative_directory(Tab *t,const wchar_t *input,wchar_t *resolved){
 static BOOL location_syntax(const wchar_t *value){
     return !PathIsRelativeW(value)||!wcsncmp(value,L"shell:",6)||!wcsncmp(value,L"::{",3)||value[0]==L'\\'||wcschr(value,L'\\')||wcschr(value,L'/');
 }
-static BOOL run_command(Tab *t,const wchar_t *command){
+static BOOL run_command_impl(Tab *t,const wchar_t *command){
     if(t&&t->remote)return ensure_browser(t)&&ssh_view_run(t->host,command);
     wchar_t directory[LOCATION_SIZE],parameters[LOCATION_SIZE+32];command_directory(t,directory);
     if(wcslen(command)+16>=sizeof(parameters)/sizeof(parameters[0])){status_text(nova_text(L"命令过长，请缩短后重试。",L"The command is too long. Shorten it and try again."));return FALSE;}
@@ -171,6 +183,11 @@ static BOOL run_command(Tab *t,const wchar_t *command){
     SHELLEXECUTEINFOW execute={0};execute.cbSize=sizeof(execute);execute.fMask=SEE_MASK_FLAG_NO_UI;execute.hwnd=fm.window;execute.lpVerb=L"open";execute.lpFile=L"cmd.exe";execute.lpParameters=parameters;execute.lpDirectory=directory;execute.nShow=SW_SHOWNORMAL;
     if(!ShellExecuteExW(&execute)){wchar_t message[320];swprintf(message,320,nova_text(L"无法在当前目录启动命令（Windows 错误 %lu）。",L"Unable to start the command in this folder (Windows error %lu)."),GetLastError());status_text(message);return FALSE;}
     wchar_t message[320];swprintf(message,320,nova_text(L"已在 %ls 中启动命令窗口。",L"Command window started in %ls."),directory);status_text(message);return TRUE;
+}
+static BOOL run_command(Tab *t,const wchar_t *command){
+    NovaLogSpan span=nova_log_begin("files","command_dispatch",0);log_tab(t,"command_target",span.id);BOOL ok=run_command_impl(t,command);
+    nova_log_write(ok?NOVA_LOG_INFO:NOVA_LOG_WARN,"files","command_accepted",L"op=%ld accepted=%d remote=%d completion_unknown=%d",span.id,ok,t&&t->remote,ok);
+    return nova_log_end(span,ok,ok?0:GetLastError());
 }
 static BOOL set_default_command(int index){
     if(index<0||index>=fm.commands.count)return FALSE;
@@ -229,7 +246,9 @@ static ULONG STDMETHODCALLTYPE event_release(IExplorerBrowserEvents *self){
     Tab *t=(Tab*)self;LONG n=InterlockedDecrement(&t->references);if(!n)free(t);return (ULONG)n;
 }
 static HRESULT STDMETHODCALLTYPE event_pending(IExplorerBrowserEvents *self,PCIDLIST_ABSOLUTE id){
-    (void)id;((Tab*)self)->pending=TRUE;return S_OK;
+    (void)id;Tab *t=(Tab*)self;t->pending=TRUE;
+    if(!t->navigation_log.id)t->navigation_log=nova_log_begin("files","navigate",0);
+    nova_log_write(NOVA_LOG_INFO,"files","navigation_pending",L"op=%ld",t->navigation_log.id);return S_OK;
 }
 static HRESULT STDMETHODCALLTYPE event_created(IExplorerBrowserEvents *self,IShellView *view){
     Tab *t=(Tab*)self;IFolderView2 *folder=NULL;
@@ -250,7 +269,7 @@ static void record_history(Tab *t){
     t->travel_target=-1;
 }
 static HRESULT STDMETHODCALLTYPE event_complete(IExplorerBrowserEvents *self,PCIDLIST_ABSOLUTE id){
-    Tab *t=(Tab*)self;PWSTR value=NULL;t->pending=FALSE;
+    Tab *t=(Tab*)self;PWSTR value=NULL;t->pending=FALSE;navigation_end(t,TRUE,0);
     if(SUCCEEDED(SHGetNameFromIDList(id,SIGDN_DESKTOPABSOLUTEPARSING,&value))){lstrcpynW(t->location,value,LOCATION_SIZE);CoTaskMemFree(value);}
     if(SUCCEEDED(SHGetNameFromIDList(id,SIGDN_NORMALDISPLAY,&value))){lstrcpynW(t->title,value,128);CoTaskMemFree(value);}
     record_history(t);
@@ -262,12 +281,13 @@ static HRESULT STDMETHODCALLTYPE event_complete(IExplorerBrowserEvents *self,PCI
     return S_OK;
 }
 static HRESULT STDMETHODCALLTYPE event_failed(IExplorerBrowserEvents *self,PCIDLIST_ABSOLUTE id){
-    (void)id;Tab *t=(Tab*)self;t->pending=FALSE;t->travel_target=-1;
+    (void)id;Tab *t=(Tab*)self;t->pending=FALSE;t->travel_target=-1;navigation_end(t,FALSE,(DWORD)E_FAIL);
     failure(nova_text(L"目录加载失败；原目录保留，可在地址栏输入其他路径",L"Folder loading failed; the previous folder remains open. Enter another path in the address bar"),E_FAIL);return S_OK;
 }
 static IExplorerBrowserEventsVtbl event_vtable={event_query,event_add,event_release,event_pending,event_created,event_complete,event_failed};
 static void suspend_tab(Tab *t){
     if(!t||!t->browser)return;
+    navigation_end(t,FALSE,ERROR_CANCELLED);nova_log_write(NOVA_LOG_INFO,"files","view_suspended",L"remote=%d",t->remote);
     IFolderView2 *view=NULL;
     if(SUCCEEDED(IExplorerBrowser_GetCurrentView(t->browser,&IID_IFolderView2,(void**)&view))){
         IFolderView2_GetViewModeAndIconSize(view,&t->view_mode,&t->icon_size);IFolderView2_Release(view);
@@ -284,7 +304,7 @@ static void release_tab(Tab *t){
     for(int i=0;i<t->history_count;i++)free(t->history[i]);
     IExplorerBrowserEvents_Release(&t->events);
 }
-static BOOL ensure_browser(Tab *t){
+static BOOL ensure_browser_impl(Tab *t){
     if(!t)return FALSE;
     if(t->remote){if(!t->host){t->host=ssh_view_create(t->pane->window,fm.font,t->location);if(t->host){ssh_view_title(t->host,t->title,128);for(int i=0;i<t->pane->count;i++)if(t->pane->items[i]==t){TCITEMW item={0};item.mask=TCIF_TEXT;item.pszText=t->title;TabCtrl_SetItem(t->pane->tabs,i,&item);}}else status_text(nova_text(L"无法创建远程文件视图；请检查服务器配置和路径。",L"Unable to create the remote file view; check the server profile and path."));}return t->host!=NULL;}
     if(t->browser)return TRUE;
@@ -333,15 +353,20 @@ static void close_tab(Pane *p){
     select_tab(p,index<p->count?index:p->count-1);save_session();focus_view(current(p));
 }
 static void shell_verb(Tab *t,const char *verb,BOOL background){
+    NovaLogSpan span=nova_log_begin("files","shell_dispatch",0);
+    log_tab(t,"shell_target",span.id);
+    nova_log_write(NOVA_LOG_INFO,"files","shell_requested",L"op=%ld verb=%hs background=%d",span.id,verb,background);
     IShellView *view=NULL;IContextMenu *menu=NULL;
-    if(!t||!t->browser||FAILED(IExplorerBrowser_GetCurrentView(t->browser,&IID_IShellView,(void**)&view)))return;
-    HRESULT hr=IShellView_GetItemObject(view,background?SVGIO_BACKGROUND:SVGIO_SELECTION,&IID_IContextMenu,(void**)&menu);
+    HRESULT hr=t&&t->browser?IExplorerBrowser_GetCurrentView(t->browser,&IID_IShellView,(void**)&view):E_FAIL;
+    if(FAILED(hr)){nova_log_end(span,FALSE,(DWORD)hr);return;}
+    hr=IShellView_GetItemObject(view,background?SVGIO_BACKGROUND:SVGIO_SELECTION,&IID_IContextMenu,(void**)&menu);
     if(SUCCEEDED(hr)){
         HMENU popup=CreatePopupMenu();IContextMenu_QueryContextMenu(menu,popup,0,1,0x7fff,CMF_NORMAL|CMF_CANRENAME);
         CMINVOKECOMMANDINFO info={0};info.cbSize=sizeof(info);info.hwnd=fm.window;info.lpVerb=verb;info.nShow=SW_SHOWNORMAL;
         hr=IContextMenu_InvokeCommand(menu,&info);DestroyMenu(popup);IContextMenu_Release(menu);
     }
     IShellView_Release(view);
+    nova_log_write(SUCCEEDED(hr)?NOVA_LOG_INFO:NOVA_LOG_WARN,"files","shell_accepted",L"op=%ld accepted=%d hresult=%lu completion_unknown=%d",span.id,SUCCEEDED(hr),(DWORD)hr,SUCCEEDED(hr));nova_log_end(span,SUCCEEDED(hr),(DWORD)hr);
     if(FAILED(hr))failure(nova_text(L"操作未完成，请选择文件或使用文件视图的右键菜单",L"The operation did not complete. Select a file or use the file view context menu"),hr);
 }
 static void refresh(Tab *t){
@@ -563,6 +588,7 @@ static BOOL reorder_tab(Pane *p,int source,int insertion){
     if(destination<source)memmove(&p->items[destination+1],&p->items[destination],(size_t)(source-destination)*sizeof(p->items[0]));
     else memmove(&p->items[source],&p->items[source+1],(size_t)(destination-source)*sizeof(p->items[0]));
     p->items[destination]=moved;TabCtrl_DeleteAllItems(p->tabs);
+    nova_log_write(NOVA_LOG_INFO,"files","tab_reordered",L"source=%d destination=%d",source,destination);
     for(int i=0;i<p->count;i++){TCITEMW item={0};item.mask=TCIF_TEXT;item.pszText=p->items[i]->title;TabCtrl_InsertItem(p->tabs,i,&item);if(p->items[i]==selected)p->selected=i;}
     TabCtrl_SetCurSel(p->tabs,p->selected);InvalidateRect(p->tabs,NULL,FALSE);save_session();NotifyWinEvent(EVENT_OBJECT_REORDER,p->tabs,OBJID_CLIENT,CHILDID_SELF);
     wchar_t message[240];swprintf(message,240,nova_text(L"已将“%ls”移到第 %d 个标签。",L"Moved \"%ls\" to tab %d."),moved->title,destination+1);status_text(message);return TRUE;
@@ -873,6 +899,7 @@ static void save_session(void){
 }
 static BOOL flush_session(void){
     KillTimer(fm.window,SAVE_TIMER);if(!fm.dirty)return TRUE;
+    nova_log_write(NOVA_LOG_INFO,"files","session_save",L"layout=%d tabs=%d favorites=%d",fm.layout,fm.panes[0].count+fm.panes[1].count+fm.panes[2].count+fm.panes[3].count,fm.favorite_count);
     if(!store_begin()){status_text(store_error());return FALSE;}
     BOOL ok=TRUE;wchar_t section[32],key[32];
     ok=store_set_int(L"files",L"Manager",L"Layout",fm.layout)&&ok;
@@ -1055,3 +1082,10 @@ BOOL file_manager_message(MSG *msg){
 void file_manager_close(void){if(fm.window)SendMessageW(fm.window,WM_CLOSE,0,0);}
 void file_manager_hide(void){if(fm.window){cancel_splitter(FALSE);for(int i=0;i<4;i++)cancel_tab_drag(&fm.panes[i]);if(fm.command_window)DestroyWindow(fm.command_window);save_session();flush_session();ShowWindow(fm.window,SW_HIDE);evict_views(GetTickCount64());}}
 void file_manager_update_visibility(void){if(fm.window)arrange();}
+
+static BOOL ensure_browser(Tab *t){
+    BOOL existing=t&&(t->browser||t->host);
+    if(existing)return ensure_browser_impl(t);
+    NovaLogSpan span=nova_log_begin("files","view_create",0);log_tab(t,"view_requested",span.id);BOOL ok=ensure_browser_impl(t);
+    return nova_log_end(span,ok,ok?0:GetLastError());
+}

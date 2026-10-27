@@ -77,6 +77,7 @@ static BOOL outbox_store(SyncRun *r,const char *manifest,uint64_t size,uint64_t 
         sqlite3_bind_int64(s,5,(sqlite3_int64)mtime);
         ok=sqlite3_step(s)==SQLITE_DONE;
         }sqlite3_finalize(s);
+    if(ok)sy_log_job(r,"outbox_saved",id);
     free(id);
     free(dataset);
     return ok||sy_fail(r,SYNC_STORAGE);
@@ -185,6 +186,9 @@ static BOOL publish_mode(SyncRun *r,const char *original,BOOL repair){
     const char *update[]={manifest,id};
     ok=repair||sy_statement(r,"UPDATE outbox SET manifest=?1 WHERE id=?2",update,2);
     r->result->stats.reused+=(uint64_t)sync_json_int(r->db,plan.json,"$.receiver_reused_bytes",0);
+    if(r->file_events++<128)nova_log_write(NOVA_LOG_INFO,"sync",repair?"repair_plan":"publish_plan",L"run=%ld job=%.95hs state=%.16hs reused_bytes=%lld",
+        r->log_id,id,state,
+        (long long)sync_json_int(r->db,plan.json,"$.receiver_reused_bytes",0));
     sqlite3_stmt *items=NULL;
     unsigned char *data=malloc(SYNC_PACKET_MAX);
     ok=ok&&data;
@@ -241,7 +245,7 @@ static BOOL publish_mode(SyncRun *r,const char *original,BOOL repair){
         const char *args[]={id};
         ok=sy_exec(r,"BEGIN IMMEDIATE")&&head_save(r,manifest,size,(int64_t)mtime)&&sy_statement(r,"DELETE FROM outbox WHERE id=?1",args,1)&&sy_exec(r,"COMMIT");
         if(!ok)sqlite3_exec(r->db,"ROLLBACK",NULL,NULL,NULL);
-        else r->result->stats.published++;
+        else {r->result->stats.published++;sy_log_job(r,"version_committed",id);}
     }
     free(manifest);
     free(id);
@@ -328,6 +332,7 @@ static BOOL acknowledge(SyncRun *r,const char *manifest,const char *mhash){
     if(ok){r->result->stats.reclaimed+=(uint64_t)sync_json_int(r->db,response.json,"$.gc.removed_bytes",0);
         const char *values[]={id};
         ok=sy_statement(r,"DELETE FROM inbox WHERE id=?1",values,1);
+        if(ok)sy_log_job(r,"receipt_confirmed",id);
         }free(id);
     sy_reply_free(&response);
     return ok;
@@ -363,13 +368,14 @@ static BOOL receive_one(SyncRun *r,const char *manifest,const char *mhash){
     if(ok)ok=probe(r,path,actual,&actual_size,&actual_time,&exists);
     if(ok&&resolving&&((exists&&!r->accepted_local[0])||(!exists&&r->accepted_local[0])||(exists&&strcmp(actual,r->accepted_local))))ok=sy_fail(r,SYNC_CONFLICT);
     if(ok){already=phase&&!strcmp(phase,"READY")&&((expected&&exists&&!strcmp(actual,expected)&&actual_size==total)||(!expected&&!exists));
-        BOOL adopted=!previous&&expected&&exists&&!strcmp(actual,expected)&&actual_size==total;
+        BOOL adopted=expected&&exists&&!strcmp(actual,expected)&&actual_size==total;
         if(!resolving&&!already&&!adopted&&!((old_hash&&exists&&!strcmp(actual,old_hash))||(!old_hash&&!exists)))ok=sy_fail(r,SYNC_CONFLICT);
         if(ok&&adopted){ok=seed(r,path,manifest);
             already=ok;
             }
         if(ok&&old_hash&&exists&&!strcmp(actual,old_hash))ok=seed(r,path,previous);
     }
+    if(ok)sy_log_file(r,"file_receive",relative,already?"content_already_present":!strcmp(kind,"DELETE")?"remote_delete":"remote_content_changed",id);
     if(ok&&!strcmp(kind,"DELETE")&&!r->request->pair.sync_deletes&&!(resolving&&r->request->resolution==1))ok=sy_fail(r,SYNC_DELETE);
     if(ok){const char *values[]={id,dataset,manifest,mhash};
         ok=sy_statement(r,"INSERT OR IGNORE INTO inbox VALUES (?1,?2,?3,?4,'DOWNLOADING')",values,4);
@@ -492,20 +498,30 @@ static BOOL push_file(SyncRun *r,const wchar_t *path,const wchar_t *relative,BOO
     char *manifest=NULL;
     if(deleting){char *old=head?sync_json_string(r->db,head,"$.kind"):NULL;
         if(old&&!strcmp(old,"PUT")){manifest=metadata(r,name,parent,NULL,0,0,"[]",TRUE);
+            sy_log_file(r,"file_publish",name,"local_delete",parent);
             ok=manifest&&outbox_store(r,manifest,0,0);
             }free(old);
         }
     else{
         ok=sy_meta(path,&size,&mtime);
-        char *saved=sy_query(r,"SELECT json_object('size',stat_size,'mtime',stat_mtime) FROM files WHERE dataset=?1 AND path=?2",dataset,name);
-        BOOL same=ok&&saved&&sync_json_int(r->db,saved,"$.size",-1)==(int64_t)size&&sync_json_int(r->db,saved,"$.mtime",-1)==(int64_t)mtime;
-        if(same){char actual[65],*old=head?sync_json_string(r->db,head,"$.sha256"):NULL;
-            ok=sync_hash_file(path,actual,NULL,NULL,r->request->cancel);same=ok&&old&&!strcmp(actual,old);free(old);
+        char *old=head?sync_json_string(r->db,head,"$.sha256"):NULL;
+        BOOL same=FALSE;
+        /* A timestamp is a local observation, not a content version. Always hash
+           equal-size candidates, including edits preserving size and mtime. */
+        if(ok&&old&&sync_json_int(r->db,head,"$.size",-1)==(int64_t)size){
+            char actual[65];sy_progress(r,SYNC_SCAN,path,0,0);
+            ok=sync_hash_file(path,actual,&size,&mtime,r->request->cancel);same=ok&&!strcmp(actual,old);
         }
-        if(ok&&same)r->result->stats.unchanged++;
-        else if(ok)manifest=snapshot_file(r,path,name,parent);
-        free(saved);
-        if(!ok)sy_fail(r,SYNC_PATH);
+        if(ok&&same){
+            char size_text[32],time_text[32];
+            snprintf(size_text,sizeof(size_text),"%llu",(unsigned long long)size);
+            snprintf(time_text,sizeof(time_text),"%llu",(unsigned long long)mtime);
+            const char *v[]={size_text,time_text,dataset,name};
+            ok=sy_statement(r,"UPDATE files SET stat_size=?1,stat_mtime=?2 WHERE dataset=?3 AND path=?4 AND (stat_size!=?1 OR stat_mtime!=?2)",v,4);
+            if(ok){r->result->stats.unchanged++;sy_log_file(r,"file_skip",name,"content_unchanged",parent);}
+        }else if(ok){sy_log_file(r,"file_publish",name,head?"content_changed":"new_file",parent);manifest=snapshot_file(r,path,name,parent);}
+        free(old);
+        if(!ok)sy_fail(r,sy_cancel(r)?SYNC_CANCELLED:SYNC_PATH);
     }
     if(manifest){ok=publish(r,manifest);
         free(manifest);
@@ -555,6 +571,7 @@ static BOOL bind_pair(SyncRun *r){
     char *with_path=text&&path?sync_json_patch(r->db,text,"$.path",path,FALSE):NULL;
     free(text);
     if(ok)ok=with_path&&sy_rpc(r,with_path,NULL,0,&response);
+    nova_log_write(ok?NOVA_LOG_INFO:NOVA_LOG_WARN,"sync","bind",L"run=%ld ok=%d metadata_only=1",r->log_id,ok);
     free(with_path);
     sy_reply_free(&response);
     free(dataset);
@@ -643,6 +660,8 @@ static BOOL inspect(SyncRun *r){
         ok=r->result->changes!=NULL;
     }
     free(dataset);sy_reply_free(&reply);
+    if(ok)nova_log_write(NOVA_LOG_INFO,"sync","comparison",L"run=%ld entries=%d pushes=%d pulls=%d conflicts=%d waiting=%d content_transfer=0",
+        r->log_id,count,r->result->pushes,r->result->pulls,r->result->conflicts,r->result->waiting);
     return ok||sy_fail(r,SYNC_STORAGE);
 }
 static BOOL repair_subscribers(SyncRun *r){
@@ -742,10 +761,12 @@ BOOL sync_client_run(SyncRequest *request,int action,SyncResult *result){
     if(action>=SYNC_JOB_SERVER_PROBE)return sync_server_run(request,action,result);
     int chosen_resolution=request->resolution;
     if(action!=SYNC_JOB_RESOLVE)request->resolution=0;
+    if(action==SYNC_JOB_RUN||action==SYNC_JOB_PUSH||action==SYNC_JOB_PULL)request->direction=action==SYNC_JOB_PUSH?1:action==SYNC_JOB_PULL?2:0;
     memset(result,0,sizeof(*result));
     SyncRun r={0};
     r.request=request;
     r.result=result;
+    sy_run_begin(&r,action);
     BOOL ok=sy_index_open(&r);
     for(int i=0;i<256&&ok;i++){unsigned char data=(unsigned char)i,digest[32];
         unsigned int n=0;
@@ -754,6 +775,7 @@ BOOL sync_client_run(SyncRequest *request,int action,SyncResult *result){
         }
     if(ok){sy_progress(&r,SYNC_CONNECT,NULL,0,0);
         r.ssh=ssh_client_connect(&request->login,request->cancel,&result->ssh);
+        nova_log_write(NOVA_LOG_INFO,"sync","connection_bound",L"run=%ld connection=%ld",r.log_id,ssh_client_log_id(r.ssh));
         SecureZeroMemory(request->login.secret,sizeof(request->login.secret));
         ok=r.ssh!=NULL;
         if(!ok)sy_fail(&r,result->ssh.cancelled?SYNC_CANCELLED:SYNC_NETWORK);
@@ -776,7 +798,6 @@ BOOL sync_client_run(SyncRequest *request,int action,SyncResult *result){
     if(ok&&action==SYNC_JOB_CHECK)ok=inspect(&r);
     if(ok&&action==SYNC_JOB_RESOLVE)ok=resolve(&r);
     if(ok&&(action==SYNC_JOB_RUN||action==SYNC_JOB_PUSH||action==SYNC_JOB_PULL)){
-        request->direction=action==SYNC_JOB_PUSH?1:action==SYNC_JOB_PULL?2:0;
         ok=sy_sync(&r);
     }
     /* Transfer/preflight plans are snapshots from before mutation. Return only a
@@ -798,6 +819,7 @@ BOOL sync_client_run(SyncRequest *request,int action,SyncResult *result){
     if(r.db)sqlite3_close(r.db);
     SecureZeroMemory(request->login.secret,sizeof(request->login.secret));
     request->resolution=chosen_resolution;
+    sy_run_end(&r,ok);
     return ok;
 }
 void sync_result_dispose(SyncResult *r){ssh_result_dispose(&r->ssh);

@@ -473,6 +473,31 @@ source device. Saving exchanges metadata; click **Sync selected** to transfer.
 Check the folders to **Push selected**, **Pull selected**, or synchronize both ways.
 New and migrated folders keep automatic synchronization paused.
 
+Re-saving a binding preserves version history and receipts. Deleting one file
+publishes only that deletion when deletion sync is enabled. Each check still
+hashes local files; **Checking local files (no transfer)** is local verification.
+Timestamp-only changes do not create content versions, and identical received
+content is acknowledged without replacing the working file.
+
+Local diagnostics are written to `config/logs/nova.log` (UTC, UTF-8), with one
+`nova.previous.log` backup; each file is capped at 2 MiB. Logs cover startup/shutdown,
+configuration load/migration/commit/rollback/backup, launcher dispatch, batch queues
+and execution, file-view navigation/Shell dispatch, SSH/SFTP/terminal lifecycle,
+and sync runs, including comparison counts, decisions, error codes, elapsed time
+and content byte counts. File samples
+use hashed relative-path identifiers; passwords, file contents and full work
+paths are omitted. Logs stay local, are ignored by Git and excluded from packages.
+Match `pid` + `op` across general operations and `parent` across nested/worker work;
+sync uses `pid` + `run`, linked to its UI parent and SSH `connection`. Shell
+acceptance and queue acceptance do not prove eventual completion. Commands,
+arguments, terminal/process output, configuration values and endpoint names are
+omitted. Terminal I/O and packet polling do not produce per-read/write log events.
+`published`/`received_versions` count versions
+(including deletes), while `sent_bytes`/`received_bytes` count compressed content
+payloads. Metadata traffic is excluded. Per run, at most 128 file/job checkpoints,
+8 unchanged-file samples and 32 phase transitions are recorded; summary counts
+cover the complete run.
+
 If an older server rejects a synchronization request, update it with **Server →
 Configure server** using its existing paths; existing queues are retained. Folder
 status shows the failure, and selecting a transfer shows its details. Double-click

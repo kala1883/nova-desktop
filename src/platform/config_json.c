@@ -1,6 +1,7 @@
 #define _WIN32_WINNT 0x0601
 #define WIN32_LEAN_AND_MEAN
 #include "config_json.h"
+#include "app_log.h"
 #include "../i18n.h"
 #include "../../third_party/sqlite/sqlite3.h"
 #include <stdio.h>
@@ -193,7 +194,7 @@ static BOOL prepare_publication(const wchar_t *directory,const wchar_t *name,con
     publication->changed=TRUE;temp_path(directory,L"write",publication->temporary);temp_path(directory,L"rollback",publication->previous);
     return write_temp(publication->temporary,json);
 }
-BOOL config_json_commit(sqlite3 *db,const wchar_t *directory,wchar_t *error){
+BOOL config_json_commit(sqlite3 *db,const wchar_t *directory,wchar_t *error,LONG operation){
     char *shared=snapshot(db,FALSE),*local=snapshot(db,TRUE);ConfigPublication publications[4];ZeroMemory(publications,sizeof(publications));
     wchar_t runtime[MAX_PATH];swprintf(runtime,MAX_PATH,L"%ls\\runtime.json",directory);
     BOOL first=GetFileAttributesW(runtime)==INVALID_FILE_ATTRIBUTES&&GetLastError()==ERROR_FILE_NOT_FOUND;
@@ -207,24 +208,27 @@ BOOL config_json_commit(sqlite3 *db,const wchar_t *directory,wchar_t *error){
     if(ok&&first)ok=prepare_publication(directory,L"runtime.base.json",shared,&publications[2]);
     if(ok&&first)ok=prepare_publication(directory,L"runtime.seed.json",shared,&publications[3]);
     free(shared);free(local);
+    nova_log_write(ok?NOVA_LOG_INFO:NOVA_LOG_ERROR,"storage","publication_prepared",L"op=%ld ok=%d first=%d local_changed=%d runtime_changed=%d base_changed=%d seed_changed=%d",operation,ok,first,publications[0].changed,publications[1].changed,publications[2].changed,publications[3].changed);
     for(int i=0;i<4&&ok;i++)if(publications[i].changed){
         ConfigPublication *p=&publications[i];ok=p->existed?ReplaceFileW(p->path,p->temporary,p->previous,0,NULL,NULL):MoveFileExW(p->temporary,p->path,MOVEFILE_WRITE_THROUGH);p->published=ok;
+        nova_log_write(ok?NOVA_LOG_INFO:NOVA_LOG_ERROR,"storage","document_published",L"op=%ld slot=%d ok=%d win32=%lu",operation,i,ok,ok?0:GetLastError());
     }
     DWORD code=ok?0:GetLastError();
-    if(ok)ok=sqlite3_exec(db,"COMMIT",NULL,NULL,NULL)==SQLITE_OK;
+    if(ok){int rc=sqlite3_exec(db,"COMMIT",NULL,NULL,NULL);ok=rc==SQLITE_OK;nova_log_write(ok?NOVA_LOG_INFO:NOVA_LOG_ERROR,"storage","memory_commit",L"op=%ld sqlite=%d",operation,rc);}
     if(!ok){
         sqlite3_exec(db,"ROLLBACK",NULL,NULL,NULL);
-        for(int i=3;i>=0;i--){ConfigPublication *p=&publications[i];if(p->published){if(p->existed)MoveFileExW(p->previous,p->path,MOVEFILE_REPLACE_EXISTING|MOVEFILE_WRITE_THROUGH);else DeleteFileW(p->path);}}
+        for(int i=3;i>=0;i--){ConfigPublication *p=&publications[i];if(p->published){BOOL restored=p->existed?MoveFileExW(p->previous,p->path,MOVEFILE_REPLACE_EXISTING|MOVEFILE_WRITE_THROUGH):DeleteFileW(p->path);nova_log_write(restored?NOVA_LOG_WARN:NOVA_LOG_ERROR,"storage","document_restored",L"op=%ld slot=%d ok=%d win32=%lu",operation,i,restored,restored?0:GetLastError());}}
     }
     for(int i=0;i<4;i++){if(publications[i].temporary[0])DeleteFileW(publications[i].temporary);if(ok&&publications[i].previous[0])DeleteFileW(publications[i].previous);}
     if(!ok){SetLastError(code);return file_error(error);}return TRUE;
 }
 BOOL config_json_backup(const wchar_t *directory,wchar_t *error){
+    NovaLogSpan span=nova_log_begin("storage","backup",0);
     const wchar_t *names[]={L"runtime",L"local"};
     for(int i=0;i<2;i++){
         wchar_t path[MAX_PATH],backup[MAX_PATH],temporary[MAX_PATH];swprintf(path,MAX_PATH,L"%ls\\%ls.json",directory,names[i]);swprintf(backup,MAX_PATH,L"%ls\\%ls.backup.json",directory,names[i]);temp_path(directory,L"backup",temporary);
         BOOL ok=CopyFileW(path,temporary,TRUE)&&MoveFileExW(temporary,backup,MOVEFILE_REPLACE_EXISTING|MOVEFILE_WRITE_THROUGH);
-        if(!ok){DWORD code=GetLastError();DeleteFileW(temporary);SetLastError(code);return file_error(error);}
+        if(!ok){DWORD code=GetLastError();DeleteFileW(temporary);SetLastError(code);nova_log_end(span,FALSE,code);return file_error(error);}
     }
-    return TRUE;
+    return nova_log_end(span,TRUE,0);
 }

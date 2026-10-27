@@ -2,12 +2,14 @@
 #define UNICODE
 #endif
 #define _UNICODE
+#include <winsock2.h>
 #include <windows.h>
 #include <assert.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 #include "../src/platform/ssh_client.h"
+#include "../src/platform/app_log.h"
 BOOL nova_english=FALSE;
 typedef struct CancelRun {SshClient *client;SshResult result;const wchar_t *command;} CancelRun;
 static DWORD WINAPI run_cancel(void *value){CancelRun *run=value;ssh_client_exec(run->client,L"/",run->command,&run->result);return 0;}
@@ -20,7 +22,7 @@ static void terminal_expect(SshClient *client,const char *expected){
     while(GetTickCount64()<until){size_t received;BOOL ended;assert(ssh_client_terminal_read(client,output+length,sizeof(output)-length-1,&received,&ended,&result));length+=received;output[length]=0;if(strstr(output,expected))return;assert(!ended&&length<sizeof(output)-1);Sleep(5);}fprintf(stderr,"Missing terminal output: %s; received: %s\n",expected,output);assert(0);
 }
 int wmain(int argc,wchar_t **argv){
-    assert(argc==5&&ssh_runtime_acquire());HANDLE cancel=CreateEventW(NULL,TRUE,FALSE,NULL);assert(cancel);
+    assert(argc==5&&ssh_runtime_acquire());assert(nova_log_init(argv[2]));WSASetLastError(12345);nova_log_write(NOVA_LOG_INFO,"fixture","winsock_error_preserved",L"check=1");assert(WSAGetLastError()==12345);HANDLE cancel=CreateEventW(NULL,TRUE,FALSE,NULL);assert(cancel);
     const char public_key[]="ssh-ed25519 AAAATEST fixture",putty_key[]="PuTTY-User-Key-File-3: ssh-rsa",private_header[]="-----BEGIN OPENSSH PRIVATE KEY-----";
     assert(ssh_key_kind(public_key,strlen(public_key))==SSH_KEY_PUBLIC);assert(ssh_key_kind(putty_key,strlen(putty_key))==SSH_KEY_PUTTY);assert(ssh_key_kind(private_header,strlen(private_header))==SSH_KEY_OPENSSH);assert(ssh_key_kind("\xff\xfe-\0",4)==SSH_KEY_UTF16);
     SshLogin *login=calloc(1,sizeof(*login));assert(login);login->server.id=1;login->server.port=_wtoi(argv[1]);wcscpy(login->server.host,L"127.0.0.1");wcscpy(login->server.user,L"fixture");wcscpy(login->secret,L"fixture-password");
@@ -58,5 +60,5 @@ int wmain(int argc,wchar_t **argv){
     wcscpy(login->key_file,argv[3]);wcscpy(login->secret,L"fixture-key-passphrase");client=ssh_client_connect(login,cancel,&result);if(!client)fwprintf(stderr,L"Key authentication: %ls\n",result.error);assert(client);
     CancelRun flood={client,{0},L"flood"};thread=CreateThread(NULL,0,run_cancel,&flood,0,NULL);assert(thread);Sleep(150);SetEvent(cancel);assert(WaitForSingleObject(thread,5000)==WAIT_OBJECT_0&&flood.result.code==3&&flood.result.output_length<SSH_OUTPUT_CAP);CloseHandle(thread);ssh_result_dispose(&flood.result);ssh_client_close(client);
     SecureZeroMemory(login,sizeof(*login));free(login);CloseHandle(cancel);ssh_runtime_release();DeleteFileW(source);DeleteFileW(download);
-    puts("PASS real loopback SSH/SFTP: host verification, encrypted Ed25519 key, Unicode directories, current-directory command framing, upload/download integrity, no overwrite, copy/move/delete, exit status/stderr, bounded output, cancellation and host mismatch");return 0;
+    nova_log_close();puts("PASS real loopback SSH/SFTP: host verification, encrypted Ed25519 key, Unicode directories, current-directory command framing, upload/download integrity, no overwrite, copy/move/delete, exit status/stderr, bounded output, cancellation and host mismatch");return 0;
 }

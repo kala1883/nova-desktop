@@ -7,6 +7,7 @@
 #include <string.h>
 #include <wchar.h>
 #include "batch_runner.h"
+#include "app_log.h"
 #include "../core/batch_task.h"
 typedef struct {
     const BatchTask *task;
@@ -14,9 +15,10 @@ typedef struct {
     BatchProgress progress;
     void *context;
     BatchExecute execute;
-    int index,state;
+    int index,state;LONG parent;
 } DirectoryRun;
 enum { RUN_NONE, RUN_SUCCEEDED, RUN_FAILED, RUN_SKIPPED, RUN_CANCELLED };
+static BOOL command_logged(const wchar_t *text,const wchar_t *directory,HANDLE cancel,DWORD *exit_code,DWORD *error,wchar_t *output,DWORD output_capacity,LONG parent);
 
 typedef struct {
     HANDLE read;
@@ -74,15 +76,18 @@ static void decode_output(const OutputReader *reader,wchar_t *output,DWORD capac
 
 static DWORD WINAPI run_directory(void *parameter){
     DirectoryRun *run=parameter;
+    NovaLogSpan span=nova_log_begin("batch","step",run->parent);
+    nova_log_write(NOVA_LOG_INFO,"batch","step_selected",L"op=%ld task=%lld step=%d",span.id,run->task->id,run->index);
     if(cancellation_requested(run->cancel)){
         run->state=RUN_SKIPPED;
         if(run->progress)run->progress(run->context,BATCH_EVENT_SKIPPED,run->index,0,0,NULL);
+        nova_log_write(NOVA_LOG_WARN,"batch","step_skipped",L"op=%ld reason=cancelled_before_start",span.id);nova_log_end(span,FALSE,ERROR_CANCELLED);
         return 0;
     }
     if(run->progress)run->progress(run->context,BATCH_EVENT_STARTED,run->index,0,0,NULL);
     DWORD code=(DWORD)-1,error=0;
     wchar_t output[BATCH_OUTPUT_CAP]={0};
-    BOOL ok=run->execute(batch_task_command(run->task,run->index),run->task->directories[run->index],run->cancel,&code,&error,output,BATCH_OUTPUT_CAP);
+    BOOL ok=run->execute==batch_runner_command?command_logged(batch_task_command(run->task,run->index),run->task->directories[run->index],run->cancel,&code,&error,output,BATCH_OUTPUT_CAP,span.id):run->execute(batch_task_command(run->task,run->index),run->task->directories[run->index],run->cancel,&code,&error,output,BATCH_OUTPUT_CAP);
     if(!ok&&!error)error=ERROR_GEN_FAILURE;
     if(error==ERROR_CANCELLED){
         run->state=RUN_CANCELLED;
@@ -91,19 +96,24 @@ static DWORD WINAPI run_directory(void *parameter){
         run->state=ok&&!code?RUN_SUCCEEDED:RUN_FAILED;
         if(run->progress)run->progress(run->context,BATCH_EVENT_RESULT,run->index,code,error,output);
     }
+    nova_log_write(run->state==RUN_SUCCEEDED?NOVA_LOG_INFO:NOVA_LOG_WARN,"batch","step_result",L"op=%ld state=%d exit=%lu win32=%lu",span.id,run->state,code,error);
+    nova_log_end(span,run->state==RUN_SUCCEEDED,error?error:code);
     return 0;
 }
-BatchResult batch_runner_task(const BatchTask *task,HANDLE cancel,BatchProgress progress,void *context,BatchExecute execute){
+BatchResult batch_runner_task_logged(const BatchTask *task,HANDLE cancel,BatchProgress progress,void *context,BatchExecute execute,LONG parent){
     BatchResult result={0};
-    if(!batch_task_is_valid(task))return result;
+    NovaLogSpan span=nova_log_begin("batch","task",parent);
+    if(!batch_task_is_valid(task)){nova_log_end(span,FALSE,ERROR_INVALID_PARAMETER);return result;}
+    nova_log_write(NOVA_LOG_INFO,"batch","task_plan",L"op=%ld task=%lld steps=%d mode=%d",span.id,task->id,task->directory_count,task->mode);
     DirectoryRun runs[BATCH_DIRECTORY_LIMIT]={0};
     HANDLE threads[BATCH_DIRECTORY_LIMIT]={0};
     for(int i=0;i<task->directory_count;i++){
-        runs[i]=(DirectoryRun){task,cancel,progress,context,execute?execute:batch_runner_command,i,0};
+        runs[i]=(DirectoryRun){task,cancel,progress,context,execute?execute:batch_runner_command,i,0,span.id};
         if(task->mode==BATCH_PARALLEL){
             threads[i]=CreateThread(NULL,0,run_directory,&runs[i],0,NULL);
             if(!threads[i]){
                 DWORD error=GetLastError();runs[i].state=2;
+                nova_log_write(NOVA_LOG_ERROR,"batch","worker_create_failed",L"op=%ld step=%d win32=%lu",span.id,i,error);
                 if(progress)progress(context,BATCH_EVENT_RESULT,i,(DWORD)-1,error,NULL);
             }
         }else run_directory(&runs[i]);
@@ -115,6 +125,8 @@ BatchResult batch_runner_task(const BatchTask *task,HANDLE cancel,BatchProgress 
         else if(runs[i].state==RUN_SUCCEEDED)result.success++;
         else result.failed++;
     }
+    nova_log_write(NOVA_LOG_INFO,"batch","task_result",L"op=%ld success=%d failed=%d cancelled=%d skipped=%d",span.id,result.success,result.failed,result.cancelled,result.skipped);
+    nova_log_end(span,!result.failed&&!result.cancelled&&!result.skipped,result.cancelled||result.skipped?ERROR_CANCELLED:result.failed?ERROR_GEN_FAILURE:0);
     return result;
 }
 
@@ -151,7 +163,7 @@ BOOL batch_runner_find_git(wchar_t *path,DWORD capacity,DWORD *error){
     return TRUE;
 }
 
-BOOL batch_runner_command(const wchar_t *text,const wchar_t *directory,HANDLE cancel,DWORD *exit_code,DWORD *error,wchar_t *output,DWORD output_capacity){
+static BOOL command_impl(const wchar_t *text,const wchar_t *directory,HANDLE cancel,DWORD *exit_code,DWORD *error,wchar_t *output,DWORD output_capacity,LONG operation){
     if(exit_code)*exit_code=(DWORD)-1;
     if(error)*error=ERROR_SUCCESS;
     if(output&&output_capacity)output[0]=0;
@@ -192,10 +204,12 @@ BOOL batch_runner_command(const wchar_t *text,const wchar_t *directory,HANDLE ca
         TerminateProcess(process.hProcess,ERROR_INVALID_FUNCTION);CloseHandle(process.hThread);CloseHandle(process.hProcess);CloseHandle(job);WaitForSingleObject(reader_thread,INFINITE);CloseHandle(reader_thread);CloseHandle(output_read);return FALSE;
     }
     CloseHandle(process.hThread);
+    nova_log_write(NOVA_LOG_INFO,"batch","process_started",L"op=%ld child_pid=%lu",operation,process.dwProcessId);
     HANDLE waits[2]={process.hProcess,cancel};
     DWORD wait=cancel?WaitForMultipleObjects(2,waits,FALSE,INFINITE):WaitForSingleObject(process.hProcess,INFINITE),code=(DWORD)-1;
     BOOL was_cancelled=cancel&&wait==WAIT_OBJECT_0+1;
     if(was_cancelled){
+        nova_log_write(NOVA_LOG_WARN,"batch","process_cancel_requested",L"op=%ld child_pid=%lu",operation,process.dwProcessId);
         TerminateJobObject(job,ERROR_CANCELLED);WaitForSingleObject(process.hProcess,5000);if(error)*error=ERROR_CANCELLED;
     }
     BOOL ok=!was_cancelled&&wait==WAIT_OBJECT_0&&GetExitCodeProcess(process.hProcess,&code);
@@ -204,3 +218,13 @@ BOOL batch_runner_command(const wchar_t *text,const wchar_t *directory,HANDLE ca
     CloseHandle(process.hProcess);CloseHandle(job);
     WaitForSingleObject(reader_thread,INFINITE);CloseHandle(reader_thread);decode_output(&reader,output,output_capacity);CloseHandle(output_read);return ok;
 }
+static BOOL command_logged(const wchar_t *text,const wchar_t *directory,HANDLE cancel,DWORD *exit_code,DWORD *error,wchar_t *output,DWORD output_capacity,LONG parent){
+    NovaLogSpan span=nova_log_begin("batch","command",parent);DWORD code=(DWORD)-1,failure=0;
+    BOOL ok=command_impl(text,directory,cancel,&code,&failure,output,output_capacity,span.id);
+    if(exit_code)*exit_code=code;
+    if(error)*error=failure;
+    nova_log_write(ok&&!code?NOVA_LOG_INFO:NOVA_LOG_WARN,"batch","command_result",L"op=%ld api_ok=%d exit=%lu win32=%lu",span.id,ok,code,failure);
+    nova_log_end(span,ok&&!code,failure?failure:code);return ok;
+}
+BOOL batch_runner_command(const wchar_t *text,const wchar_t *directory,HANDLE cancel,DWORD *exit_code,DWORD *error,wchar_t *output,DWORD output_capacity){return command_logged(text,directory,cancel,exit_code,error,output,output_capacity,0);}
+BatchResult batch_runner_task(const BatchTask *task,HANDLE cancel,BatchProgress progress,void *context,BatchExecute execute){return batch_runner_task_logged(task,cancel,progress,context,execute,0);}

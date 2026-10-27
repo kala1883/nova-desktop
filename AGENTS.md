@@ -100,6 +100,34 @@ change, and update its README, source URL, hashes, and compatibility tests.
 - Keep keyboard access, DPI scaling, native focus behavior, accessible control
   names, and dark-theme drawing intact when changing UI layout or controls.
 
+## 故障排查与日志规范
+
+排查必须沿真实调用链取证，不能把“逐个显示文件”“没有报错”或“单测通过”直接当作根因或修复结论。
+
+1. 先记录触发操作、预期/实际结果、影响对象、两端构建版本及复现时间。区分用户观察、已证实事实、假设和未知；先检查工作区改动与实际运行的 EXE，确认探针命中新版和原故障路径。
+2. 从结果反查入口、校验/计划、队列、worker、平台调用、持久化/回执、UI 结果这条链。标明已观测与未观测的边界。对比正常与异常对象，在边界两侧核对同一操作的 ID、输入摘要、判定理由和输出，避免比较不同批次。
+3. 先读本机 `config/logs/nova.log` 与 `nova.previous.log`，保留原始证据。时间为 UTC；客户端时间需先换算。同一进程用 `pid` + `op` 关联通用操作，`parent` 关联父操作；同步用 `pid` + `run`，再关联 connection/job/file 标识。跨设备分别读取相同复现时段的日志，不能把一个设备的正常结果推断成另一端正常。
+
+   ```powershell
+   Get-Content .\config\logs\nova.previous.log -Tail 300 -ErrorAction SilentlyContinue
+   Get-Content .\config\logs\nova.log -Tail 300 -ErrorAction SilentlyContinue
+   Select-String -Path .\config\logs\nova*.log -Pattern 'pid=1234 .*op=42(?: |$)'
+   ```
+
+4. 同步问题先区分本地哈希校验、清单/版本更新、缺失块实际传输、文件重建与确认。`sent_bytes` / `received_bytes` 是压缩内容载荷，不含元数据；`published` / `received_versions` 含删除记录。检查 `index_open` 的已有记录、`comparison` 数量、file 判定原因、repair/publish 计划及 `run_end`。删除一项时检查是否仅增加该项的删除版本，其他项的内容哈希、版本与文件时间是否保持；不能仅根据进度条声称全量重传。
+5. 提出能区分机制的实验并提前写明预测；优先测“最后正常 → 最先异常”的边界。没有日志的边界先补观测。连续两次实验没有缩小范围，先复盘隐藏输入、观测盲区与竞争假设，不继续堆同类补丁。
+6. 用临时目录、假回调、隔离注册表或回环 SSH 复现原操作顺序。修复前验证目标症状、修复后在同条件验证；同时覆盖相邻正常路径。同步应覆盖删除后重新保存、仅时间变化、大小/时间保持的内容修改、断点与回执。不要清缓存、重建设备身份、删除回执或关闭安全校验来掩盖故障；不写真实用户工作文件。
+7. 结论说明机制复现、现场来源证据、已验证修复和仍未覆盖的实机范围。日志缺失/被轮转、旧 EXE、只测 mock 或只通过编译都属于证据限制，不能报告“已完全解决”。
+
+所有新增/修改的重要链路必须使用 `platform/app_log` 补齐日志，已有链路不得因重构失去观测：
+
+- 入口接受/拒绝及理由；计划与关键分支（跳过、复用、冲突、容量、权限）；排队、worker 开始、取消；平台/远端调用结果；提交、回滚及回滚失败；完成投递和 UI 消费/丢弃；关闭与资源回收。覆盖启动/迁移、JSON 加载保存备份、启动器/批量任务、文件视图导航及 Shell 操作、SSH/SFTP/终端生命周期、同步与服务器管理。
+- 通用操作使用 `nova_log_begin` / `nova_log_end`，每个开始都有明确结果或等待中的后续阶段。异步请求将关联 ID 随快照/结果传递；不要仅用线程号或裸 HWND/指针作关联。Shell “调用已接受”和任务“已排队”不能写成实际文件操作/进程已经完成。
+- 固定的 `component` / `event` / `action` 和机器可读 `key=value` 字段使用稳定技术标识；记录 `ok`、阶段、原始 Win32/HRESULT/SQLite/SSH/SFTP 错误码、耗时、数量与内容字节。错误码在清理前捕获；单独报告取消、拒绝、无变化、回滚与未知远端结果。界面文案仍须中英本地化。
+- 只记录稳定业务 ID、索引、枚举、布尔值、计数或必要的哈希。禁止记录口令/私钥/凭据、原始命令及参数、终端/子进程输出、文件内容、配置值、主机/用户名或完整本地/远端路径。不打印原始请求/响应/SQL/异常文字；它们可能包含敏感值。
+- 日志必须有界、单行、线程安全、离线；遵守现有 2 MiB × 2 文件轮转，不进入 Git/包。禁止逐字节、逐数据包、每次绘制/鼠标移动/轮询写日志；逐文件决策使用有界采样，汇总保留完整计数。禁止为日志重读文件、增加网络请求或引入后台进程。
+- 日志及其辅助方法不能改变业务返回值、错误码、取消、事务、线程/资源所有权或原有重试策略。日志不可写时业务继续。测试须验证真实调用边界的关键事件及敏感字段缺席，覆盖成功、失败、取消/拒绝、回滚/恢复和异步关联；不能只检索源码中是否出现日志字符串。
+
 ## Build and test
 
 Run commands from the repository root in PowerShell.
@@ -125,6 +153,14 @@ Choose tests proportionally, but always compile after changing C code. Run:
   backup changes.
 - `deployment\test-files.bat` for file-manager panes, tabs, navigation, commands, Shell
   operations, layouts, favorites, or view lifecycle changes.
+- `deployment\test-sync.bat` for sync persistence, queues, receipts, migrations,
+  native sync UI and the local diagnostic logger. Its `diagnostics-test.exe`
+  verifies real storage rollback/restore and command/task logging in temporary data.
+- `deployment\test-ssh.bat` for SSH profiles, credentials and terminal rules;
+  optional `python -X utf8 -B tests/ssh_fixture.py build/ssh-client-test.exe` and
+  `python -X utf8 -B tests/sync_fixture.py build/sync-client-test.exe` exercise
+  loopback transport, worker/UI boundaries and private-data exclusion. These
+  fixtures require Paramiko and never use saved credentials or real servers.
 - `--interactions` for workspace/UI command wiring; `--desktop` for window mode,
   geometry, resizing, and desktop-fence behavior.
 - `deployment\test-deployment.bat` for build/deployment script changes; it uses

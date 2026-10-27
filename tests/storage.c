@@ -3,6 +3,7 @@
 #undef wWinMain
 #include "../third_party/sqlite/sqlite3.h"
 #include <assert.h>
+#include "log_capture.h"
 
 static DWORD read_file(const wchar_t *path,BYTE *bytes,DWORD capacity){
     HANDLE f=CreateFileW(path,GENERIC_READ,FILE_SHARE_READ,NULL,OPEN_EXISTING,0,NULL);assert(f!=INVALID_HANDLE_VALUE);
@@ -117,7 +118,7 @@ static void test_json_migration(const wchar_t *parent){
 int wmain(void){
     test_mode=TRUE;setvbuf(stdout,NULL,_IONBF,0);
     wchar_t temp[MAX_PATH],directory[MAX_PATH],database[MAX_PATH],backup[MAX_PATH];GetTempPathW(MAX_PATH,temp);
-    swprintf(directory,MAX_PATH,L"%lsNovaStorage-%lu",temp,GetCurrentProcessId());assert(CreateDirectoryW(directory,NULL));
+    swprintf(directory,MAX_PATH,L"%lsNovaStorage-%lu",temp,GetCurrentProcessId());assert(CreateDirectoryW(directory,NULL));assert(nova_log_init(directory));
     swprintf(config_path,MAX_PATH,L"%ls\\config.ini",directory);swprintf(database,MAX_PATH,L"%ls\\runtime.json",directory);swprintf(backup,MAX_PATH,L"%ls\\runtime.backup.json",directory);
     HANDLE f=CreateFileW(config_path,GENERIC_WRITE,0,NULL,CREATE_NEW,0,NULL);assert(f!=INVALID_HANDLE_VALUE);WORD bom=0xfeff;DWORD bytes;WriteFile(f,&bom,2,&bytes,NULL);CloseHandle(f);
 #define LEGACY(section,key,value) assert(WritePrivateProfileStringW(section,key,value,config_path))
@@ -188,5 +189,5 @@ int wmain(void){
     refused_json(directory,"{\"version\":1,\"application\":\"NOVA Desktop\",\"initialized\":true,\"settings\":[{\"scope\":\"files\",\"section\":\"Pane0\",\"key\":\"Count\",\"value\":\"13\"}],\"workspaces\":[],\"items\":[]}");
     refused_json(directory,"{\"version\":1,\"application\":\"NOVA Desktop\",\"initialized\":true,\"settings\":[],\"workspaces\":[{\"id\":\"1\",\"position\":0,\"name\":\"\\ud800\"}],\"items\":[]}");
     puts("PASS malformed/newer JSON, duplicate keys, ID overflow, embedded NUL and orphan refusal without overwriting originals");
-    DeleteFileW(database);DeleteFileW(backup);DeleteFileW(config_path);swprintf(database,MAX_PATH,L"%ls\\local.json",directory);DeleteFileW(database);swprintf(database,MAX_PATH,L"%ls\\local.backup.json",directory);DeleteFileW(database);remove_local_files(directory);assert(RemoveDirectoryW(directory));return 0;
+    DeleteFileW(database);DeleteFileW(backup);DeleteFileW(config_path);swprintf(database,MAX_PATH,L"%ls\\local.json",directory);DeleteFileW(database);swprintf(database,MAX_PATH,L"%ls\\local.backup.json",directory);DeleteFileW(database);remove_local_files(directory);{const char *events[]={"event=runtime_loaded","event=publication_prepared","event=document_restored","event=rollback"};check_diagnostics(directory,events,4);}assert(RemoveDirectoryW(directory));return 0;
 }

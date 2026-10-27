@@ -8,6 +8,7 @@
 #include <string.h>
 #include "../src/platform/sync_client.h"
 #include "../src/platform/sync_json.h"
+#include "../src/platform/app_log.h"
 #include "../third_party/sqlite/sqlite3.h"
 BOOL nova_english=FALSE;
 static wchar_t root[MAX_PATH];
@@ -22,6 +23,46 @@ static SyncResult action(SyncRequest *r,int what){SyncResult result={0};wcscpy(r
 static void source_file(const wchar_t *path){HANDLE file=CreateFileW(path,GENERIC_WRITE,0,NULL,CREATE_ALWAYS,0,NULL);assert(file!=INVALID_HANDLE_VALUE);unsigned char buffer[65536];uint32_t random=721;
     for(int part=0;part<64;part++){for(size_t i=0;i<sizeof(buffer);i++){random^=random<<13;random^=random>>17;random^=random<<5;buffer[i]=(unsigned char)(random>>16);}DWORD wrote=0;assert(WriteFile(file,buffer,sizeof(buffer),&wrote,NULL)&&wrote==sizeof(buffer));}assert(FlushFileBuffers(file));CloseHandle(file);}
 static void write_text(const wchar_t *path,const char *text){HANDLE f=CreateFileW(path,GENERIC_WRITE,0,NULL,CREATE_ALWAYS,0,NULL);DWORD n=0;assert(f!=INVALID_HANDLE_VALUE&&WriteFile(f,text,(DWORD)strlen(text),&n,NULL)&&n==strlen(text)&&FlushFileBuffers(f));CloseHandle(f);}
+static int version_count(SyncRequest *r){
+    wchar_t path[SYNC_PATH_CAP];swprintf(path,SYNC_PATH_CAP,L"%ls\\client.sqlite3",r->state_directory);
+    char *utf=sync_utf8(path);sqlite3 *db=NULL;sqlite3_stmt *s=NULL;
+    assert(utf&&sqlite3_open_v2(utf,&db,SQLITE_OPEN_READONLY,NULL)==SQLITE_OK);free(utf);
+    assert(sqlite3_prepare_v2(db,"SELECT count(*) FROM versions",-1,&s,NULL)==SQLITE_OK&&sqlite3_step(s)==SQLITE_ROW);
+    int count=sqlite3_column_int(s,0);sqlite3_finalize(s);assert(sqlite3_close(db)==SQLITE_OK);return count;
+}
+static void deletion_resave(SyncRequest *a,SyncRequest *b,const wchar_t *pa,const wchar_t *pb){
+    wchar_t remove_a[SYNC_PATH_CAP],remove_b[SYNC_PATH_CAP],keep_a[SYNC_PATH_CAP],keep_b[SYNC_PATH_CAP];
+    swprintf(remove_a,SYNC_PATH_CAP,L"%ls\\delete-me.txt",a->pair.directory);swprintf(remove_b,SYNC_PATH_CAP,L"%ls\\delete-me.txt",b->pair.directory);
+    swprintf(keep_a,SYNC_PATH_CAP,L"%ls\\keep-me.txt",a->pair.directory);swprintf(keep_b,SYNC_PATH_CAP,L"%ls\\keep-me.txt",b->pair.directory);
+    write_text(remove_a,"delete just this file");write_text(keep_a,"leave this file untouched");
+    SyncResult r=action(a,SYNC_JOB_PUSH);assert(r.failure==SYNC_OK&&r.stats.published==2);sync_result_dispose(&r);
+    r=action(b,SYNC_JOB_PULL);assert(r.failure==SYNC_OK&&r.stats.downloaded==2);sync_result_dispose(&r);
+    uint64_t original_time=0,after_time=0;char before[65],after[65];assert(sync_hash_file(pb,before,NULL,&original_time,NULL));
+    int va=version_count(a),vb=version_count(b);
+    assert(DeleteFileW(remove_a));
+    r=action(a,SYNC_JOB_BIND);assert(r.failure==SYNC_OK&&r.stats.published==0&&r.stats.sent==0);sync_result_dispose(&r);
+    r=action(b,SYNC_JOB_BIND);assert(r.failure==SYNC_OK&&r.stats.downloaded==0&&r.stats.received==0);sync_result_dispose(&r);
+    r=action(a,SYNC_JOB_PUSH);assert(r.failure==SYNC_OK&&r.stats.published==1&&r.stats.sent==0&&r.stats.unchanged==2);sync_result_dispose(&r);
+    r=action(b,SYNC_JOB_PULL);assert(r.failure==SYNC_OK&&r.stats.downloaded==1&&r.stats.received==0);sync_result_dispose(&r);
+    assert(GetFileAttributesW(remove_b)==INVALID_FILE_ATTRIBUTES&&GetFileAttributesW(keep_b)!=INVALID_FILE_ATTRIBUTES);
+    assert(version_count(a)==va+1&&version_count(b)==vb+1&&sync_hash_file(pb,after,NULL,&after_time,NULL)&&!strcmp(before,after)&&original_time==after_time);
+    puts("PASS delete one file, re-save both bindings: one tombstone, zero content bytes, unchanged files retain versions and timestamps");
+    HANDLE f=CreateFileW(pa,FILE_READ_ATTRIBUTES|FILE_WRITE_ATTRIBUTES,FILE_SHARE_READ,NULL,OPEN_EXISTING,0,NULL);FILETIME time;assert(f!=INVALID_HANDLE_VALUE&&GetFileTime(f,NULL,NULL,&time));
+    ULARGE_INTEGER ticks;ticks.LowPart=time.dwLowDateTime;ticks.HighPart=time.dwHighDateTime;ticks.QuadPart+=10000000;
+    time.dwLowDateTime=ticks.LowPart;time.dwHighDateTime=ticks.HighPart;assert(SetFileTime(f,NULL,NULL,&time));CloseHandle(f);
+    r=action(a,SYNC_JOB_PUSH);assert(r.failure==SYNC_OK&&r.stats.published==0&&r.stats.sent==0&&r.stats.unchanged==2);sync_result_dispose(&r);
+    r=action(b,SYNC_JOB_PULL);assert(r.failure==SYNC_OK&&r.stats.downloaded==0&&r.stats.received==0);sync_result_dispose(&r);
+    assert(version_count(a)==va+1&&version_count(b)==vb+1&&sync_hash_file(pb,after,NULL,&after_time,NULL)&&original_time==after_time);
+    puts("PASS timestamp-only changes do not publish versions or rewrite files on the peer");
+    f=CreateFileW(pa,GENERIC_WRITE|FILE_READ_ATTRIBUTES|FILE_WRITE_ATTRIBUTES,0,NULL,OPEN_EXISTING,0,NULL);assert(f!=INVALID_HANDLE_VALUE&&GetFileTime(f,NULL,NULL,&time));
+    DWORD written=0;assert(WriteFile(f,"same-size edit",14,&written,NULL)&&written==14&&FlushFileBuffers(f)&&SetFileTime(f,NULL,NULL,&time));CloseHandle(f);
+    r=action(a,SYNC_JOB_PUSH);assert(r.failure==SYNC_OK&&r.stats.published==1);sync_result_dispose(&r);
+    r=action(b,SYNC_JOB_PULL);assert(r.failure==SYNC_OK&&r.stats.downloaded==1);sync_result_dispose(&r);
+    assert(sync_hash_file(pa,before,NULL,NULL,NULL)&&sync_hash_file(pb,after,NULL,NULL,NULL)&&!strcmp(before,after));
+    puts("PASS content edits preserving size and timestamp still publish and reach the peer");
+    assert(DeleteFileW(keep_a));r=action(a,SYNC_JOB_PUSH);assert(r.failure==SYNC_OK);sync_result_dispose(&r);
+    r=action(b,SYNC_JOB_PULL);assert(r.failure==SYNC_OK);sync_result_dispose(&r);
+}
 static void choose_version(SyncRequest *r,SyncResult *checked,const wchar_t *file,int choice){
     sqlite3 *db=NULL;assert(sqlite3_open(":memory:",&db)==SQLITE_OK);assert(checked->changes);
     assert(sync_json_int(db,checked->changes,"$[0].mtime",0)>0&&sync_json_int(db,checked->changes,"$[0].remote_mtime",0)>0);
@@ -29,7 +70,7 @@ static void choose_version(SyncRequest *r,SyncResult *checked,const wchar_t *fil
     assert(sync_hash_file(file,r->expected_local,NULL,NULL,NULL));wcscpy(r->resolve_path,L"中文.bin");r->resolution=choice;sqlite3_close(db);
 }
 int wmain(int argc,wchar_t **argv){
-    assert(argc==5);lstrcpyW(root,argv[4]);assert(GetFileAttributesW(root)&FILE_ATTRIBUTE_DIRECTORY);char pin[80];assert(WideCharToMultiByte(CP_UTF8,0,argv[3],-1,pin,sizeof(pin),NULL,NULL));assert(ssh_runtime_acquire());
+    assert(argc==5);lstrcpyW(root,argv[4]);assert(GetFileAttributesW(root)&FILE_ATTRIBUTE_DIRECTORY);assert(nova_log_init(root));char pin[80];assert(WideCharToMultiByte(CP_UTF8,0,argv[3],-1,pin,sizeof(pin),NULL,NULL));assert(ssh_runtime_acquire());
     SyncRequest *a=calloc(1,sizeof(*a)),*b=calloc(1,sizeof(*b));assert(a&&b);setup(a,0,argv[1],_wtoi(argv[2]),pin);setup(b,1,argv[1],_wtoi(argv[2]),pin);SyncResult result=action(a,SYNC_JOB_REGISTER);assert(result.failure==SYNC_OK);sync_result_dispose(&result);result=action(b,SYNC_JOB_REGISTER);assert(result.failure==SYNC_OK);sync_result_dispose(&result);
     wchar_t pa[SYNC_PATH_CAP],pb[SYNC_PATH_CAP];swprintf(pa,SYNC_PATH_CAP,L"%ls\\中文.bin",a->pair.directory);swprintf(pb,SYNC_PATH_CAP,L"%ls\\中文.bin",b->pair.directory);source_file(pa);
     wchar_t legacy[SYNC_PATH_CAP];swprintf(legacy,SYNC_PATH_CAP,L"%ls\\A\\legacy-server.flag",root);write_text(legacy,"old broker response");
@@ -79,5 +120,13 @@ int wmain(int argc,wchar_t **argv){
     wchar_t recovery[SYNC_PATH_CAP];swprintf(recovery,SYNC_PATH_CAP,L"%ls\\recovery\\%hs\\中文.bin",b->state_directory,b->expected_local);assert(sync_hash_file(recovery,hb,NULL,NULL,NULL)&&!strcmp(hb,b->expected_local));
     result=action(c,SYNC_JOB_PULL);assert(result.failure==SYNC_OK);sync_result_dispose(&result);
     puts("PASS local/server conflict choices, stale inspection refusal, recovery copies and version propagation to three devices");
+    deletion_resave(a,b,pa,pb);
+    result=action(c,SYNC_JOB_PULL);assert(result.failure==SYNC_OK);sync_result_dispose(&result);
+    uint64_t before_time=0,after_time=0;assert(sync_hash_file(pb,hb,NULL,&before_time,NULL));
+    wchar_t duplicate[SYNC_PATH_CAP];swprintf(duplicate,SYNC_PATH_CAP,L"%ls\\A\\same-content-version.flag",root);write_text(duplicate,"simulate a legacy metadata-only version");
+    result=action(b,SYNC_JOB_PULL);assert(result.failure==SYNC_OK&&result.stats.downloaded==1&&result.stats.received==0);sync_result_dispose(&result);
+    assert(sync_hash_file(pb,ha,NULL,&after_time,NULL)&&!strcmp(ha,hb)&&before_time==after_time);
+    result=action(c,SYNC_JOB_PULL);assert(result.failure==SYNC_OK&&result.stats.received==0);sync_result_dispose(&result);
+    nova_log_close();puts("PASS legacy identical-content versions are acknowledged without rewriting the peer's file");
     CloseHandle(a->cancel);CloseHandle(b->cancel);CloseHandle(c->cancel);SecureZeroMemory(a,sizeof(*a));SecureZeroMemory(b,sizeof(*b));SecureZeroMemory(c,sizeof(*c));free(a);free(b);free(c);ssh_runtime_release();puts("PASS native SHA-256, Python Gear compatibility, incremental offline queue, resume, acknowledgements and deletion callback (loopback only)");return 0;
 }

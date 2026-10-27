@@ -57,6 +57,7 @@ static BOOL rpc(Admin *a,const char *action,const char *fields,const void *bytes
 static BOOL opened(Admin *a,SshLogin *login){
     sy_progress(&a->wire,SYNC_CONNECT,a->project,0,0);
     a->wire.ssh=ssh_client_connect(login,a->wire.request->cancel,&a->wire.result->ssh);
+    nova_log_write(NOVA_LOG_INFO,"sync_admin","connection_bound",L"run=%ld target=%d connection=%ld",a->wire.log_id,a->target,ssh_client_log_id(a->wire.ssh));
     SecureZeroMemory(login->secret,sizeof(login->secret));
     if(!a->wire.ssh){a->wire.result->target_error=a->target;
         return sy_fail(&a->wire,SYNC_NETWORK);
@@ -436,6 +437,7 @@ BOOL sync_server_run(SyncRequest *request,int action,SyncResult *result){
     Admin a={0},b={0};
     a.wire.request=b.wire.request=request;
     a.wire.result=b.wire.result=result;
+    sy_run_begin(&a.wire,action);b.wire.log_id=a.wire.log_id;b.wire.started=a.wire.started;
     a.project=request->settings.project;
     a.root=request->settings.broker;
     b.project=request->target_project;
@@ -479,5 +481,6 @@ BOOL sync_server_run(SyncRequest *request,int action,SyncResult *result){
     if(a.wire.db)sqlite3_close(a.wire.db);
     SecureZeroMemory(request->login.secret,sizeof(request->login.secret));
     SecureZeroMemory(request->target_login.secret,sizeof(request->target_login.secret));
+    sy_run_end(&a.wire,ok);
     return ok;
 }

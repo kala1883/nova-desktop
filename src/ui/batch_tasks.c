@@ -15,6 +15,7 @@
 #include "../i18n.h"
 #include "../platform/batch_runner.h"
 #include "../platform/storage.h"
+#include "../platform/app_log.h"
 
 #define BATCH_CLASS L"NovaBatchTasksWindow"
 #define ID_BATCH_LIST 2101
@@ -61,13 +62,13 @@ typedef struct {
     HANDLE cancel;
     BatchTask snapshot;
     int slot; /* UI-owned slot maps immutable worker results to the current row. */
-    void *completion;
+    void *completion;NovaLogSpan log;
 
 } BatchRunContext;
 
 typedef struct {
     int type,index,success,failed,skipped,cancelled,total,slot;
-    DWORD exit_code,error;
+    DWORD exit_code,error;LONG operation;
     wchar_t output[BATCH_OUTPUT_CAP];
 } BatchRunEvent;
 
@@ -82,7 +83,7 @@ static HIMAGELIST row_height_images;
 static int loaded,running,cancel_requested,statuses[BATCH_DIRECTORY_LIMIT];
 static DWORD exit_codes[BATCH_DIRECTORY_LIMIT],errors[BATCH_DIRECTORY_LIMIT];
 static wchar_t outputs[BATCH_DIRECTORY_LIMIT][BATCH_OUTPUT_CAP];
-typedef struct { HANDLE worker,cancel; int row; BOOL cancelling; } BatchActiveRun;
+typedef struct { HANDLE worker,cancel; int row; BOOL cancelling; NovaLogSpan log; } BatchActiveRun;
 static BatchActiveRun active_runs[BATCH_DIRECTORY_LIMIT];
 static BatchResult run_totals;
 static int dpi=96;
@@ -107,7 +108,7 @@ static BOOL step_available(int index){
     return collection.count&&index>=0&&index<task.directory_count&&!cancel_requested&&!step_running(index);
 }
 static void cancel_runs(void){
-    for(int i=0;i<BATCH_DIRECTORY_LIMIT;i++)if(active_runs[i].cancel){active_runs[i].cancelling=TRUE;SetEvent(active_runs[i].cancel);}
+    for(int i=0;i<BATCH_DIRECTORY_LIMIT;i++)if(active_runs[i].cancel){active_runs[i].cancelling=TRUE;nova_log_write(NOVA_LOG_WARN,"batch_ui","cancel_requested",L"op=%ld slot=%d",active_runs[i].log.id,i);SetEvent(active_runs[i].cancel);}
 }
 static const wchar_t *status_text(int status){
     switch(status){
@@ -343,17 +344,22 @@ static HWND make_button(const wchar_t *label,int id){
     HWND value=CreateWindowExW(0,L"BUTTON",label,WS_CHILD|WS_VISIBLE|WS_TABSTOP|BS_OWNERDRAW,0,0,10,10,window,(HMENU)(INT_PTR)id,GetModuleHandleW(NULL),NULL);
     SendMessageW(value,WM_SETFONT,(WPARAM)body_font,TRUE);SetWindowSubclass(value,button_proc,1,0);return value;
 }
-static void post_event(HWND owner,BatchRunEvent *event){if(!PostMessageW(owner,WM_NOVA_BATCH_EVENT,0,(LPARAM)event))free(event);}
+static void post_event(HWND owner,BatchRunEvent *event){
+    LONG operation=event->operation;int type=event->type;BOOL posted=PostMessageW(owner,WM_NOVA_BATCH_EVENT,0,(LPARAM)event);
+    if(type==EVENT_FINISHED||!posted)nova_log_write(posted?NOVA_LOG_INFO:NOVA_LOG_ERROR,"batch_ui","completion_posted",L"op=%ld type=%d ok=%d win32=%lu",operation,type,posted,posted?0:GetLastError());
+    if(!posted)free(event);
+}
 static void run_progress(void *parameter,int type,int index,DWORD code,DWORD error,const wchar_t *output){
     BatchRunContext *context=parameter;
     BatchRunEvent *event=calloc(1,sizeof(*event));if(!event)return;
-    event->type=type;event->index=index;event->slot=context->slot;event->total=context->snapshot.directory_count;event->exit_code=code;event->error=error;if(output)lstrcpynW(event->output,output,BATCH_OUTPUT_CAP);post_event(context->owner,event);
+    event->operation=context->log.id;event->type=type;event->index=index;event->slot=context->slot;event->total=context->snapshot.directory_count;event->exit_code=code;event->error=error;if(output)lstrcpynW(event->output,output,BATCH_OUTPUT_CAP);post_event(context->owner,event);
 }
 static DWORD WINAPI run_worker(void *parameter){
     BatchRunContext *context=parameter;
-    BatchResult result=batch_runner_task(&context->snapshot,context->cancel,run_progress,context,NULL);
+    nova_log_write(NOVA_LOG_INFO,"batch_ui","worker_started",L"op=%ld slot=%d",context->log.id,context->slot);
+    BatchResult result=batch_runner_task_logged(&context->snapshot,context->cancel,run_progress,context,NULL,context->log.id);
     BatchRunEvent *done=context->completion;
-    if(done){done->type=EVENT_FINISHED;done->index=-1;done->slot=context->slot;done->success=result.success;done->failed=result.failed;done->skipped=result.skipped;done->cancelled=result.cancelled;done->total=context->snapshot.directory_count;post_event(context->owner,done);}
+    if(done){done->operation=context->log.id;done->type=EVENT_FINISHED;done->index=-1;done->slot=context->slot;done->success=result.success;done->failed=result.failed;done->skipped=result.skipped;done->cancelled=result.cancelled;done->total=context->snapshot.directory_count;post_event(context->owner,done);}
     free(context);return 0;
 }
 static BOOL save_current(const BatchTask *value){
@@ -460,7 +466,7 @@ static void move_step(int source,int destination){
     selected_step=destination;refresh_list();ListView_EnsureVisible(list,destination,FALSE);
     set_summary(nova_text(L"子任务顺序已保存。",L"Subtask order saved."));
 }
-static BOOL begin_task(const BatchTask *snapshot,int source_row){
+static BOOL begin_task_impl(const BatchTask *snapshot,int source_row,NovaLogSpan span){
     if(source_row < -1||source_row>=snapshot->directory_count)return FALSE;
     if((source_row<0&&running)||(source_row>=0&&!step_available(source_row)))return FALSE;
     int slot=0;while(slot<BATCH_DIRECTORY_LIMIT&&active_runs[slot].worker)slot++;
@@ -469,7 +475,7 @@ static BOOL begin_task(const BatchTask *snapshot,int source_row){
     if(!context){MessageBoxW(window,nova_text(L"内存不足，无法创建批量任务快照。",L"Not enough memory to create the batch task snapshot."),L"NOVA Desktop",MB_OK|MB_ICONWARNING);return FALSE;}
     context->completion=calloc(1,sizeof(BatchRunEvent));
     if(!context->completion){free(context);MessageBoxW(window,nova_text(L"内存不足，无法启动任务。",L"Not enough memory to start the task."),L"NOVA Desktop",MB_OK|MB_ICONWARNING);return FALSE;}
-    context->owner=task_owner;context->snapshot=*snapshot;context->slot=slot;
+    context->owner=task_owner;context->snapshot=*snapshot;context->slot=slot;context->log=span;
     if(source_row>=0){
         lstrcpyW(context->snapshot.directories[0],snapshot->directories[source_row]);
         lstrcpyW(context->snapshot.commands[0],batch_task_command(snapshot,source_row));
@@ -485,6 +491,8 @@ static BOOL begin_task(const BatchTask *snapshot,int source_row){
     }
     HANDLE worker=CreateThread(NULL,0,run_worker,context,0,NULL);
     if(!worker){CloseHandle(cancel_event);free(context->completion);free(context);MessageBoxW(window,nova_text(L"无法创建批量任务工作线程。",L"Unable to create the batch task worker thread."),L"NOVA Desktop",MB_OK|MB_ICONWARNING);return FALSE;}
+    active_runs[slot].log=span;
+    nova_log_write(NOVA_LOG_INFO,"batch_ui","request_accepted",L"op=%ld task=%lld slot=%d row=%d",span.id,snapshot->id,slot,source_row);
     active_runs[slot].worker=worker;active_runs[slot].cancel=cancel_event;active_runs[slot].row=source_row;
     if(!running)ZeroMemory(&run_totals,sizeof(run_totals));
     running++;cancel_requested=FALSE;
@@ -492,6 +500,11 @@ static BOOL begin_task(const BatchTask *snapshot,int source_row){
     set_summary(nova_text(L"任务已开始…",L"Task started…"));refresh_list();
     SetWindowTextW(run_button,nova_text(L"取消全部",L"Cancel all"));enable_editor();
     return TRUE;
+}
+static BOOL begin_task(const BatchTask *snapshot,int source_row){
+    NovaLogSpan span=nova_log_begin("batch_ui","request",0);BOOL ok=begin_task_impl(snapshot,source_row,span);
+    if(!ok)nova_log_end(span,FALSE,GetLastError());
+    return ok;
 }
 static BOOL start_next_task(void){
     if(running)return FALSE;
@@ -523,7 +536,7 @@ static void run_selected_step(void){
 static void cancel_selected_step(void){
     BatchActiveRun *active=active_step(selected_step);
     if(!active||active->cancelling||cancel_requested)return;
-    active->cancelling=TRUE;SetEvent(active->cancel);
+    active->cancelling=TRUE;nova_log_write(NOVA_LOG_WARN,"batch_ui","cancel_requested",L"op=%ld scope=selected_row",active->log.id);SetEvent(active->cancel);
     statuses[selected_step]=BATCH_CANCELLING;refresh_row(selected_step);enable_step();
     set_summary(nova_text(L"正在取消选中的子任务，其他子任务继续执行。",L"Cancelling the selected subtask; other subtasks continue."));
 }
@@ -723,6 +736,7 @@ BOOL batch_tasks_launch(HWND owner,long long id){
     if(!window&&!batch_tasks_open(owner))return FALSE;
     task_owner=owner;
     int queued=batch_task_queue_add(&task_queue,&value);
+    nova_log_write(queued<0?NOVA_LOG_WARN:NOVA_LOG_INFO,"batch_ui","queue_result",L"task=%lld result=%d queued=%d running=%d",id,queued,task_queue.count,running);
     if(queued<0)return FALSE;
     if(!running)return start_next_task();
     wchar_t summary[256];swprintf(summary,256,nova_text(L"正在执行任务；另有 %d 条等待。重复启动会自动忽略。",L"Task running; %d more queued. Duplicate launches are ignored."),task_queue.count);set_summary(summary);
@@ -731,7 +745,7 @@ BOOL batch_tasks_launch(HWND owner,long long id){
 BOOL batch_tasks_busy(void){return running||task_queue.count>0;}
 BOOL batch_tasks_handle_event(LPARAM parameter){
     BatchRunEvent *event=(BatchRunEvent*)parameter;if(!event)return FALSE;
-    if(event->slot<0||event->slot>=BATCH_DIRECTORY_LIMIT||!active_runs[event->slot].worker){free(event);return FALSE;}
+    if(event->slot<0||event->slot>=BATCH_DIRECTORY_LIMIT||!active_runs[event->slot].worker){nova_log_write(NOVA_LOG_WARN,"batch_ui","completion_discarded",L"op=%ld reason=inactive_slot",event->operation);free(event);return FALSE;}
     BatchActiveRun *active=&active_runs[event->slot];
     if(event->type!=EVENT_FINISHED&&active->row>=0)event->index=active->row;
     if(event->index>=0&&event->index<task.directory_count){
@@ -750,6 +764,8 @@ BOOL batch_tasks_handle_event(LPARAM parameter){
         refresh_row(event->index);
     }
     if(event->type==EVENT_FINISHED){
+        nova_log_write(NOVA_LOG_INFO,"batch_ui","completion_consumed",L"op=%ld failed=%d cancelled=%d skipped=%d",event->operation,event->failed,event->cancelled,event->skipped);
+        nova_log_end(active->log,!event->failed&&!event->cancelled&&!event->skipped,event->cancelled||event->skipped?ERROR_CANCELLED:event->failed?ERROR_GEN_FAILURE:0);
         if(active->row>=0&&active->cancelling){event->cancelled+=event->skipped;event->skipped=0;}
         run_totals.success+=event->success;run_totals.failed+=event->failed;run_totals.cancelled+=event->cancelled;run_totals.skipped+=event->skipped;
         CloseHandle(active->worker);CloseHandle(active->cancel);ZeroMemory(active,sizeof(*active));running--;
@@ -768,7 +784,7 @@ void batch_tasks_shutdown(void){
     batch_task_queue_cancel(&task_queue);cancel_runs();if(window)DestroyWindow(window);
     /* Workers own their cancel handle until they return; join before closing it. */
     for(int i=0;i<BATCH_DIRECTORY_LIMIT;i++)if(active_runs[i].worker){
-        WaitForSingleObject(active_runs[i].worker,INFINITE);CloseHandle(active_runs[i].worker);CloseHandle(active_runs[i].cancel);
+        WaitForSingleObject(active_runs[i].worker,INFINITE);nova_log_write(NOVA_LOG_WARN,"batch_ui","completion_discarded",L"op=%ld reason=shutdown",active_runs[i].log.id);nova_log_end(active_runs[i].log,FALSE,ERROR_CANCELLED);CloseHandle(active_runs[i].worker);CloseHandle(active_runs[i].cancel);
     }
     ZeroMemory(active_runs,sizeof(active_runs));running=cancel_requested=0;task_queue.active_id=0;
     MSG event;while(PeekMessageW(&event,task_owner,WM_NOVA_BATCH_EVENT,WM_NOVA_BATCH_EVENT,PM_REMOVE))free((void*)event.lParam);

@@ -1,6 +1,7 @@
 int nova_english=0;
 #include "../src/ui/file_manager.c"
 #include <assert.h>
+#include "log_capture.h"
 
 static void pump(unsigned milliseconds){
     ULONGLONG until=GetTickCount64()+milliseconds;
@@ -13,6 +14,11 @@ static BOOL same_path(const wchar_t *a,const wchar_t *b){
 }
 static BOOL wait_location(Tab *t,const wchar_t *path){
     for(int i=0;i<100;i++){pump(50);if(!t->pending&&same_path(t->location,path))return TRUE;}return FALSE;
+}
+static BOOL wait_saved_tab(const wchar_t *section,const wchar_t *key,const wchar_t *expected){
+    ULONGLONG until=GetTickCount64()+5000;wchar_t value[LOCATION_SIZE];
+    do{pump(50);session_get(section,key,L"",value,LOCATION_SIZE);if(!fm.dirty&&same_path(value,expected))return TRUE;}while(GetTickCount64()<until);
+    fprintf(stderr,"Session save timeout: dirty=%d\n",fm.dirty);return FALSE;
 }
 static BOOL CALLBACK find_tree(HWND h,LPARAM data){wchar_t cls[64];GetClassNameW(h,cls,64);if(!lstrcmpW(cls,L"SysTreeView32"))*(BOOL*)data=TRUE;return TRUE;}
 static int live_views(void){int n=0;for(int i=0;i<4;i++)for(int j=0;j<fm.panes[i].count;j++)if(fm.panes[i].items[j]->browser)n++;return n;}
@@ -62,7 +68,7 @@ int wmain(int argc,wchar_t **argv){
     assert(SUCCEEDED(OleInitialize(NULL)));
     IDataObject *old_clipboard=NULL;if(!modes_only)OleGetClipboard(&old_clipboard);
     wchar_t temp[MAX_PATH],root[MAX_PATH],a[MAX_PATH],b[MAX_PATH],file[MAX_PATH],copy[MAX_PATH];
-    GetTempPathW(MAX_PATH,temp);swprintf(root,MAX_PATH,L"%lsNovaFiles-%lu",temp,GetCurrentProcessId());assert(CreateDirectoryW(root,NULL));
+    GetTempPathW(MAX_PATH,temp);swprintf(root,MAX_PATH,L"%lsNovaFiles-%lu",temp,GetCurrentProcessId());assert(CreateDirectoryW(root,NULL));assert(nova_log_init(root));
     swprintf(a,MAX_PATH,L"%ls\\中文源目录",root);swprintf(b,MAX_PATH,L"%ls\\目标目录",root);assert(CreateDirectoryW(a,NULL));assert(CreateDirectoryW(b,NULL));
     swprintf(file,MAX_PATH,L"%ls\\测试.txt",a);swprintf(copy,MAX_PATH,L"%ls\\测试.txt",b);
     HANDLE f=CreateFileW(file,GENERIC_WRITE,0,NULL,CREATE_NEW,FILE_ATTRIBUTE_NORMAL,NULL);assert(f!=INVALID_HANDLE_VALUE);DWORD bytes;assert(WriteFile(f,"nova",4,&bytes,NULL));CloseHandle(f);
@@ -104,7 +110,7 @@ int wmain(int argc,wchar_t **argv){
         test_pane_modes(&fm.panes[0],root);
         nova_english=1;update_pane_mode(&fm.panes[0]);wchar_t mode_name[32];GetWindowTextW(fm.panes[0].mode_button,mode_name,32);assert(!lstrcmpW(mode_name,L"Servers"));nova_english=0;update_pane_mode(&fm.panes[0]);
         file_manager_close();assert(file_manager_open(host,root));pump(300);assert(fm.panes[0].server_mode&&!fm.panes[1].server_mode&&fm.panes[0].count==1&&!current(&fm.panes[0])->remote);file_manager_close();store_close();
-        assert(DeleteFileW(file));assert(RemoveDirectoryW(a)&&RemoveDirectoryW(b));wchar_t settings[MAX_PATH];const wchar_t *names[]={L"file-manager.ini",L"nova.json",L"local.json",L"nova.backup.json",L"local.backup.json",L"runtime.json",L"runtime.backup.json",L"runtime.base.json",L"runtime.seed.json",L"nova.migration.json"};for(unsigned i=0;i<sizeof(names)/sizeof(names[0]);i++){swprintf(settings,MAX_PATH,L"%ls\\%ls",root,names[i]);DeleteFileW(settings);}{wchar_t cleanup[MAX_PATH];const wchar_t *names[]={L"runtime.json",L"runtime.backup.json",L"runtime.base.json",L"runtime.seed.json",L"nova.migration.json"};for(unsigned i=0;i<sizeof(names)/sizeof(names[0]);i++){swprintf(cleanup,MAX_PATH,L"%ls\\%ls",root,names[i]);DeleteFileW(cleanup);}}assert(RemoveDirectoryW(root));DestroyWindow(host);OleUninitialize();
+        assert(DeleteFileW(file));assert(RemoveDirectoryW(a)&&RemoveDirectoryW(b));wchar_t settings[MAX_PATH];const wchar_t *names[]={L"file-manager.ini",L"nova.json",L"local.json",L"nova.backup.json",L"local.backup.json",L"runtime.json",L"runtime.backup.json",L"runtime.base.json",L"runtime.seed.json",L"nova.migration.json"};for(unsigned i=0;i<sizeof(names)/sizeof(names[0]);i++){swprintf(settings,MAX_PATH,L"%ls\\%ls",root,names[i]);DeleteFileW(settings);}{wchar_t cleanup[MAX_PATH];const wchar_t *names[]={L"runtime.json",L"runtime.backup.json",L"runtime.base.json",L"runtime.seed.json",L"nova.migration.json"};for(unsigned i=0;i<sizeof(names)/sizeof(names[0]);i++){swprintf(cleanup,MAX_PATH,L"%ls\\%ls",root,names[i]);DeleteFileW(cleanup);}}{const char *events[]={"component=files","action=navigate","event=session_save"};check_diagnostics(root,events,3);}assert(RemoveDirectoryW(root));DestroyWindow(host);OleUninitialize();
         puts("PASS pane-mode isolation, saved-server routing, cancel/capacity safety, local-mode fallback, localization and reopen persistence (no clipboard or server access)");return 0;
     }
 
@@ -134,7 +140,7 @@ int wmain(int argc,wchar_t **argv){
     RECT first_tab,last_tab;assert(TabCtrl_GetItemRect(p->tabs,0,&first_tab)&&TabCtrl_GetItemRect(p->tabs,1,&last_tab));POINT press={(first_tab.left+first_tab.right)/2,(first_tab.top+first_tab.bottom)/2},drop={last_tab.right-1,(last_tab.top+last_tab.bottom)/2};
     SendMessageW(p->tabs,WM_LBUTTONDOWN,MK_LBUTTON,MAKELPARAM(press.x,press.y));assert(p->tab_drag_armed&&p->tab_drag_source==0&&GetCapture()==p->tabs);SendMessageW(p->tabs,WM_TIMER,TAB_DRAG_TIMER_ID,0);assert(p->tab_dragging);
     SendMessageW(p->tabs,WM_MOUSEMOVE,MK_LBUTTON,MAKELPARAM(drop.x,drop.y));SendMessageW(p->tabs,WM_LBUTTONUP,0,MAKELPARAM(drop.x,drop.y));assert(!p->tab_drag_armed&&!p->tab_dragging&&p->items[0]==added&&p->items[1]==t&&current(p)==t);
-    pump(500);wchar_t persisted[LOCATION_SIZE];session_get(L"Pane0",L"Tab1",L"",persisted,LOCATION_SIZE);assert(same_path(persisted,t->location));
+    assert(wait_saved_tab(L"Pane0",L"Tab1",t->location));wchar_t persisted[LOCATION_SIZE];session_get(L"Pane0",L"Tab1",L"",persisted,LOCATION_SIZE);assert(same_path(persisted,t->location));
     SendMessageW(p->tabs,WM_LBUTTONDOWN,MK_LBUTTON,MAKELPARAM(drop.x,drop.y));SendMessageW(p->tabs,WM_TIMER,TAB_DRAG_TIMER_ID,0);assert(p->tab_dragging);MSG escape={p->tabs,WM_KEYDOWN,VK_ESCAPE,0,0,{0,0}};assert(file_manager_message(&escape));assert(!p->tab_drag_armed&&!p->tab_dragging&&p->items[1]==t);
     select_tab(p,0);close_tab(p);assert(p->count==1&&current(p)==t);
     puts("PASS press-and-hold tab drag reorders within one pane, persists, and Escape cancels safely");
@@ -189,5 +195,5 @@ int wmain(int argc,wchar_t **argv){
     puts("PASS 48 restored tabs create only 1/4 visible views; idle eviction to zero; history restored; debounced save flushed on close");
     OleSetClipboard(old_clipboard);if(old_clipboard){OleFlushClipboard();IDataObject_Release(old_clipboard);}
     DeleteFileW(copy);DeleteFileW(file);RemoveDirectoryW(created);RemoveDirectoryW(a);RemoveDirectoryW(b);
-    store_close();wchar_t settings[MAX_PATH];swprintf(settings,MAX_PATH,L"%ls\\file-manager.ini",root);DeleteFileW(settings);swprintf(settings,MAX_PATH,L"%ls\\nova.json",root);DeleteFileW(settings);swprintf(settings,MAX_PATH,L"%ls\\local.json",root);DeleteFileW(settings);{wchar_t cleanup[MAX_PATH];const wchar_t *names[]={L"runtime.json",L"runtime.backup.json",L"runtime.base.json",L"runtime.seed.json",L"nova.migration.json"};for(unsigned i=0;i<sizeof(names)/sizeof(names[0]);i++){swprintf(cleanup,MAX_PATH,L"%ls\\%ls",root,names[i]);DeleteFileW(cleanup);}}assert(RemoveDirectoryW(root));DestroyWindow(host);OleUninitialize();return 0;
+    store_close();wchar_t settings[MAX_PATH];swprintf(settings,MAX_PATH,L"%ls\\file-manager.ini",root);DeleteFileW(settings);swprintf(settings,MAX_PATH,L"%ls\\nova.json",root);DeleteFileW(settings);swprintf(settings,MAX_PATH,L"%ls\\local.json",root);DeleteFileW(settings);{wchar_t cleanup[MAX_PATH];const wchar_t *names[]={L"runtime.json",L"runtime.backup.json",L"runtime.base.json",L"runtime.seed.json",L"nova.migration.json"};for(unsigned i=0;i<sizeof(names)/sizeof(names[0]);i++){swprintf(cleanup,MAX_PATH,L"%ls\\%ls",root,names[i]);DeleteFileW(cleanup);}}{const char *events[]={"component=files","action=navigate","event=session_save"};check_diagnostics(root,events,3);}assert(RemoveDirectoryW(root));DestroyWindow(host);OleUninitialize();return 0;
 }

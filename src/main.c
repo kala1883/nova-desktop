@@ -19,6 +19,7 @@
 #include "ui/batch_tasks.h"
 #include "ui/sync_manager.h"
 #include "platform/storage.h"
+#include "platform/app_log.h"
 #include "i18n.h"
 
 #define APP_NAME L"NOVA Desktop"
@@ -180,7 +181,7 @@ static BOOL save_config(void){
     if(ok)ok=store_set_int(L"app",L"Nova",L"Language",nova_english?1:0);
     if(ok)ok=store_set_int(L"app",L"Nova",L"SidebarCollapsed",sidebar_collapsed?1:0);
     ok=store_end(ok);
-    if(!ok)set_notice(store_error());
+    if(!ok){nova_log_write(NOVA_LOG_ERROR,"app","config_save_failed",L"win32=%lu",GetLastError());set_notice(store_error());}
     return ok;
 }
 
@@ -251,15 +252,17 @@ static BOOL read_startup(void) {
     return result==ERROR_SUCCESS&&type==REG_SZ&&lstrcmpiW(stored,expected)==0;
 }
 static void toggle_startup(void) {
+    NovaLogSpan span=nova_log_begin("app","startup_setting",0);
     HKEY key; wchar_t command[MAX_PATH+40];
-    if(!startup_command(command,MAX_PATH+40))return;
+    if(!startup_command(command,MAX_PATH+40)){nova_log_end(span,FALSE,ERROR_INSUFFICIENT_BUFFER);return;}
     LONG result=RegCreateKeyExW(HKEY_CURRENT_USER,L"Software\\Microsoft\\Windows\\CurrentVersion\\Run",0,NULL,0,KEY_SET_VALUE,NULL,&key,NULL);
     if(result==ERROR_SUCCESS){
         result=startup_enabled?RegDeleteValueW(key,L"NOVA Desktop"):RegSetValueExW(key,L"NOVA Desktop",0,REG_SZ,(BYTE*)command,(DWORD)((wcslen(command)+1)*sizeof(wchar_t)));
         RegCloseKey(key);
     }
-    if(result!=ERROR_SUCCESS&&result!=ERROR_FILE_NOT_FOUND){error_message(nova_text(L"无法更新开机启动设置。请检查当前用户的注册表访问权限。",L"Unable to update startup settings. Check access to the current user's registry."));return;}
+    if(result!=ERROR_SUCCESS&&result!=ERROR_FILE_NOT_FOUND){nova_log_end(span,FALSE,(DWORD)result);error_message(nova_text(L"无法更新开机启动设置。请检查当前用户的注册表访问权限。",L"Unable to update startup settings. Check access to the current user's registry."));return;}
     startup_enabled=read_startup();
+    nova_log_write(NOVA_LOG_INFO,"app","startup_setting_result",L"op=%ld enabled=%d registry=%ld",span.id,startup_enabled,result);nova_log_end(span,TRUE,0);
     set_notice(startup_enabled?nova_text(L"已开启：下次登录 Windows 时启动 NOVA，并恢复固定状态。",L"Startup enabled: NOVA will open at the next Windows sign-in and restore its window mode."):nova_text(L"已关闭开机启动。你仍可手动打开 NOVA。",L"Startup disabled. You can still open NOVA manually."));
 }
 
@@ -267,7 +270,7 @@ static void redraw_surface(void){
     layout_controls();
     RedrawWindow(main_window,NULL,NULL,RDW_INVALIDATE|RDW_ERASE|RDW_FRAME|RDW_ALLCHILDREN|RDW_UPDATENOW);
 }
-static BOOL set_desktop_mode(BOOL value){
+static BOOL set_desktop_mode_impl(BOOL value){
     if(value==desktop_mode)return TRUE;
     if(value){
         if(pinned&&!set_pinned(FALSE))return FALSE;
@@ -304,7 +307,7 @@ static BOOL set_desktop_mode(BOOL value){
 }
 
 /* A WeChat-style pin changes only the topmost band; geometry and ownership stay unchanged. */
-static BOOL set_pinned(BOOL value) {
+static BOOL set_pinned_impl(BOOL value) {
     if(value&&desktop_mode&&!set_desktop_mode(FALSE))return FALSE;
     if(value==pinned)return TRUE;
     LONG_PTR exstyle=GetWindowLongPtrW(main_window,GWL_EXSTYLE);
@@ -319,6 +322,14 @@ static BOOL set_pinned(BOOL value) {
     return TRUE;
 }
 
+static BOOL set_desktop_mode(BOOL value){
+    NovaLogSpan span=nova_log_begin("app","desktop_mode",0);BOOL ok=set_desktop_mode_impl(value);
+    nova_log_write(ok?NOVA_LOG_INFO:NOVA_LOG_WARN,"app","mode_result",L"op=%ld desired=%d desktop=%d pinned=%d",span.id,value,desktop_mode,pinned);return nova_log_end(span,ok,ok?0:GetLastError());
+}
+static BOOL set_pinned(BOOL value){
+    NovaLogSpan span=nova_log_begin("app","pinned_mode",0);BOOL ok=set_pinned_impl(value);
+    nova_log_write(ok?NOVA_LOG_INFO:NOVA_LOG_WARN,"app","mode_result",L"op=%ld desired=%d desktop=%d pinned=%d",span.id,value,desktop_mode,pinned);return nova_log_end(span,ok,ok?0:GetLastError());
+}
 static void text(HDC dc,const wchar_t *str,RECT rect,HFONT font,COLORREF color,UINT flags) {
     HFONT old=SelectObject(dc,font);SetBkMode(dc,TRANSPARENT);SetTextColor(dc,color);DrawTextW(dc,str,-1,&rect,flags|DT_NOPREFIX);SelectObject(dc,old);
 }
@@ -512,6 +523,7 @@ static int insert_path(const wchar_t *path) {
     return 1;
 }
 static void finish_import(int added,int skipped) {
+    nova_log_write(NOVA_LOG_INFO,"launcher","metadata_import",L"workspace=%lld added=%d skipped=%d executes_files=0",spaces[active_space].id,added,skipped);
     wchar_t message[220];swprintf(message,220,nova_text(L"已添加 %d 项到「%ls」；跳过 %d 项（重复、无效路径或超过 20 项上限）。",L"Added %d items to \"%ls\"; skipped %d (duplicate, invalid, or beyond the 20-item limit)."),added,spaces[active_space].name,skipped);
     set_notice(message);if(save_config()){SetWindowTextW(search_edit,L"");refresh_apps();}
 }
@@ -544,14 +556,15 @@ static void moved_item(int source,int destination,int at,void *context){
     if(!ensure_items(active_space)||!ensure_items(destination))return;
     Workspace source_before=spaces[active_space],destination_before=spaces[destination];
     int result=workspace_move(spaces,space_count,active_space,source,destination,at);
+    nova_log_write(result<0?NOVA_LOG_WARN:NOVA_LOG_INFO,"launcher","metadata_move",L"source_workspace=%d destination_workspace=%d source_index=%d insertion=%d result=%d original_file_untouched=1",active_space,destination,source,at,result);
     if(result<0){set_notice(nova_text(L"无法移动：目标工作区已满或已有此项目。",L"Unable to move: the destination is full or already contains this item."));return;}
     if(result>0){
         if(save_config())set_notice(destination==active_space?nova_text(L"已保存新的图标顺序。",L"The new icon order has been saved."):nova_text(L"已移动到目标工作区。原文件位置不变。",L"Moved to the destination workspace. The original file remains in place."));
-        else{spaces[active_space]=source_before;spaces[destination]=destination_before;set_notice(nova_text(L"无法保存这次移动，启动项已恢复到原工作区。",L"The move could not be saved, so the launch item was restored to its original workspace."));}
+        else{nova_log_write(NOVA_LOG_WARN,"launcher","metadata_move_rollback",L"reason=save_failed");spaces[active_space]=source_before;spaces[destination]=destination_before;set_notice(nova_text(L"无法保存这次移动，启动项已恢复到原工作区。",L"The move could not be saved, so the launch item was restored to its original workspace."));}
         refresh_apps();
     }
 }
-static int open_item(const AppItem *item){
+static int open_item_impl(const AppItem *item,LONG operation){
     if(!item||!*item->target)return 0;
     if(wcsncmp(item->target,BATCH_TARGET_PREFIX,11)==0){
         long long id=batch_task_target_id(item->target);BatchTask value;
@@ -561,7 +574,13 @@ static int open_item(const AppItem *item){
     }
     if(test_mode){test_launch_count++;return 1;}
     if(!lstrcmpiW(item->target,L"explorer.exe")){open_file_manager();return files_page&&IsWindow(files_view);}
-    return (INT_PTR)ShellExecuteW(main_window,L"open",item->target,NULL,NULL,SW_SHOWNORMAL)>32;
+    INT_PTR result=(INT_PTR)ShellExecuteW(main_window,L"open",item->target,NULL,NULL,SW_SHOWNORMAL);
+    nova_log_write(result>32?NOVA_LOG_INFO:NOVA_LOG_WARN,"launcher","shell_dispatch",L"op=%ld shell_result=%lld accepted=%d",operation,(long long)result,result>32);return result>32;
+}
+static int open_item(const AppItem *item){
+    NovaLogSpan span=nova_log_begin("launcher","open_item",0);int ok=open_item_impl(item,span.id);DWORD error=ok?0:GetLastError();
+    nova_log_write(ok?NOVA_LOG_INFO:NOVA_LOG_WARN,"launcher","dispatch_result",L"op=%ld item=%lld accepted=%d batch=%d test=%d completion_unknown=%d",span.id,item?item->id:0,ok,item&&wcsncmp(item->target,BATCH_TARGET_PREFIX,11)==0,test_mode,ok&&!test_mode);
+    nova_log_end(span,ok,error);return ok;
 }
 static void launch_workspace(void){
     if(active_space==0)return;
@@ -579,6 +598,7 @@ static void launch_workspace(void){
     wchar_t message[256];
     if(batch_count)swprintf(message,256,nova_text(L"已提交 %d 个启动项，其中 %d 个批量任务已接受（运行中或排队）；失败 %d 个。",L"Submitted %d items; %d batch tasks accepted (running or queued); %d failed."),snapshot.app_count,batch_count,failed);
     else swprintf(message,256,nova_text(L"全部启动完成：已对 %d 个项目各执行一次打开，失败 %d 个。",L"Launch all finished: opened %d items once each; %d failed."),snapshot.app_count,failed);
+    nova_log_write(failed?NOVA_LOG_WARN:NOVA_LOG_INFO,"launcher","workspace_dispatch_result",L"workspace=%lld submitted=%d batch=%d failed=%d",snapshot.id,snapshot.app_count,batch_count,failed);
     set_notice(message);
 }
 static void open_app(void) {
@@ -803,7 +823,7 @@ static LRESULT CALLBACK window_proc(HWND hwnd,UINT msg,WPARAM wp,LPARAM lp){
     case WM_NOVA_BATCH_CHANGED:if(app_list)refresh_apps();return 0;
     case WM_TRAY:if(lp==WM_LBUTTONUP)restore_window();if(lp==WM_RBUTTONUP)tray_menu();return 0;
     case WM_CLOSE:file_manager_close();DestroyWindow(hwnd);return 0;
-    case WM_DESTROY:sync_manager_shutdown();batch_tasks_shutdown();file_manager_close();save_config();KillTimer(hwnd,STATS_TIMER);KillTimer(hwnd,START_PIN_TIMER);KillTimer(hwnd,START_DESKTOP_TIMER);UnregisterHotKey(hwnd,ID_HOTKEY);if(!test_mode)Shell_NotifyIconW(NIM_DELETE,&tray);PostQuitMessage(0);return 0;
+    case WM_DESTROY:nova_log_write(NOVA_LOG_INFO,"app","shutdown_begin",L"workers_join_before_storage_close=1");sync_manager_shutdown();batch_tasks_shutdown();file_manager_close();save_config();KillTimer(hwnd,STATS_TIMER);KillTimer(hwnd,START_PIN_TIMER);KillTimer(hwnd,START_DESKTOP_TIMER);UnregisterHotKey(hwnd,ID_HOTKEY);if(!test_mode)Shell_NotifyIconW(NIM_DELETE,&tray);PostQuitMessage(0);return 0;
     }return DefWindowProcW(hwnd,msg,wp,lp);
 }
 
@@ -846,11 +866,14 @@ int WINAPI wWinMain(HINSTANCE instance,HINSTANCE previous,PWSTR command,int show
     if(!CreateDirectoryW(configuration_directory,NULL)&&GetLastError()!=ERROR_ALREADY_EXISTS){
         MessageBoxW(NULL,nova_text(L"无法创建 JSON 配置目录，请检查目录权限。",L"Unable to create the JSON configuration folder. Check folder permissions."),APP_NAME,MB_OK|MB_ICONERROR);CloseHandle(mutex);OleUninitialize();return 4;
     }
+    nova_log_init(configuration_directory);
+    nova_log_write(NOVA_LOG_INFO,"app","start",L"build=%hs %hs migrate=%d",__DATE__,__TIME__,migrate_only);
     load_config();
     if(!storage_failed&&!file_manager_migrate_settings(dir)){storage_failed=TRUE;set_notice(store_error());}
-    if(storage_failed){if(!migrate_only)MessageBoxW(NULL,notice,APP_NAME,MB_OK|MB_ICONERROR);store_close();CloseHandle(mutex);OleUninitialize();return 4;}
+    if(storage_failed){nova_log_write(NOVA_LOG_ERROR,"app","storage_open_failed",L"win32=%lu",GetLastError());if(!migrate_only)MessageBoxW(NULL,notice,APP_NAME,MB_OK|MB_ICONERROR);store_close();nova_log_close();CloseHandle(mutex);OleUninitialize();return 4;}
     BOOL backed_up=store_backup();
-    if(migrate_only){store_close();CloseHandle(mutex);OleUninitialize();return backed_up?0:6;}
+    if(!backed_up)nova_log_write(NOVA_LOG_WARN,"app","backup_failed",L"win32=%lu",GetLastError());
+    if(migrate_only){store_close();nova_log_close();CloseHandle(mutex);OleUninitialize();return backed_up?0:6;}
     if(!backed_up)set_notice(nova_text(L"无法更新 JSON 配置备份，请检查配置目录权限。",L"Unable to update the JSON configuration backup. Check permissions for the configuration folder."));
     INITCOMMONCONTROLSEX ic={sizeof(ic),ICC_LISTVIEW_CLASSES|ICC_STANDARD_CLASSES};InitCommonControlsEx(&ic);
     background=CreateSolidBrush(BG);panel_brush=CreateSolidBrush(PANEL);taskbar_message=RegisterWindowMessageW(L"TaskbarCreated");
@@ -860,9 +883,10 @@ int WINAPI wWinMain(HINSTANCE instance,HINSTANCE previous,PWSTR command,int show
     if(!wc.hIcon)wc.hIcon=LoadIconW(NULL,IDI_APPLICATION);
     if(!wc.hIconSm)wc.hIconSm=wc.hIcon;
     wc.hbrBackground=background;
-    if(!RegisterClassExW(&wc))return 2;
+    if(!RegisterClassExW(&wc)){nova_log_write(NOVA_LOG_ERROR,"app","window_class_failed",L"win32=%lu",GetLastError());return 2;}
     HWND hwnd=CreateWindowExW(WS_EX_CONTROLPARENT,APP_CLASS,APP_NAME,WS_OVERLAPPEDWINDOW|WS_CLIPCHILDREN,CW_USEDEFAULT,CW_USEDEFAULT,px(1100),px(760),NULL,NULL,instance,NULL);
-    if(!hwnd)return 3;
+    if(!hwnd){nova_log_write(NOVA_LOG_ERROR,"app","window_create_failed",L"win32=%lu",GetLastError());return 3;}
+    nova_log_write(NOVA_LOG_INFO,"app","window_ready",L"dpi=%d workspaces=%d",dpi,space_count);
     if(command&&wcsstr(command,L"--files")&&active_space!=0){active_space=0;save_config();refresh_spaces();}
     ShowWindow(hwnd,show==SW_HIDE?SW_HIDE:SW_MAXIMIZE);UpdateWindow(hwnd);
     if(active_space==0)open_file_manager();
@@ -881,5 +905,5 @@ int WINAPI wWinMain(HINSTANCE instance,HINSTANCE previous,PWSTR command,int show
         if(!IsDialogMessageW(hwnd,&msg)){TranslateMessage(&msg);DispatchMessageW(&msg);}
     }
     if(images)ImageList_Destroy(images);
-    DeleteObject(body_font);DeleteObject(small_font);DeleteObject(title_font);DeleteObject(brand_font);DeleteObject(background);DeleteObject(panel_brush);store_close();CloseHandle(mutex);OleUninitialize();return (int)msg.wParam;
+    DeleteObject(body_font);DeleteObject(small_font);DeleteObject(title_font);DeleteObject(brand_font);DeleteObject(background);DeleteObject(panel_brush);store_close();nova_log_write(NOVA_LOG_INFO,"app","stop",L"exit=%llu",(unsigned long long)msg.wParam);nova_log_close();CloseHandle(mutex);OleUninitialize();return (int)msg.wParam;
 }

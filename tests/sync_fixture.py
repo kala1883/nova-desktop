@@ -2,6 +2,7 @@
 import hashlib
 import importlib
 import logging
+import json
 from pathlib import Path
 import socket
 import subprocess
@@ -55,6 +56,17 @@ def run(executable):
                         if request.get('action') == 'pending' and request.get('device') == 'B' and race_flag.exists():
                             race_flag.unlink()
                             (root / 'B/files/中文.bin').write_bytes(b'edited while waiting for the server')
+                        duplicate_flag = root / 'A/same-content-version.flag'
+                        if request.get('action') == 'pending' and request.get('device') == 'B' and duplicate_flag.exists():
+                            duplicate_flag.unlink()
+                            with broker.connect() as db:
+                                previous = db.execute("SELECT j.manifest FROM heads h JOIN jobs j ON j.id=h.job WHERE h.dataset=? AND json_extract(j.manifest,'$.path')=?", ('fixture-files', '中文.bin')).fetchone()
+                            manifest = json.loads(previous[0])
+                            manifest.update(id='fixture-same-content', parent=manifest['id'], origin='A', mtime_ns=manifest['mtime_ns']+1000000000)
+                            identity = dict(device='A', node_id='fixture-A')
+                            plan, _ = broker.handle(dict(action='prepare', native=True, manifest=manifest, **identity))
+                            assert not plan['needed']
+                            broker.handle(dict(action='commit', job=manifest['id'], **identity))
                         if request.get("action")=="prepare" and request["manifest"].get("kind")=="PUT":
                             manifest=request["manifest"]
                             content=(root/manifest["origin"]/'files'/manifest['path']).read_bytes()
@@ -127,6 +139,13 @@ def run(executable):
                 assert db.execute("SELECT count(*) FROM objects").fetchone()[0]==0
                 assert db.execute("SELECT count(*) FROM jobs WHERE state!='DELIVERED'").fetchone()[0]==0
             assert not failures,failures
+            diagnostic = (root / 'logs/nova.log').read_text(encoding='utf-8')
+            for event in ('run_begin', 'run_end', 'index_open', 'comparison', 'file_skip', 'file_publish', 'file_receive', 'rpc_rejected'):
+                assert f'event={event} ' in diagnostic, event
+            assert 'reason=local_delete' in diagnostic and 'reason=content_already_present' in diagnostic
+            assert 'sent_bytes=0 received_bytes=0' in diagnostic
+            assert 'fixture-password' not in diagnostic and str(root) not in diagnostic and '中文.bin' not in diagnostic
+            print('PASS persistent diagnostics distinguish metadata, hashing, publication, receive reuse and wire bytes without credentials or work paths')
             for index in range(15):
                 broker.handle({"action":"dataset_create","device":"A","node_id":"fixture-A","dataset":f"limit-{index}","name":f"Limit fixture {index}"})
             try:

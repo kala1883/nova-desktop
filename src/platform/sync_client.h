@@ -17,7 +17,7 @@ typedef struct SyncRequest {
     int quota_gib,reserve_gib;
     int direction,resolution; /* 0 both, 1 push, 2 pull; resolution: 1 local, 2 server. */
     wchar_t resolve_path[SYNC_PATH_CAP];
-    char expected_local[65],expected_remote[SYNC_ID_CAP];
+    char expected_local[65],expected_remote[SYNC_ID_CAP];LONG log_parent;
 } SyncRequest;
 typedef struct SyncResult { SyncFailure failure;DWORD native_error;SshResult ssh;SyncStats stats;char *cloud,*route;wchar_t detail[1024];
     BOOL target_error,installed,switched,pending_migration;

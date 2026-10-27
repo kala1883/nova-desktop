@@ -146,5 +146,10 @@ BOOL sy_index_open(SyncRun *r){
     if(!ok){sqlite3_exec(r->db,"ROLLBACK",NULL,NULL,NULL);
         return sy_fail(r,SYNC_STORAGE);
         }
+    sqlite3_stmt *counts=NULL;
+    if(sqlite3_prepare_v2(r->db,"SELECT (SELECT count(*) FROM files),(SELECT count(*) FROM outbox),(SELECT count(*) FROM inbox)",-1,&counts,NULL)==SQLITE_OK&&sqlite3_step(counts)==SQLITE_ROW)
+        nova_log_write(NOVA_LOG_INFO,"sync","index_open",L"run=%ld existing=%d files=%lld outbox=%lld inbox=%lld",r->log_id,attr!=INVALID_FILE_ATTRIBUTES,
+            (long long)sqlite3_column_int64(counts,0),(long long)sqlite3_column_int64(counts,1),(long long)sqlite3_column_int64(counts,2));
+    sqlite3_finalize(counts);
     return TRUE;
 }

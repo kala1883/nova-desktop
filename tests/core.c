@@ -3,6 +3,7 @@
 #undef wWinMain
 #include "../src/platform/batch_runner.h"
 #include <assert.h>
+#include "log_capture.h"
 #include <stdlib.h>
 
 static HANDLE batch_gate,batch_cancel;
@@ -97,7 +98,7 @@ static void test_subtask_reorder(HWND steps){
 int wmain(int argc,wchar_t **argv) {
     wchar_t tempdir[MAX_PATH],dir[MAX_PATH],path[MAX_PATH],command[MAX_PATH+40];
     GetTempPathW(MAX_PATH,tempdir);swprintf(dir,MAX_PATH,L"%lsnova-test-%lu",tempdir,GetCurrentProcessId());
-    assert(CreateDirectoryW(dir,NULL));swprintf(config_path,MAX_PATH,L"%ls\\config.ini",dir);
+    assert(CreateDirectoryW(dir,NULL));assert(nova_log_init(dir));swprintf(config_path,MAX_PATH,L"%ls\\config.ini",dir);
     WritePrivateProfileStringW(L"Fixture",L"Preserve",L"legacy",config_path);
     defaults();lstrcpyW(spaces[0].name,L"中文工作区 演示");active_space=2;prefer_pin=TRUE;sidebar_collapsed=TRUE;
     assert(save_config());ZeroMemory(spaces,sizeof(spaces));active_space=0;prefer_pin=FALSE;load_config();
@@ -402,7 +403,8 @@ int wmain(int argc,wchar_t **argv) {
         puts("PASS directory workspace is fixed to file management; ordinary workspaces remain editable");
         file_manager_close();DestroyWindow(window);DeleteFileW(fm_settings);OleUninitialize();puts("PASS window control integration");
     }
-    store_close();DeleteFileW(path);DeleteFileW(config_path);
+    store_close();{const char *events[]={"event=collection_saved","event=command_result","event=dispatch_result"};check_diagnostics(dir,events,3);}
+    DeleteFileW(path);DeleteFileW(config_path);
     wchar_t db_file[MAX_PATH];swprintf(db_file,MAX_PATH,L"%ls\\nova.json",dir);DeleteFileW(db_file);swprintf(db_file,MAX_PATH,L"%ls\\nova.backup.json",dir);DeleteFileW(db_file);swprintf(db_file,MAX_PATH,L"%ls\\local.json",dir);DeleteFileW(db_file);swprintf(db_file,MAX_PATH,L"%ls\\local.backup.json",dir);DeleteFileW(db_file);{wchar_t cleanup[MAX_PATH];const wchar_t *names[]={L"runtime.json",L"runtime.backup.json",L"runtime.base.json",L"runtime.seed.json",L"nova.migration.json"};for(unsigned i=0;i<sizeof(names)/sizeof(names[0]);i++){swprintf(cleanup,MAX_PATH,L"%ls\\%ls",dir,names[i]);DeleteFileW(cleanup);}}assert(RemoveDirectoryW(dir));
     return 0;
 }

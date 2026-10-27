@@ -12,9 +12,14 @@
 #include "../../third_party/libssh2/include/libssh2.h"
 #include "../../third_party/libssh2/include/libssh2_sftp.h"
 #include "ssh_client.h"
+#include "app_log.h"
 #include "../i18n.h"
 
-struct SshClient { SOCKET socket; LIBSSH2_SESSION *session; LIBSSH2_SFTP *sftp; LIBSSH2_CHANNEL *terminal; WSAEVENT terminal_event; HANDLE cancel; ULONGLONG deadline,last_progress; int visited,native_error; DWORD protocol_idle; SshPhase phase;SshProgress progress;void *progress_context; };
+struct SshClient { LONG connection_log,operation_log;unsigned long long transferred; SOCKET socket; LIBSSH2_SESSION *session; LIBSSH2_SFTP *sftp; LIBSSH2_CHANNEL *terminal; WSAEVENT terminal_event; HANDLE cancel; ULONGLONG deadline,last_progress; int visited,native_error; DWORD protocol_idle; SshPhase phase;SshProgress progress;void *progress_context; };
+static void set_phase(SshClient *c,SshPhase phase){
+    BOOL changed=c->phase!=phase;c->phase=phase;
+    if(changed&&c->operation_log)nova_log_write(NOVA_LOG_INFO,"ssh","phase",L"connection=%ld op=%ld phase=%d",c->connection_log,c->operation_log,phase);
+}
 const wchar_t *ssh_phase_name(SshPhase phase){
     switch(phase){
     case SSH_PHASE_RESOLVE:return nova_text(L"解析主机地址",L"Resolve host address");
@@ -75,19 +80,20 @@ static BOOL failed(SshClient *c,SshResult *r,const wchar_t *operation){
         c->sftp?nova_text(L" 请检查 SFTP 权限和目标是否已存在。",L" Check SFTP permissions and whether the destination already exists."):L"");
     if(r->cancelled)lstrcpyW(r->error,nova_text(L"已取消等待。远端操作的最终结果可能未知；请刷新确认，勿自动重试。",L"Waiting cancelled. The final remote result may be unknown; refresh to check and do not retry automatically."));
     else if(timeout)lstrcpyW(r->error,nova_text(L"SSH 操作超时；请查看失败阶段。已发出的远端操作结果可能未知。",L"SSH operation timed out; check the failed stage. Operations already sent may have an unknown remote result."));
+    nova_log_write(r->cancelled?NOVA_LOG_WARN:NOVA_LOG_ERROR,"ssh","failure",L"connection=%ld op=%ld phase=%d native=%d libssh2=%d sftp=%lu cancelled=%d timeout=%d",c->connection_log,c->operation_log,r->phase,r->native_error,r->ssh_error,r->sftp_error,r->cancelled,timeout);
     return FALSE;
 }
-static void begin(SshClient *c){c->deadline=GetTickCount64()+30000;c->visited=0;c->native_error=0;c->phase=SSH_PHASE_FILE;}
+static void begin(SshClient *c){c->deadline=GetTickCount64()+30000;c->visited=0;c->native_error=0;set_phase(c,SSH_PHASE_FILE);}
 static BOOL path_bytes(SshClient *c,const wchar_t *path,char *out,SshResult *r){
     if(path&&path[0]==L'/'&&wcslen(path)<SSH_PATH_CAP-40&&utf8(path,out,SSH_PATH_CAP*4))return TRUE;
     return failed(c,r,nova_text(L"远程路径无效或过长",L"Invalid or oversized remote path"));
 }
-SshClient *ssh_client_connect(const SshLogin *login,HANDLE cancel,SshResult *r){
+static SshClient *connect_impl(const SshLogin *login,HANDLE cancel,SshResult *r,LONG operation){
     SshClient *c=calloc(1,sizeof(*c));if(!c){r->code=1;lstrcpyW(r->error,nova_text(L"内存不足，无法创建 SSH 会话。",L"Not enough memory to create an SSH session."));return NULL;}
-    c->socket=INVALID_SOCKET;c->cancel=cancel;begin(c);wchar_t port[16];swprintf(port,16,L"%d",login->server.port);
+    c->connection_log=c->operation_log=operation;c->socket=INVALID_SOCKET;c->cancel=cancel;begin(c);wchar_t port[16];swprintf(port,16,L"%d",login->server.port);
     ADDRINFOW hints={0},*addresses=NULL;hints.ai_socktype=SOCK_STREAM;hints.ai_family=AF_UNSPEC;
-    c->phase=SSH_PHASE_RESOLVE;int lookup=GetAddrInfoW(login->server.host,port,&hints,&addresses);if(lookup){c->native_error=lookup;goto fail;}
-    c->phase=SSH_PHASE_TCP;
+    set_phase(c,SSH_PHASE_RESOLVE);int lookup=GetAddrInfoW(login->server.host,port,&hints,&addresses);if(lookup){c->native_error=lookup;goto fail;}
+    set_phase(c,SSH_PHASE_TCP);
     for(ADDRINFOW *a=addresses;a;a=a->ai_next){
         if(WaitForSingleObject(cancel,0)==WAIT_OBJECT_0)break;
         c->socket=socket(a->ai_family,a->ai_socktype,a->ai_protocol);if(c->socket==INVALID_SOCKET){c->native_error=WSAGetLastError();continue;}
@@ -104,24 +110,24 @@ SshClient *ssh_client_connect(const SshLogin *login,HANDLE cancel,SshResult *r){
         closesocket(c->socket);c->socket=INVALID_SOCKET;
     }
     FreeAddrInfoW(addresses);addresses=NULL;if(c->socket==INVALID_SOCKET)goto fail;
-    c->native_error=0;c->phase=SSH_PHASE_HANDSHAKE;c->session=libssh2_session_init();if(!c->session){c->native_error=ERROR_NOT_ENOUGH_MEMORY;goto fail;}libssh2_session_set_blocking(c->session,0);
+    c->native_error=0;set_phase(c,SSH_PHASE_HANDSHAKE);c->session=libssh2_session_init();if(!c->session){c->native_error=ERROR_NOT_ENOUGH_MEMORY;goto fail;}libssh2_session_set_blocking(c->session,0);
     if(libssh2_session_method_pref(c->session,LIBSSH2_METHOD_KEX,"curve25519-sha256,curve25519-sha256@libssh.org,ecdh-sha2-nistp256,diffie-hellman-group16-sha512,diffie-hellman-group14-sha256")||
        libssh2_session_method_pref(c->session,LIBSSH2_METHOD_HOSTKEY,"ssh-ed25519,ecdsa-sha2-nistp256,rsa-sha2-512,rsa-sha2-256")||
        libssh2_session_method_pref(c->session,LIBSSH2_METHOD_MAC_CS,"hmac-sha2-256,hmac-sha2-256-etm@openssh.com,hmac-sha2-512,hmac-sha2-512-etm@openssh.com")||
        libssh2_session_method_pref(c->session,LIBSSH2_METHOD_MAC_SC,"hmac-sha2-256,hmac-sha2-256-etm@openssh.com,hmac-sha2-512,hmac-sha2-512-etm@openssh.com")||
        libssh2_session_method_pref(c->session,LIBSSH2_METHOD_SIGN_ALGO,"ssh-ed25519,ecdsa-sha2-nistp256,ecdsa-sha2-nistp384,ecdsa-sha2-nistp521,rsa-sha2-512,rsa-sha2-256"))goto fail;
     int rc;RETRY(c,rc,libssh2_session_handshake(c->session,c->socket));if(rc)goto fail;
-    c->phase=SSH_PHASE_HOST_KEY;r->phase=SSH_PHASE_HOST_KEY;const unsigned char *hash=(const unsigned char*)libssh2_hostkey_hash(c->session,LIBSSH2_HOSTKEY_HASH_SHA256);if(!hash)goto fail;
+    set_phase(c,SSH_PHASE_HOST_KEY);r->phase=SSH_PHASE_HOST_KEY;const unsigned char *hash=(const unsigned char*)libssh2_hostkey_hash(c->session,LIBSSH2_HOSTKEY_HASH_SHA256);if(!hash)goto fail;
     for(int i=0;i<32;i++)snprintf(r->fingerprint+i*2,3,"%02x",hash[i]);
     if(!login->fingerprint[0]){r->code=2;ssh_client_close(c);return NULL;}
     if(strcmp(login->fingerprint,r->fingerprint)){r->code=1;lstrcpyW(r->error,nova_text(L"服务器主机指纹已变化，连接已阻止。请独立核验服务器身份。",L"The server host fingerprint changed. Connection blocked; verify the server identity independently."));ssh_client_close(c);return NULL;}
-    c->phase=SSH_PHASE_AUTH;char user[512],secret[2048]={0};if(!utf8(login->server.user,user,sizeof(user))||!utf8(login->secret,secret,sizeof(secret))){c->native_error=GetLastError();SecureZeroMemory(secret,sizeof(secret));goto fail;}
+    set_phase(c,SSH_PHASE_AUTH);char user[512],secret[2048]={0};if(!utf8(login->server.user,user,sizeof(user))||!utf8(login->secret,secret,sizeof(secret))){c->native_error=GetLastError();SecureZeroMemory(secret,sizeof(secret));goto fail;}
     char *methods=NULL;do{methods=libssh2_userauth_list(c->session,user,(unsigned)strlen(user));}while(!methods&&libssh2_session_last_errno(c->session)==LIBSSH2_ERROR_EAGAIN&&waiting(c));
     if(methods)snprintf(r->auth_methods,sizeof(r->auth_methods),"%s",methods);
     if(!methods&&!libssh2_userauth_authenticated(c->session)){SecureZeroMemory(secret,sizeof(secret));goto fail;}
     if(libssh2_userauth_authenticated(c->session))rc=0;
     else if(login->key_file[0]){
-        c->phase=SSH_PHASE_KEY_FILE;
+        set_phase(c,SSH_PHASE_KEY_FILE);
         HANDLE file=CreateFileW(login->key_file,GENERIC_READ,FILE_SHARE_READ,NULL,OPEN_EXISTING,0,NULL);char *key=NULL;DWORD read=0;LARGE_INTEGER size={0};
         if(file==INVALID_HANDLE_VALUE){c->native_error=GetLastError();SecureZeroMemory(secret,sizeof(secret));goto fail;}
         BOOL ok=GetFileSizeEx(file,&size)&&size.QuadPart>0&&size.QuadPart<=1024*1024;
@@ -135,12 +141,12 @@ SshClient *ssh_client_connect(const SshLogin *login,HANDLE cancel,SshResult *r){
                 nova_text(L"所选密钥文件使用 UTF-16 编码。请选择密钥工具导出的 ASCII/UTF-8 OpenSSH 或 PEM 私钥。原文件未修改。",L"The selected key file uses UTF-16 encoding. Select an ASCII/UTF-8 OpenSSH or PEM private key exported by your key tool. The original file was not changed."));
             SecureZeroMemory(secret,sizeof(secret));SecureZeroMemory(key,(size_t)size.QuadPart+1);free(key);ssh_client_close(c);return NULL;
         }
-        if(ok){const char *private_data=key;size_t private_size=read;if(private_size>=3&&!memcmp(private_data,"\xef\xbb\xbf",3)){private_data+=3;private_size-=3;}c->phase=SSH_PHASE_AUTH;RETRY(c,rc,libssh2_userauth_publickey_frommemory(c->session,user,strlen(user),NULL,0,private_data,private_size,secret));if(rc==LIBSSH2_ERROR_FILE||rc==LIBSSH2_ERROR_KEYFILE_AUTH_FAILED)c->phase=SSH_PHASE_KEY_PARSE;}
+        if(ok){const char *private_data=key;size_t private_size=read;if(private_size>=3&&!memcmp(private_data,"\xef\xbb\xbf",3)){private_data+=3;private_size-=3;}set_phase(c,SSH_PHASE_AUTH);RETRY(c,rc,libssh2_userauth_publickey_frommemory(c->session,user,strlen(user),NULL,0,private_data,private_size,secret));if(rc==LIBSSH2_ERROR_FILE||rc==LIBSSH2_ERROR_KEYFILE_AUTH_FAILED)set_phase(c,SSH_PHASE_KEY_PARSE);}
         else rc=-1;
         if(key){SecureZeroMemory(key,(size_t)size.QuadPart+1);free(key);}
     }else {RETRY(c,rc,libssh2_userauth_password(c->session,user,secret));}
     SecureZeroMemory(secret,sizeof(secret));if(rc)goto fail;
-    c->phase=SSH_PHASE_SFTP;
+    set_phase(c,SSH_PHASE_SFTP);
     do{c->sftp=libssh2_sftp_init(c->session);}while(!c->sftp&&libssh2_session_last_errno(c->session)==LIBSSH2_ERROR_EAGAIN&&waiting(c));
     if(!c->sftp)goto fail;
     return c;
@@ -150,6 +156,7 @@ fail:
 }
 void ssh_client_close(SshClient *c){
     if(!c)return;
+    nova_log_write(NOVA_LOG_INFO,"ssh","connection_closed",L"connection=%ld",c->connection_log);
     /* Closing the socket makes nonblocking cleanup finite, including error paths. */
     if(c->socket!=INVALID_SOCKET){shutdown(c->socket,SD_BOTH);closesocket(c->socket);c->socket=INVALID_SOCKET;}
     if(c->terminal_event)WSACloseEvent(c->terminal_event);
@@ -168,8 +175,8 @@ static LIBSSH2_SFTP_HANDLE *open_remote(SshClient *c,const char *path,unsigned l
     do{h=libssh2_sftp_open_ex(c->sftp,path,(unsigned)strlen(path),flags,mode,type);}while(!h&&libssh2_session_last_errno(c->session)==LIBSSH2_ERROR_EAGAIN&&waiting(c));return h;
 }
 static BOOL close_remote(SshClient *c,LIBSSH2_SFTP_HANDLE *h){int rc;RETRY(c,rc,libssh2_sftp_close(h));return rc==0;}
-BOOL ssh_client_list(SshClient *c,const wchar_t *path,SshResult *r){
-    begin(c);c->phase=SSH_PHASE_DIRECTORY;char encoded[SSH_PATH_CAP*4],canonical[SSH_PATH_CAP*4];if(!path_bytes(c,path,encoded,r))return FALSE;
+static BOOL list_impl(SshClient *c,const wchar_t *path,SshResult *r){
+    begin(c);set_phase(c,SSH_PHASE_DIRECTORY);char encoded[SSH_PATH_CAP*4],canonical[SSH_PATH_CAP*4];if(!path_bytes(c,path,encoded,r))return FALSE;
     int rc;RETRY(c,rc,libssh2_sftp_realpath(c->sftp,encoded,canonical,sizeof(canonical)-1));
     if(rc<=0||rc>=(int)sizeof(canonical)-1||!wide(canonical,rc,r->path,SSH_PATH_CAP-40))return failed(c,r,nova_text(L"解析远程目录",L"Resolve remote directory"));
     canonical[rc]=0;LIBSSH2_SFTP_HANDLE *h=open_remote(c,canonical,0,0,LIBSSH2_SFTP_OPENDIR);if(!h)return failed(c,r,nova_text(L"打开远程目录",L"Open remote directory"));
@@ -186,8 +193,8 @@ BOOL ssh_client_list(SshClient *c,const wchar_t *path,SshResult *r){
     }
     close_remote(c,h);if(!ok){free(r->entries);r->entries=NULL;r->count=0;return failed(c,r,nova_text(L"读取目录（最多 10000 项，名称必须为 UTF-8）",L"Read directory (at most 10000 entries, UTF-8 names required)"));}return TRUE;
 }
-BOOL ssh_client_mkdir(SshClient *c,const wchar_t *path,SshResult *r){begin(c);char p[SSH_PATH_CAP*4];if(!path_bytes(c,path,p,r))return FALSE;int rc;RETRY(c,rc,libssh2_sftp_mkdir(c->sftp,p,0755));return !rc||failed(c,r,nova_text(L"创建目录",L"Create directory"));}
-BOOL ssh_client_rename(SshClient *c,const wchar_t *from,const wchar_t *to,SshResult *r){
+static BOOL mkdir_impl(SshClient *c,const wchar_t *path,SshResult *r){begin(c);char p[SSH_PATH_CAP*4];if(!path_bytes(c,path,p,r))return FALSE;int rc;RETRY(c,rc,libssh2_sftp_mkdir(c->sftp,p,0755));return !rc||failed(c,r,nova_text(L"创建目录",L"Create directory"));}
+static BOOL rename_impl(SshClient *c,const wchar_t *from,const wchar_t *to,SshResult *r){
     begin(c);char a[SSH_PATH_CAP*4],b[SSH_PATH_CAP*4];if(!path_bytes(c,from,a,r)||!path_bytes(c,to,b,r))return FALSE;
     LIBSSH2_SFTP_ATTRIBUTES attr;int rc;RETRY(c,rc,libssh2_sftp_lstat(c->sftp,b,&attr));
     if(rc==0){lstrcpyW(r->error,nova_text(L"目标已存在；未覆盖。",L"The destination exists; nothing was overwritten."));r->code=1;return FALSE;}
@@ -204,7 +211,7 @@ static BOOL delete_node(SshClient *c,const wchar_t *path,int depth,SshResult *r)
     }else {RETRY(c,rc,libssh2_sftp_unlink(c->sftp,p));}
     return !rc||failed(c,r,nova_text(L"删除（可能已完成部分操作）",L"Delete (some operations may already have completed)"));
 }
-BOOL ssh_client_delete(SshClient *c,const wchar_t *path,SshResult *r){begin(c);if(!wcscmp(path,L"/"))return failed(c,r,nova_text(L"禁止删除根目录",L"Root deletion is forbidden"));return delete_node(c,path,0,r);}
+static BOOL delete_impl(SshClient *c,const wchar_t *path,SshResult *r){begin(c);if(!wcscmp(path,L"/"))return failed(c,r,nova_text(L"禁止删除根目录",L"Root deletion is forbidden"));return delete_node(c,path,0,r);}
 static BOOL local_name_valid(const wchar_t *name){
     if(!name[0]||wcspbrk(name,L"\\/:*?\"<>|")||!wcscmp(name,L".")||!wcscmp(name,L"..")||name[wcslen(name)-1]==L'.'||name[wcslen(name)-1]==L' ')return FALSE;
     for(const wchar_t *p=name;*p;p++)if(*p<32)return FALSE;
@@ -251,8 +258,8 @@ static BOOL transfer_node(SshClient *c,BOOL upload,const wchar_t *local,const wc
     while(ok){
         if(WaitForSingleObject(c->cancel,0)==WAIT_OBJECT_0){ok=FALSE;break;}
         if(upload){DWORD read=0;if(!ReadFile(file,buffer,65536,&read,NULL)){ok=FALSE;break;}if(!read)break;
-            size_t offset=0;while(offset<read){ssize_t n;RETRY(c,n,libssh2_sftp_write(h,buffer+offset,read-offset));if(n<=0){ok=FALSE;break;}offset+=(size_t)n;c->deadline=GetTickCount64()+30000;}if(!ok)break;done+=read;
-        }else{ssize_t n;RETRY(c,n,libssh2_sftp_read(h,buffer,65536));if(!n)break;if(n<0){ok=FALSE;break;}DWORD written=0;if(!WriteFile(file,buffer,(DWORD)n,&written,NULL)||written!=(DWORD)n){ok=FALSE;break;}c->deadline=GetTickCount64()+30000;done+=(unsigned long long)n;}
+            size_t offset=0;while(offset<read){ssize_t n;RETRY(c,n,libssh2_sftp_write(h,buffer+offset,read-offset));if(n<=0){ok=FALSE;break;}offset+=(size_t)n;c->deadline=GetTickCount64()+30000;}if(!ok)break;done+=read;c->transferred+=read;
+        }else{ssize_t n;RETRY(c,n,libssh2_sftp_read(h,buffer,65536));if(!n)break;if(n<0){ok=FALSE;break;}DWORD written=0;if(!WriteFile(file,buffer,(DWORD)n,&written,NULL)||written!=(DWORD)n){ok=FALSE;break;}c->deadline=GetTickCount64()+30000;done+=(unsigned long long)n;c->transferred+=(unsigned long long)n;}
         progress(c,done,total);
     }
     free(buffer);
@@ -260,8 +267,8 @@ static BOOL transfer_node(SshClient *c,BOOL upload,const wchar_t *local,const wc
     CloseHandle(file);if(!close_remote(c,h))ok=FALSE;
     if(!ok){if(!upload)DeleteFileW(local);else {RETRY(c,rc,libssh2_sftp_unlink(c->sftp,p));}return failed(c,r,nova_text(L"文件传输（目录中可能已有部分完成的文件）",L"File transfer (some directory files may already have completed)"));}return TRUE;
 }
-BOOL ssh_client_transfer(SshClient *c,BOOL upload,const wchar_t *local,const wchar_t *remote,SshResult *r){begin(c);return transfer_node(c,upload,local,remote,0,r);}
-BOOL ssh_client_copy(SshClient *c,const wchar_t *from,const wchar_t *to,SshResult *r){
+static BOOL transfer_impl(SshClient *c,BOOL upload,const wchar_t *local,const wchar_t *remote,SshResult *r){begin(c);return transfer_node(c,upload,local,remote,0,r);}
+static BOOL copy_impl(SshClient *c,const wchar_t *from,const wchar_t *to,SshResult *r){
     /* First release copies a regular file through bounded memory, without shell commands. */
     begin(c);char a[SSH_PATH_CAP*4],b[SSH_PATH_CAP*4];if(!path_bytes(c,from,a,r)||!path_bytes(c,to,b,r))return FALSE;
     LIBSSH2_SFTP_ATTRIBUTES attr;int rc;RETRY(c,rc,libssh2_sftp_lstat(c->sftp,a,&attr));if(rc||!LIBSSH2_SFTP_S_ISREG(attr.permissions))return failed(c,r,nova_text(L"复制（首版仅支持普通文件；目录可下载后上传）",L"Copy (regular files only in this release; download and upload directories)"));
@@ -274,8 +281,8 @@ BOOL ssh_client_copy(SshClient *c,const wchar_t *from,const wchar_t *to,SshResul
     if(!ok){RETRY(c,rc,libssh2_sftp_unlink(c->sftp,b));return failed(c,r,nova_text(L"复制文件",L"Copy file"));}return TRUE;
 }
 static BOOL channel_write(SshClient *c,LIBSSH2_CHANNEL *channel,const char *data,size_t length){size_t offset=0;while(offset<length){ssize_t rc;RETRY(c,rc,libssh2_channel_write(channel,data+offset,length-offset));if(rc<=0)return FALSE;offset+=(size_t)rc;}return TRUE;}
-BOOL ssh_client_protocol_open(SshClient *c,const wchar_t *project,const wchar_t *root,SshResult *r){
-    begin(c);c->phase=SSH_PHASE_COMMAND;if(c->terminal)return failed(c,r,nova_text(L"通道已被占用",L"Channel already in use"));
+static BOOL protocol_open_impl(SshClient *c,const wchar_t *project,const wchar_t *root,SshResult *r){
+    begin(c);set_phase(c,SSH_PHASE_COMMAND);if(c->terminal)return failed(c,r,nova_text(L"通道已被占用",L"Channel already in use"));
     char p[SSH_PATH_CAP*4],q[SSH_PATH_CAP*4];if(!path_bytes(c,project,p,r)||!path_bytes(c,root,q,r))return FALSE;
     size_t a=strlen(p)*5+2,b=strlen(q)*5+2;char *first=malloc(a),*second=malloc(b);
     BOOL ok=first&&second&&ssh_directory_payload((unsigned char*)p,strlen(p),first,a)&&ssh_directory_payload((unsigned char*)q,strlen(q),second,b);
@@ -287,13 +294,13 @@ BOOL ssh_client_protocol_open(SshClient *c,const wchar_t *project,const wchar_t 
     return ok||failed(c,r,nova_text(L"打开同步协议通道",L"Open synchronization channel"));
 }
 BOOL ssh_client_protocol_write(SshClient *c,const void *data,size_t size,SshResult *r){
-    begin(c);c->phase=SSH_PHASE_COMMAND;c->deadline=GetTickCount64()+(c->protocol_idle?c->protocol_idle:30000);
+    begin(c);set_phase(c,SSH_PHASE_COMMAND);c->deadline=GetTickCount64()+(c->protocol_idle?c->protocol_idle:30000);
     if(!c->terminal||size>16u*1024u*1024u+1024u*1024u)return failed(c,r,nova_text(L"同步帧大小或状态无效",L"Invalid synchronization frame size or state"));
     size_t offset=0;while(offset<size){ssize_t n;RETRY(c,n,libssh2_channel_write(c->terminal,(const char*)data+offset,size-offset));if(n<=0)return failed(c,r,nova_text(L"发送同步数据",L"Send synchronization data"));offset+=(size_t)n;c->deadline=GetTickCount64()+(c->protocol_idle?c->protocol_idle:30000);}return TRUE;
 }
-BOOL ssh_client_bootstrap_open(SshClient *c,const char *source,size_t length,BOOL provision,SshResult *r){
+static BOOL bootstrap_open_impl(SshClient *c,const char *source,size_t length,BOOL provision,SshResult *r){
     c->protocol_idle=provision?300000:120000; /* Package installation may take several minutes. */
-    begin(c);c->phase=SSH_PHASE_COMMAND;c->deadline=GetTickCount64()+(c->protocol_idle?c->protocol_idle:30000);
+    begin(c);set_phase(c,SSH_PHASE_COMMAND);c->deadline=GetTickCount64()+(c->protocol_idle?c->protocol_idle:30000);
     if(c->terminal||!source||length>1024u*1024u)return failed(c,r,nova_text(L"部署引导数据无效",L"Invalid deployment bootstrap"));
     LIBSSH2_CHANNEL *channel=NULL;
     do{channel=libssh2_channel_open_session(c->session);}while(!channel&&libssh2_session_last_errno(c->session)==LIBSSH2_ERROR_EAGAIN&&waiting(c));
@@ -317,7 +324,7 @@ BOOL ssh_client_bootstrap_open(SshClient *c,const char *source,size_t length,BOO
     return ok||failed(c,r,nova_text(L"启动服务器部署（需要 Python 3.9+）",L"Start server deployment (Python 3.9+ required)"));
 }
 BOOL ssh_client_protocol_read(SshClient *c,void *data,size_t size,SshResult *r){
-    begin(c);c->phase=SSH_PHASE_COMMAND;c->deadline=GetTickCount64()+(c->protocol_idle?c->protocol_idle:30000);size_t offset=0;
+    begin(c);set_phase(c,SSH_PHASE_COMMAND);c->deadline=GetTickCount64()+(c->protocol_idle?c->protocol_idle:30000);size_t offset=0;
     if(!c->terminal||size>16u*1024u*1024u)return failed(c,r,nova_text(L"同步帧大小或状态无效",L"Invalid synchronization frame size or state"));
     while(offset<size){
         if(WaitForSingleObject(c->cancel,0)==WAIT_OBJECT_0||GetTickCount64()>=c->deadline)return failed(c,r,nova_text(L"接收同步数据",L"Receive synchronization data"));
@@ -336,8 +343,8 @@ static void append_output(SshResult *r,const char *data,size_t length){
     if(r->output_length+length>=SSH_OUTPUT_CAP){size_t drop=r->output_length+length-(SSH_OUTPUT_CAP-1);memmove(r->output,r->output+drop,r->output_length-drop);r->output_length-=drop;r->output_truncated=TRUE;}
     memcpy(r->output+r->output_length,data,length);r->output_length+=length;r->output[r->output_length]=0;
 }
-BOOL ssh_client_exec(SshClient *c,const wchar_t *directory,const wchar_t *command,SshResult *r){
-    begin(c);c->phase=SSH_PHASE_COMMAND;c->deadline=GetTickCount64()+30*60*1000;char path[SSH_PATH_CAP*4],cmd[SSH_PATH_CAP*4];if(!path_bytes(c,directory,path,r)||!utf8(command,cmd,sizeof(cmd)))return failed(c,r,nova_text(L"命令过长",L"Command too long"));
+static BOOL exec_impl(SshClient *c,const wchar_t *directory,const wchar_t *command,SshResult *r){
+    begin(c);set_phase(c,SSH_PHASE_COMMAND);c->deadline=GetTickCount64()+30*60*1000;char path[SSH_PATH_CAP*4],cmd[SSH_PATH_CAP*4];if(!path_bytes(c,directory,path,r)||!utf8(command,cmd,sizeof(cmd)))return failed(c,r,nova_text(L"命令过长",L"Command too long"));
     if(WaitForSingleObject(c->cancel,0)==WAIT_OBJECT_0)return failed(c,r,nova_text(L"命令已取消",L"Command cancelled"));
     size_t cap=strlen(path)*5+2;char *payload=malloc(cap);if(!payload||!ssh_directory_payload((unsigned char*)path,strlen(path),payload,cap)){free(payload);return failed(c,r,nova_text(L"准备远程目录",L"Prepare remote directory"));}
     LIBSSH2_CHANNEL *channel;do{channel=libssh2_channel_open_session(c->session);}while(!channel&&libssh2_session_last_errno(c->session)==LIBSSH2_ERROR_EAGAIN&&waiting(c));
@@ -356,8 +363,8 @@ BOOL ssh_client_exec(SshClient *c,const wchar_t *directory,const wchar_t *comman
     if(!ok){failed(c,r,nova_text(L"远程命令（不自动重试）",L"Remote command (never retried automatically)"));}
     RETRY(c,rc,libssh2_channel_free(channel));return ok;
 }
-BOOL ssh_client_terminal_open(SshClient *c,const wchar_t *directory,int columns,int rows,SshResult *r){
-    begin(c);c->phase=SSH_PHASE_COMMAND;
+static BOOL terminal_open_impl(SshClient *c,const wchar_t *directory,int columns,int rows,SshResult *r){
+    begin(c);set_phase(c,SSH_PHASE_COMMAND);
     if(c->terminal||columns<2||columns>500||rows<2||rows>200)return failed(c,r,nova_text(L"终端尺寸或状态无效",L"Invalid terminal size or state"));
     char path[SSH_PATH_CAP*4];if(!path_bytes(c,directory,path,r))return FALSE;
     size_t capacity=strlen(path)*5+2;char *payload=malloc(capacity);
@@ -381,7 +388,7 @@ BOOL ssh_client_terminal_open(SshClient *c,const wchar_t *directory,int columns,
     return TRUE;
 }
 BOOL ssh_client_terminal_read(SshClient *c,char *data,size_t capacity,size_t *length,BOOL *ended,SshResult *r){
-    *length=0;*ended=FALSE;begin(c);c->phase=SSH_PHASE_COMMAND;
+    *length=0;*ended=FALSE;begin(c);set_phase(c,SSH_PHASE_COMMAND);
     if(WaitForSingleObject(c->cancel,0)==WAIT_OBJECT_0)return failed(c,r,nova_text(L"终端已取消",L"Terminal cancelled"));
     if(!c->terminal)return failed(c,r,nova_text(L"终端未启动",L"Terminal is not running"));
     for(int stream=0;stream<2;stream++){
@@ -397,7 +404,7 @@ BOOL ssh_client_terminal_read(SshClient *c,char *data,size_t capacity,size_t *le
     return TRUE;
 }
 BOOL ssh_client_terminal_write(SshClient *c,const char *data,size_t length,size_t *written,SshResult *r){
-    *written=0;begin(c);c->phase=SSH_PHASE_COMMAND;
+    *written=0;begin(c);set_phase(c,SSH_PHASE_COMMAND);
     if(!c->terminal)return failed(c,r,nova_text(L"终端未启动",L"Terminal is not running"));
     ssize_t n=libssh2_channel_write(c->terminal,data,length);
     if(n==LIBSSH2_ERROR_EAGAIN)return TRUE;
@@ -405,7 +412,7 @@ BOOL ssh_client_terminal_write(SshClient *c,const char *data,size_t length,size_
     *written=(size_t)n;return TRUE;
 }
 BOOL ssh_client_terminal_resize(SshClient *c,int columns,int rows,SshResult *r){
-    begin(c);c->phase=SSH_PHASE_COMMAND;
+    begin(c);set_phase(c,SSH_PHASE_COMMAND);
     if(!c->terminal||columns<2||columns>500||rows<2||rows>200)return failed(c,r,nova_text(L"终端尺寸无效",L"Invalid terminal size"));
     int rc;RETRY(c,rc,libssh2_channel_request_pty_size(c->terminal,columns,rows));
     return rc==0||failed(c,r,nova_text(L"调整终端尺寸",L"Resize terminal"));
@@ -415,3 +422,68 @@ DWORD ssh_client_terminal_wait(SshClient *c,HANDLE request,HANDLE input,DWORD ti
     if(wake==WAIT_OBJECT_0+3){WSANETWORKEVENTS network;WSAEnumNetworkEvents(c->socket,c->terminal_event,&network);}return wake;
 }
 void ssh_result_dispose(SshResult *r){if(!r)return;free(r->entries);free(r->output);ZeroMemory(r,sizeof(*r));}
+
+static BOOL operation_end(SshClient *c,NovaLogSpan span,BOOL ok,SshResult *r){
+    nova_log_write(ok?NOVA_LOG_INFO:NOVA_LOG_WARN,"ssh","operation_result",L"op=%ld connection=%ld phase=%d native=%d libssh2=%d sftp=%lu cancelled=%d exit=%d entries=%d content_bytes=%llu",span.id,c->connection_log,c->phase,r->native_error,r->ssh_error,r->sftp_error,r->cancelled,r->exit_code,r->count,c->transferred);
+    nova_log_end(span,ok,r->cancelled?ERROR_CANCELLED:ok?0:(DWORD)r->native_error);c->operation_log=0;return ok;
+}
+
+BOOL ssh_client_list(SshClient *c,const wchar_t *path,SshResult *r){
+    NovaLogSpan span=nova_log_begin("ssh","list",c->connection_log);c->operation_log=span.id;c->transferred=0;
+    return operation_end(c,span,list_impl(c,path,r),r);
+}
+
+BOOL ssh_client_mkdir(SshClient *c,const wchar_t *path,SshResult *r){
+    NovaLogSpan span=nova_log_begin("ssh","mkdir",c->connection_log);c->operation_log=span.id;c->transferred=0;
+    return operation_end(c,span,mkdir_impl(c,path,r),r);
+}
+
+BOOL ssh_client_rename(SshClient *c,const wchar_t *from,const wchar_t *to,SshResult *r){
+    NovaLogSpan span=nova_log_begin("ssh","rename",c->connection_log);c->operation_log=span.id;c->transferred=0;
+    return operation_end(c,span,rename_impl(c,from,to,r),r);
+}
+
+BOOL ssh_client_delete(SshClient *c,const wchar_t *path,SshResult *r){
+    NovaLogSpan span=nova_log_begin("ssh","delete",c->connection_log);c->operation_log=span.id;c->transferred=0;
+    return operation_end(c,span,delete_impl(c,path,r),r);
+}
+
+BOOL ssh_client_transfer(SshClient *c,BOOL upload,const wchar_t *local,const wchar_t *remote,SshResult *r){
+    NovaLogSpan span=nova_log_begin("ssh","transfer",c->connection_log);c->operation_log=span.id;c->transferred=0;
+    nova_log_write(NOVA_LOG_INFO,"ssh","transfer_plan",L"op=%ld upload=%d",span.id,upload);
+    return operation_end(c,span,transfer_impl(c,upload,local,remote,r),r);
+}
+
+BOOL ssh_client_copy(SshClient *c,const wchar_t *from,const wchar_t *to,SshResult *r){
+    NovaLogSpan span=nova_log_begin("ssh","copy",c->connection_log);c->operation_log=span.id;c->transferred=0;
+    return operation_end(c,span,copy_impl(c,from,to,r),r);
+}
+
+BOOL ssh_client_exec(SshClient *c,const wchar_t *directory,const wchar_t *command,SshResult *r){
+    NovaLogSpan span=nova_log_begin("ssh","exec",c->connection_log);c->operation_log=span.id;c->transferred=0;
+    return operation_end(c,span,exec_impl(c,directory,command,r),r);
+}
+
+BOOL ssh_client_terminal_open(SshClient *c,const wchar_t *directory,int columns,int rows,SshResult *r){
+    NovaLogSpan span=nova_log_begin("ssh","terminal_open",c->connection_log);c->operation_log=span.id;c->transferred=0;
+    return operation_end(c,span,terminal_open_impl(c,directory,columns,rows,r),r);
+}
+
+BOOL ssh_client_protocol_open(SshClient *c,const wchar_t *project,const wchar_t *root,SshResult *r){
+    NovaLogSpan span=nova_log_begin("ssh","protocol_open",c->connection_log);c->operation_log=span.id;c->transferred=0;
+    return operation_end(c,span,protocol_open_impl(c,project,root,r),r);
+}
+
+BOOL ssh_client_bootstrap_open(SshClient *c,const char *source,size_t length,BOOL provision,SshResult *r){
+    NovaLogSpan span=nova_log_begin("ssh","bootstrap_open",c->connection_log);c->operation_log=span.id;c->transferred=0;
+    return operation_end(c,span,bootstrap_open_impl(c,source,length,provision,r),r);
+}
+
+SshClient *ssh_client_connect(const SshLogin *login,HANDLE cancel,SshResult *r){
+    NovaLogSpan span=nova_log_begin("ssh","connect",0);
+    nova_log_write(NOVA_LOG_INFO,"ssh","connection_requested",L"op=%ld server=%lld port=%d key_auth=%d pinned=%d",span.id,(long long)login->server.id,login->server.port,login->key_file[0]!=0,login->fingerprint[0]!=0);
+    SshClient *c=connect_impl(login,cancel,r,span.id);
+    nova_log_write(c?NOVA_LOG_INFO:NOVA_LOG_WARN,"ssh","connection_result",L"op=%ld ok=%d status=%d phase=%d native=%d libssh2=%d sftp=%lu cancelled=%d",span.id,c!=NULL,r->code,r->phase,r->native_error,r->ssh_error,r->sftp_error,r->cancelled);
+    nova_log_end(span,c!=NULL,r->cancelled?ERROR_CANCELLED:c?0:(DWORD)r->native_error);if(c)c->operation_log=0;return c;
+}
+LONG ssh_client_log_id(const SshClient *c){return c?c->connection_log:0;}

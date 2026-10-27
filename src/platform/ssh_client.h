@@ -19,6 +19,7 @@ typedef struct SshResult {
     char *output; size_t output_length; BOOL output_truncated;
 } SshResult;
 typedef struct SshClient SshClient;
+LONG ssh_client_log_id(const SshClient *client);
 typedef void (*SshProgress)(void *context,int percent);
 const wchar_t *ssh_phase_name(SshPhase phase);
 SshKeyKind ssh_key_kind(const char *data,size_t length);

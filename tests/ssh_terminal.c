@@ -23,7 +23,7 @@ static BOOL wait_text(RemoteView *v,const char *expected){
 int wmain(int argc,wchar_t **argv){
     assert(argc>=5&&SUCCEEDED(OleInitialize(NULL)));BOOL preview=argc==6&&!wcsncmp(argv[5],L"--preview",9);nova_english=preview&&wcsstr(argv[5],L"-en")!=NULL;
     INITCOMMONCONTROLSEX controls={sizeof(controls),ICC_LISTVIEW_CLASSES};InitCommonControlsEx(&controls);
-    test_saved_login_dialog(argv[2]);
+    assert(nova_log_init(argv[2]));test_saved_login_dialog(argv[2]);
     WNDCLASSW wc={0};wc.lpfnWndProc=fixture_proc;wc.hInstance=GetModuleHandleW(NULL);wc.lpszClassName=L"NovaTerminalFixture";wc.hCursor=LoadCursorW(NULL,IDC_ARROW);RegisterClassW(&wc);
     HWND parent=CreateWindowExW(0,wc.lpszClassName,L"NOVA SSH terminal · isolated loopback preview",WS_OVERLAPPEDWINDOW,60,60,1000,720,NULL,NULL,wc.hInstance,NULL);assert(parent);
     HFONT font=CreateFontW(-dpi_scale(15),0,0,0,FW_NORMAL,FALSE,FALSE,FALSE,DEFAULT_CHARSET,OUT_DEFAULT_PRECIS,CLIP_DEFAULT_PRECIS,CLEARTYPE_QUALITY,DEFAULT_PITCH,L"Microsoft YaHei UI");assert(font);
@@ -48,7 +48,8 @@ int wmain(int argc,wchar_t **argv){
     }else{assert(ssh_view_run(window,L"exit"));ULONGLONG until=GetTickCount64()+7000;while(v->connected&&GetTickCount64()<until)pump(window,10);assert(!v->connected&&!v->terminal_running&&IsWindowEnabled(v->buttons[0]));
         stop_worker(v);v->login=login;v->terminal_opened=FALSE;lstrcpyW(v->request_path,v->path);assert(submit(v,J_CONNECT)&&wait_idle(v)&&v->terminal_running);assert(ssh_view_run(window,L"floodterm"));Sleep(300);
         EnterCriticalSection(&v->terminal_lock);assert(v->output_length>0&&v->output_length<=sizeof(v->terminal_output));LeaveCriticalSection(&v->terminal_lock);
+        lstrcpyW(v->request_path,v->path);assert(submit(v,J_LIST));SendMessageW(window,WM_COMMAND,V_CANCEL,0);assert(wait_idle(v));
     }
-    ULONGLONG start=GetTickCount64();if(IsWindow(parent))DestroyWindow(parent);assert(GetTickCount64()-start<3000&&worker_count==0);DeleteObject(font);SecureZeroMemory(&login,sizeof(login));OleUninitialize();
+    ULONGLONG start=GetTickCount64();if(IsWindow(parent))DestroyWindow(parent);assert(GetTickCount64()-start<3000&&worker_count==0);DeleteObject(font);SecureZeroMemory(&login,sizeof(login));nova_log_close();OleUninitialize();
     puts("PASS SSH terminal HWND/worker: disconnected mode, auto-open after connect, view switching retains shell, SFTP coexistence, resize, keyboard routing, UTF-8, queue limit, EOF and joined cleanup");return 0;
 }

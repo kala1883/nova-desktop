@@ -1,14 +1,20 @@
 #ifndef NOVA_SYNC_INTERNAL_H
 #define NOVA_SYNC_INTERNAL_H
 #include "sync_json.h"
+#include "app_log.h"
 #include "../../third_party/sqlite/sqlite3.h"
 typedef struct SyncRun {
     SyncRequest *request;SyncResult *result;sqlite3 *db;SshClient *ssh;
     wchar_t cache[SYNC_PATH_CAP],partial[SYNC_PATH_CAP];uint64_t gear[256];ULONGLONG progress_tick;
     char accepted_local[65]; /* Evolving working hash during one explicit version choice. */
+    LONG log_id;ULONGLONG started;SyncPhase phase;unsigned int file_events,skip_events,phase_events;
 } SyncRun;
 typedef struct SyncReply { char *json;unsigned char *data;size_t size; } SyncReply;
 BOOL sy_fail(SyncRun *r,SyncFailure code);
+void sy_run_begin(SyncRun *r,int action);
+void sy_run_end(SyncRun *r,BOOL ok);
+void sy_log_file(SyncRun *r,const char *event,const char *relative,const char *reason,const char *job);
+void sy_log_job(SyncRun *r,const char *event,const char *job);
 BOOL sy_cancel(SyncRun *r);
 void sy_progress(SyncRun *r,SyncPhase phase,const wchar_t *path,uint64_t done,uint64_t total);
 BOOL sy_join(wchar_t *out,const wchar_t *root,const wchar_t *name);

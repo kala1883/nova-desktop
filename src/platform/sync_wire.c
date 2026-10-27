@@ -7,6 +7,31 @@
 #include <stdlib.h>
 #include <string.h>
 #include <stdio.h>
+static LONG log_sequence;
+void sy_run_begin(SyncRun *r,int action){
+    r->log_id=InterlockedIncrement(&log_sequence);r->started=GetTickCount64();
+    nova_log_write(NOVA_LOG_INFO,"sync","run_begin",L"run=%ld parent=%ld action=%d dataset=%.95ls deletes=%d direction=%d",
+        r->log_id,r->request->log_parent,action,r->request->pair.dataset,r->request->pair.sync_deletes,r->request->direction);
+}
+void sy_run_end(SyncRun *r,BOOL ok){
+    SyncResult *s=r->result;
+    nova_log_write(ok?NOVA_LOG_INFO:NOVA_LOG_ERROR,"sync","run_end",
+        L"run=%ld ok=%d failure=%d win32=%lu ssh=%d ssh_phase=%d ssh_native=%d libssh2=%d sftp=%lu elapsed_ms=%llu sent_bytes=%llu received_bytes=%llu reused_bytes=%llu resumed_bytes=%llu published=%d received_versions=%d unchanged=%d pushes=%d pulls=%d conflicts=%d waiting=%d installed=%d switched=%d migration_pending=%d target_error=%d",
+        r->log_id,ok,s->failure,s->native_error,s->ssh.code,s->ssh.phase,s->ssh.native_error,s->ssh.ssh_error,s->ssh.sftp_error,(unsigned long long)(GetTickCount64()-r->started),
+        (unsigned long long)s->stats.sent,(unsigned long long)s->stats.received,(unsigned long long)s->stats.reused,
+        (unsigned long long)s->stats.resumed,s->stats.published,s->stats.downloaded,s->stats.unchanged,s->pushes,s->pulls,s->conflicts,s->waiting,s->installed,s->switched,s->pending_migration,s->target_error);
+}
+void sy_log_job(SyncRun *r,const char *event,const char *job){
+    if(r->file_events++<128)nova_log_write(NOVA_LOG_INFO,"sync",event,L"run=%ld job=%.95hs",r->log_id,job?job:"");
+}
+void sy_log_file(SyncRun *r,const char *event,const char *relative,const char *reason,const char *job){
+    /* Correlate a file across runs without recording work paths or contents. */
+    if(!strcmp(event,"file_skip")&&r->skip_events++>=8)return;
+    if(r->file_events++>=128)return;
+    char key[65];
+    if(relative&&sync_sha(relative,strlen(relative),key))nova_log_write(NOVA_LOG_INFO,"sync",event,
+        L"run=%ld file=%.16hs reason=%.48hs job=%.95hs",r->log_id,key,reason,job?job:"");
+}
 static uint32_t read32(const unsigned char *p){return ((uint32_t)p[0]<<24)|((uint32_t)p[1]<<16)|((uint32_t)p[2]<<8)|p[3];
     }
 static void put32(unsigned char *p,uint32_t v){p[0]=(unsigned char)(v>>24);
@@ -18,6 +43,8 @@ BOOL sy_fail(SyncRun *r,SyncFailure code){
     if(r->result->failure==SYNC_OK||code==SYNC_CANCELLED){
         r->result->failure=code;
         r->result->native_error=code==SYNC_CANCELLED?ERROR_CANCELLED:GetLastError();
+        nova_log_write(code==SYNC_CANCELLED?NOVA_LOG_WARN:NOVA_LOG_ERROR,"sync","failure",L"run=%ld phase=%d failure=%d win32=%lu ssh=%d",
+            r->log_id,r->phase,code,r->result->native_error,r->result->ssh.code);
     }
     return FALSE;
 }
@@ -26,6 +53,9 @@ BOOL sy_cancel(SyncRun *r){if(r->request->cancel&&WaitForSingleObject(r->request
         }return FALSE;
     }
 void sy_progress(SyncRun *r,SyncPhase phase,const wchar_t *path,uint64_t done,uint64_t total){
+    if(r->phase!=phase){r->phase=phase;
+        if(r->phase_events++<32)nova_log_write(NOVA_LOG_INFO,"sync","phase",L"run=%ld phase=%d",r->log_id,phase);
+    }
     ULONGLONG now=GetTickCount64();
     if(!r->request->progress||(now-r->progress_tick<150&&done!=total))return;
     r->progress_tick=now;
@@ -143,6 +173,9 @@ BOOL sy_rpc(SyncRun *r,const char *request,const void *data,size_t size,SyncRepl
             free(action);
         }
         free(code);
+        char *operation=sync_json_string(r->db,request,"$.action");
+        nova_log_write(NOVA_LOG_WARN,"sync","rpc_rejected",L"run=%ld action=%.48hs failure=%d",r->log_id,operation?operation:"",reason);
+        free(operation);
         free(r->result->route);
         r->result->route=sync_json_string(r->db,header,"$.state");
         if(message){sync_wide(message,r->result->detail,1024);

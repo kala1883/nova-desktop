@@ -4,6 +4,7 @@
 #define _UNICODE
 #include <windows.h>
 #include <assert.h>
+#include "log_capture.h"
 #include <stdio.h>
 #include <string.h>
 #include <stdlib.h>
@@ -20,11 +21,15 @@ static void rules(void){
     puts("PASS SSH identity, limits, POSIX case-sensitive paths and stdin directory framing");
 }
 int wmain(void){
-    rules();wchar_t temp[MAX_PATH],root[MAX_PATH],json[MAX_PATH];GetTempPathW(MAX_PATH,temp);swprintf(root,MAX_PATH,L"%lsNovaSsh-%lu",temp,GetCurrentProcessId());assert(CreateDirectoryW(root,NULL));
+    rules();wchar_t temp[MAX_PATH],root[MAX_PATH],json[MAX_PATH];GetTempPathW(MAX_PATH,temp);swprintf(root,MAX_PATH,L"%lsNovaSsh-%lu",temp,GetCurrentProcessId());assert(CreateDirectoryW(root,NULL));assert(nova_log_init(root));
     SshServers *servers=calloc(1,sizeof(*servers)),*loaded=calloc(1,sizeof(*loaded));assert(servers&&loaded&&store_open(root));assert(store_load_ssh_servers(loaded)&&loaded->count==0);
     servers->count=1;SshServer *s=&servers->items[0];s->id=123;s->port=2222;wcscpy(s->name,L"中文连接");wcscpy(s->host,L"test.example.invalid");wcscpy(s->user,L"deploy");wcscpy(s->directory,L"/Case sensitive");assert(store_save_ssh_servers(servers));store_close();assert(store_open(root));assert(store_load_ssh_servers(loaded)&&loaded->count==1&&!memcmp(s,&loaded->items[0],sizeof(*s)));
     servers->items[0].port=0;assert(!store_save_ssh_servers(servers));assert(store_load_ssh_servers(loaded)&&loaded->items[0].port==2222);
     assert(store_set_int(L"ssh_servers",L"Servers",L"Version",2));store_close();assert(!store_open(root));
-    swprintf(json,MAX_PATH,L"%ls\\nova.json",root);assert(GetFileAttributesW(json)!=INVALID_FILE_ATTRIBUTES);DeleteFileW(json);swprintf(json,MAX_PATH,L"%ls\\local.json",root);DeleteFileW(json);swprintf(json,MAX_PATH,L"%ls\\nova.backup.json",root);DeleteFileW(json);swprintf(json,MAX_PATH,L"%ls\\local.backup.json",root);DeleteFileW(json);assert(RemoveDirectoryW(root));free(servers);free(loaded);
+    swprintf(json,MAX_PATH,L"%ls\\runtime.json",root);assert(GetFileAttributesW(json)!=INVALID_FILE_ATTRIBUTES);
+    const wchar_t *names[]={L"runtime.json",L"runtime.base.json",L"runtime.seed.json",L"runtime.backup.json",L"local.json",L"local.backup.json",L"nova.migration.json"};
+    for(unsigned i=0;i<sizeof(names)/sizeof(names[0]);i++){swprintf(json,MAX_PATH,L"%ls\\%ls",root,names[i]);DeleteFileW(json);}
+    {const char *events[]={"kind=ssh_servers","action=save_ssh_servers","event=collection_saved"};check_diagnostics(root,events,3);}
+    assert(RemoveDirectoryW(root));free(servers);free(loaded);
     puts("PASS transactional SSH profiles, Unicode roundtrip, invalid save rollback and newer-version rejection");return 0;
 }

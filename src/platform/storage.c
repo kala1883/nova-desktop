@@ -1,5 +1,6 @@
 #include "storage.h"
 #include "config_json.h"
+#include "app_log.h"
 #include "../i18n.h"
 #include "../../third_party/sqlite/sqlite3.h"
 #include <stdio.h>
@@ -12,9 +13,14 @@ static sqlite3 *db;
 static wchar_t root[MAX_PATH],legacy_root[MAX_PATH],error_text[320];
 static BOOL opening,open_changed;
 static BOOL transaction_failed;
+static NovaLogSpan transaction_log;
+static LONG open_log;
+static LONG storage_parent;
+static LONG current_parent(void){return storage_parent?storage_parent:db&&!sqlite3_get_autocommit(db)?transaction_log.id:0;}
 static BOOL check(int rc){
     if(rc==SQLITE_OK||rc==SQLITE_DONE||rc==SQLITE_ROW)return TRUE;
     transaction_failed=TRUE;
+    nova_log_write(NOVA_LOG_ERROR,"storage","sqlite_error",L"op=%ld sqlite=%d",open_log?open_log:transaction_log.id,rc);
     swprintf(error_text,320,nova_text(L"配置事务失败（%d）：%ls",L"Configuration transaction failed (%d): %ls"),rc,db?(const wchar_t*)sqlite3_errmsg16(db):nova_text(L"无法初始化配置事务",L"unable to initialize configuration transactions"));return FALSE;
 }
 static BOOL execute(const char *sql){return check(sqlite3_exec(db,sql,NULL,NULL,NULL));}
@@ -24,13 +30,19 @@ static BOOL finish(sqlite3_stmt *s){BOOL ok=check(sqlite3_step(s));return check(
 static void read_text(sqlite3_stmt *s,int column,wchar_t *out,int capacity){const wchar_t *text=sqlite3_column_text16(s,column);lstrcpynW(out,text?text:L"",capacity);}
 BOOL store_ready(void){return db!=NULL;}
 const wchar_t *store_error(void){return error_text;}
-BOOL store_begin(void){if(!db)return FALSE;transaction_failed=FALSE;return execute("BEGIN IMMEDIATE");}
+BOOL store_begin(void){
+    if(!db){nova_log_write(NOVA_LOG_WARN,"storage","transaction_rejected",L"reason=not_open");return FALSE;}
+    NovaLogSpan span=nova_log_begin("storage","transaction",storage_parent);transaction_failed=FALSE;
+    BOOL ok=execute("BEGIN IMMEDIATE");if(ok)transaction_log=span;else nova_log_end(span,FALSE,(DWORD)sqlite3_errcode(db));return ok;
+}
 BOOL store_end(BOOL success){
     if(!db)return FALSE;
-    if(!success||transaction_failed){sqlite3_exec(db,"ROLLBACK",NULL,NULL,NULL);return FALSE;}
-    if(opening){if(execute("COMMIT")){open_changed=TRUE;return TRUE;}}
-    else if(config_json_commit(db,root,error_text))return TRUE;
-    sqlite3_exec(db,"ROLLBACK",NULL,NULL,NULL);return FALSE;
+    if(!success||transaction_failed){int rc=sqlite3_exec(db,"ROLLBACK",NULL,NULL,NULL);nova_log_write(rc==SQLITE_OK?NOVA_LOG_WARN:NOVA_LOG_ERROR,"storage","rollback",L"op=%ld sqlite=%d requested_success=%d",transaction_log.id,rc,success);return nova_log_end(transaction_log,FALSE,ERROR_OPERATION_ABORTED);}
+    if(opening){if(execute("COMMIT")){open_changed=TRUE;return nova_log_end(transaction_log,TRUE,0);}}
+    else if(config_json_commit(db,root,error_text,transaction_log.id))return nova_log_end(transaction_log,TRUE,0);
+    DWORD code=GetLastError();int rc=sqlite3_exec(db,"ROLLBACK",NULL,NULL,NULL);
+    nova_log_write(NOVA_LOG_WARN,"storage","rollback_after_publication_failure",L"op=%ld sqlite=%d",transaction_log.id,rc);
+    return nova_log_end(transaction_log,FALSE,code);
 }
 void store_close(void){if(db){sqlite3_close_v2(db);db=NULL;}root[0]=legacy_root[0]=0;opening=open_changed=FALSE;}
 const wchar_t *store_directory(void){return root;}
@@ -62,7 +74,7 @@ static BOOL validate_preferences(void){
     sqlite3_finalize(s);return ok&&rc==SQLITE_DONE;
 }
 BOOL store_open(const wchar_t *directory){return store_open_from(directory,directory);}
-BOOL store_open_from(const wchar_t *directory,const wchar_t *legacy){
+static BOOL store_open_impl(const wchar_t *directory,const wchar_t *legacy){
     if(!directory||!legacy||wcslen(directory)>MAX_PATH-80||wcslen(legacy)>MAX_PATH-32)return FALSE;
     if(db){if(!lstrcmpiW(directory,root))return TRUE;lstrcpyW(error_text,nova_text(L"已有其他数据目录打开。",L"Another data folder is already open."));return FALSE;}
     error_text[0]=0;open_changed=FALSE;
@@ -76,8 +88,10 @@ BOOL store_open_from(const wchar_t *directory,const wchar_t *legacy){
         "CREATE INDEX items_workspace ON items(workspace_id,position); PRAGMA application_id=1313822273; PRAGMA user_version=1;");
     BOOL initialized=FALSE,imported=FALSE,split_needed=FALSE,runtime_migration=FALSE;
     if(ok)ok=config_json_load(db,root,&initialized,&runtime_migration,error_text);
+    nova_log_write(ok?NOVA_LOG_INFO:NOVA_LOG_ERROR,"storage","runtime_loaded",L"op=%ld ok=%d initialized=%d migration=%d",open_log,ok,initialized,runtime_migration);
     if(ok&&!initialized)ok=config_json_legacy(db,legacy,&imported,error_text);
     if(ok)ok=config_json_load_local(db,root,&split_needed,error_text);
+    nova_log_write(ok?NOVA_LOG_INFO:NOVA_LOG_ERROR,"storage","local_loaded",L"op=%ld ok=%d legacy_import=%d split=%d",open_log,ok,imported,split_needed);
     if(ok)ok=execute("PRAGMA foreign_keys=ON");
     if(ok)ok=validate_preferences();
     if(ok){
@@ -100,6 +114,10 @@ BOOL store_open_from(const wchar_t *directory,const wchar_t *legacy){
     if(ok&&(runtime_migration||imported||open_changed||split_needed))ok=store_begin()&&store_end(TRUE);
     if(!ok){if(!error_text[0])lstrcpyW(error_text,nova_text(L"配置无效，原文件未修改。",L"Invalid configuration. The original file was not changed."));store_close();return FALSE;}
     return TRUE;
+}
+BOOL store_open_from(const wchar_t *directory,const wchar_t *legacy){
+    NovaLogSpan span=nova_log_begin("storage","open",storage_parent);LONG previous=storage_parent;storage_parent=open_log=span.id;BOOL ok=store_open_impl(directory,legacy);open_log=0;storage_parent=previous;
+    return nova_log_end(span,ok,ok?0:GetLastError());
 }
 BOOL store_get(const wchar_t *scope,const wchar_t *section,const wchar_t *key,const wchar_t *fallback,wchar_t *value,int capacity){
     lstrcpynW(value,fallback,capacity);sqlite3_stmt *s=prepare("SELECT value FROM settings WHERE scope=? AND section=? AND key=?");if(!s)return FALSE;
@@ -147,7 +165,7 @@ BOOL store_load_items(Workspace *w){
     }
     BOOL ok=check(rc)&&rc==SQLITE_DONE;sqlite3_finalize(s);if(ok){w->app_count=n;w->items_loaded=1;}return ok;
 }
-BOOL store_save_workspaces(Workspace *spaces,int count,int active,BOOL pinned){
+static BOOL save_workspaces_impl(Workspace *spaces,int count,int active,BOOL pinned){
     if(count<1||count>MAX_WORKSPACES||!db)return FALSE;
     BOOL own=sqlite3_get_autocommit(db);if(own&&!store_begin())return FALSE;
     BOOL ok=TRUE;sqlite3_stmt *s;
@@ -236,7 +254,7 @@ static BOOL batch_read_number(const wchar_t *section,const wchar_t *key,int maxi
     }
     *value=(int)parsed;return TRUE;
 }
-BOOL store_save_batch_tasks(BatchTaskList *tasks){
+static BOOL save_batch_tasks_impl(BatchTaskList *tasks){
     if(!tasks||tasks->count<0||tasks->count>BATCH_TASK_LIMIT)return FALSE;
     for(int i=0;i<tasks->count;i++){
         BatchTask *t=&tasks->tasks[i];
@@ -308,7 +326,7 @@ BOOL store_load_batch_tasks(BatchTaskList *tasks){
     else lstrcpyW(error_text,nova_text(L"批量任务配置无效或来自更新版本，原数据未修改。",L"Batch task settings are invalid or from a newer version. Data was not changed."));
     free(next);return ok;
 }
-BOOL store_save_file_commands(const FileCommandList *commands){
+static BOOL save_file_commands_impl(const FileCommandList *commands){
     if(!file_command_list_is_valid(commands)){
         lstrcpyW(error_text,nova_text(L"命令预设无效：请填写名称和命令，并确保名称不重复。",L"Command presets are invalid. Enter a name and command, and use unique names."));
         return FALSE;
@@ -396,7 +414,7 @@ BOOL store_load_ssh_servers(SshServers *servers){
     else lstrcpyW(error_text,nova_text(L"SSH 服务器配置损坏、超限或版本不受支持；原文件未修改。",L"SSH server settings are damaged, exceed limits, or use an unsupported version. The original file was not changed."));
     free(next);return ok;
 }
-BOOL store_save_ssh_servers(const SshServers *servers){
+static BOOL save_ssh_servers_impl(const SshServers *servers){
     if(!ssh_servers_valid(servers)){lstrcpyW(error_text,nova_text(L"请填写有效且名称不重复的 SSH 服务器信息。",L"Enter valid SSH server details with unique names."));return FALSE;}
     if(!store_begin())return FALSE;
     BOOL ok=store_clear(L"ssh_servers")&&store_set_int(L"ssh_servers",L"Servers",L"Version",1)&&store_set_int(L"ssh_servers",L"Servers",L"Count",servers->count);
@@ -407,4 +425,32 @@ BOOL store_save_ssh_servers(const SshServers *servers){
            store_set(L"ssh_servers",section,L"User",s->user)&&store_set(L"ssh_servers",section,L"Directory",s->directory);
     }
     return store_end(ok);
+}
+
+BOOL store_save_workspaces(Workspace *spaces,int count,int active,BOOL pinned){
+    NovaLogSpan span=nova_log_begin("storage","save_workspaces",current_parent());LONG previous=storage_parent;storage_parent=span.id;
+    BOOL ok=save_workspaces_impl(spaces,count,active,pinned);storage_parent=previous;
+    nova_log_write(ok?NOVA_LOG_INFO:NOVA_LOG_WARN,"storage","collection_saved",L"op=%ld kind=workspaces count=%d ok=%d",span.id,count,ok);
+    return nova_log_end(span,ok,ok?0:GetLastError());
+}
+
+BOOL store_save_batch_tasks(BatchTaskList *tasks){
+    NovaLogSpan span=nova_log_begin("storage","save_batch_tasks",current_parent());LONG previous=storage_parent;storage_parent=span.id;
+    BOOL ok=save_batch_tasks_impl(tasks);storage_parent=previous;
+    nova_log_write(ok?NOVA_LOG_INFO:NOVA_LOG_WARN,"storage","collection_saved",L"op=%ld kind=batch_tasks count=%d ok=%d",span.id,tasks?tasks->count:0,ok);
+    return nova_log_end(span,ok,ok?0:GetLastError());
+}
+
+BOOL store_save_file_commands(const FileCommandList *commands){
+    NovaLogSpan span=nova_log_begin("storage","save_file_commands",current_parent());LONG previous=storage_parent;storage_parent=span.id;
+    BOOL ok=save_file_commands_impl(commands);storage_parent=previous;
+    nova_log_write(ok?NOVA_LOG_INFO:NOVA_LOG_WARN,"storage","collection_saved",L"op=%ld kind=file_commands count=%d ok=%d",span.id,commands?commands->count:0,ok);
+    return nova_log_end(span,ok,ok?0:GetLastError());
+}
+
+BOOL store_save_ssh_servers(const SshServers *servers){
+    NovaLogSpan span=nova_log_begin("storage","save_ssh_servers",current_parent());LONG previous=storage_parent;storage_parent=span.id;
+    BOOL ok=save_ssh_servers_impl(servers);storage_parent=previous;
+    nova_log_write(ok?NOVA_LOG_INFO:NOVA_LOG_WARN,"storage","collection_saved",L"op=%ld kind=ssh_servers count=%d ok=%d",span.id,servers?servers->count:0,ok);
+    return nova_log_end(span,ok,ok?0:GetLastError());
 }

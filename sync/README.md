@@ -85,6 +85,21 @@ an unsaved draft. **Disconnect here** removes only this device's binding, retain
 local files, other devices and the discoverable publication; it does not withdraw
 the publication globally. Global publication deletion is not currently exposed.
 
+Re-saving keeps version history and receipts. With deletion sync enabled, deleting
+one file queues one tombstone; it does not republish the other files. Local content
+checks still read/hash files and show **Checking local files (no transfer)**.
+Timestamp-only differences do not create a version; an identical incoming version
+does not rewrite the working file. Diagnostics in `config/logs/nova.log` distinguish
+`comparison`, `file_skip`, `file_publish`, `file_receive`, and `run_end` with wire
+content byte counts. The two rotated files are at most 2 MiB each, local only, and
+contain bounded path-hash samples rather than full work paths or credentials.
+
+重新保存会保留历史版本和回执。启用删除同步后，删除一项只排队一条删除记录，不会重新
+发布其他文件；“校验本机文件（无传输）”仍会读取并计算文件哈希。仅时间变化不创建版本，
+相同内容的接收版本不重写工作文件。`config/logs/nova.log` 记录比较、跳过、发布、接收和
+任务汇总及实际内容传输字节。两份轮转日志各限 2 MiB，仅保存在本机，文件判定只记录
+有界的路径哈希样本，不含完整工作路径或凭据。
+
 各参与设备均可修改并推送、拉取；发布者只是最初创建目录的设备，不是唯一写入者。
 目录关系、自动调度、文件比较独立展示。下方“文件差异”显示两端版本与来源设备，只有
 冲突可选择版本；“参与设备”显示路径、待接收数与等待补发数。无待接收版本不等于设备

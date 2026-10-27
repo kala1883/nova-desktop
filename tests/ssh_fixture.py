@@ -237,6 +237,15 @@ def main():
                 ui_test = Path(sys.argv[1]).resolve().with_name('ssh-terminal-test.exe')
                 if not result and ui_test.exists():
                     result = subprocess.run([str(ui_test), str(port), str(local), str(key_file), str(refused_port)] + sys.argv[2:], timeout=330).returncode
+                if not result:
+                    diagnostic = (local / 'logs/nova.log').read_text(encoding='utf-8')
+                    for event in ('connection_requested', 'connection_result', 'operation_result', 'failure', 'connection_closed', 'request_accepted', 'worker_started', 'completion_consumed', 'cancel_requested', 'terminal_ended', 'profile_rollback'):
+                        assert f'event={event} ' in diagnostic, event
+                    assert 'connection=' in diagnostic and 'parent=' in diagnostic
+                    assert len(diagnostic.encode('utf-8')) < 1024*1024, 'Terminal I/O must not emit per-read/per-write events'
+                    for private in ('fixture-password', 'fixture-key-passphrase', str(local), str(key_file), 'nova-ssh-content', 'original-synthetic-secret', 'must-not-survive-failed-save', 'saved-two.key'):
+                        assert private not in diagnostic, 'Private data leaked to diagnostics'
+                    print('PASS SSH lifecycle, asynchronous request/UI correlation, profile rollback and bounded private diagnostics')
                 if result:
                     print('\n'.join(log.getvalue().splitlines()[-24:]))
                 return result

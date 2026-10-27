@@ -14,6 +14,7 @@ typedef BOOL (*BatchExecute)(const wchar_t *,const wchar_t *,HANDLE,DWORD *,DWOR
 typedef void (*BatchProgress)(void *context,int event,int index,DWORD exit_code,DWORD error,const wchar_t *output);
 typedef struct { int success,failed,skipped,cancelled; } BatchResult;
 BatchResult batch_runner_task(const BatchTask *task,HANDLE cancel,BatchProgress progress,void *context,BatchExecute execute);
+BatchResult batch_runner_task_logged(const BatchTask *task,HANDLE cancel,BatchProgress progress,void *context,BatchExecute execute,LONG parent);
 
 BOOL batch_runner_find_git(wchar_t *path,DWORD capacity,DWORD *error);
 BOOL batch_runner_command(const wchar_t *text,const wchar_t *directory,HANDLE cancel,DWORD *exit_code,DWORD *error,wchar_t *output,DWORD output_capacity);

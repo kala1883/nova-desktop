@@ -13,6 +13,7 @@
 #include "../third_party/sqlite/sqlite3.h"
 BOOL nova_english=FALSE;
 static DWORD contents(const wchar_t *file,char *data,DWORD cap){HANDLE h=CreateFileW(file,GENERIC_READ,FILE_SHARE_READ,NULL,OPEN_EXISTING,0,NULL);assert(h!=INVALID_HANDLE_VALUE);DWORD n=0;assert(ReadFile(h,data,cap-1,&n,NULL));data[n]=0;CloseHandle(h);return n;}
+#include "app_log.h"
 static void fixture_pair(SyncPair *p){memset(p,0,sizeof(*p));wcscpy(p->id,L"fixture-pair");wcscpy(p->dataset,L"fixture-data");wcscpy(p->name,L"Synthetic pair");wcscpy(p->group,L"Synthetic group");wcscpy(p->directory,L"C:\\fixture-only");wcscpy(p->excludes,L".git;node_modules");p->paused=true;}
 static void model_tests(void){
     SyncFolderFacts facts={0};SyncFolderState state=sync_folder_state(&facts);
@@ -56,4 +57,4 @@ static void journal_tests(const wchar_t *dir){
     for(int i=0;i<2;i++){HANDLE h=CreateFileW(path,GENERIC_WRITE,0,NULL,CREATE_ALWAYS,0,NULL);DWORD wrote;assert(h!=INVALID_HANDLE_VALUE&&WriteFile(h,values[i],(DWORD)strlen(values[i]),&wrote,NULL)&&wrote==strlen(values[i]));CloseHandle(h);assert(sync_server_pending(r)==(i==0));char after[1024];contents(path,after,sizeof(after));assert(!strcmp(after,values[i]));}
     free(r);puts("PASS migration checkpoint version: compatible resume and future-version refusal without rewriting data");
 }
-int wmain(void){wchar_t temp[MAX_PATH],name[MAX_PATH],root[MAX_PATH];assert(GetTempPathW(MAX_PATH,temp));assert(GetTempFileNameW(temp,L"nsy",0,name));assert(DeleteFileW(name));assert(CreateDirectoryW(name,NULL));swprintf(root,MAX_PATH,L"%ls\\settings",name);assert(CreateDirectoryW(root,NULL));model_tests();settings_tests(root);json_tests();import_tests(root);index_tests(root);journal_tests(root);puts("PASS native synchronization offline tests (temporary state only)");return 0;}
+int wmain(void){wchar_t temp[MAX_PATH],name[MAX_PATH],root[MAX_PATH];assert(GetTempPathW(MAX_PATH,temp));assert(GetTempFileNameW(temp,L"nsy",0,name));assert(DeleteFileW(name));assert(CreateDirectoryW(name,NULL));swprintf(root,MAX_PATH,L"%ls\\settings",name);assert(CreateDirectoryW(root,NULL));model_tests();settings_tests(root);json_tests();import_tests(root);index_tests(root);journal_tests(root);log_tests(root);puts("PASS native synchronization offline tests (temporary state only)");return 0;}
