@@ -608,23 +608,24 @@ static void open_app(void) {
 static void remove_app(void) {
     int i=selected_app();if(i<0)return;
     if(MessageBoxW(main_window,nova_text(L"从此工作区移除选中的启动项？原文件会保留。",L"Remove the selected launch item from this workspace? The original file will remain."),APP_NAME,MB_YESNO|MB_ICONQUESTION)!=IDYES)return;
-    Workspace *ws=&spaces[active_space];for(int j=i;j<ws->app_count-1;j++)ws->apps[j]=ws->apps[j+1];ws->app_count--;save_config();refresh_apps();set_notice(nova_text(L"已移除启动项，原文件保持不变。",L"Launch item removed. The original file was not changed."));
+    Workspace *ws=&spaces[active_space];Workspace before=*ws;for(int j=i;j<ws->app_count-1;j++)ws->apps[j]=ws->apps[j+1];ws->app_count--;if(!save_config()){*ws=before;refresh_apps();return;}refresh_apps();set_notice(nova_text(L"已移除启动项，原文件保持不变。",L"Launch item removed. The original file was not changed."));
 }
 static void end_name_edit(BOOL commit) {
     if(!editing_name)return;
     editing_name=FALSE;
     if(commit){wchar_t value[40];GetWindowTextW(name_edit,value,40);size_t n=wcslen(value);while(n&&value[n-1]==L' ')value[--n]=0;
-        if(n){lstrcpyW(spaces[active_space].name,value);save_config();refresh_spaces();}}
+        if(n){wchar_t previous[40];lstrcpyW(previous,spaces[active_space].name);lstrcpyW(spaces[active_space].name,value);if(!save_config())lstrcpyW(spaces[active_space].name,previous);refresh_spaces();}}
     editing_name=FALSE;ShowWindow(name_edit,SW_HIDE);SetFocus(space_list);InvalidateRect(main_window,NULL,FALSE);
 }
 static void edit_name(void){if(active_space==0)return;editing_name=TRUE;SetWindowTextW(name_edit,spaces[active_space].name);ShowWindow(name_edit,SW_SHOW);SetFocus(name_edit);SendMessageW(name_edit,EM_SETSEL,0,-1);}
-static void new_space(void){if(space_count==MAX_WORKSPACES)return;end_name_edit(TRUE);active_space=space_count++;ZeroMemory(&spaces[active_space],sizeof(Workspace));spaces[active_space].items_loaded=1;swprintf(spaces[active_space].name,40,nova_text(L"工作区 %d",L"Workspace %d"),space_count);save_config();refresh_spaces();SetWindowTextW(search_edit,L"");if(files_page)show_workspace_page();refresh_apps();edit_name();}
+static void new_space(void){if(space_count==MAX_WORKSPACES)return;end_name_edit(TRUE);int previous=active_space;active_space=space_count++;ZeroMemory(&spaces[active_space],sizeof(Workspace));spaces[active_space].items_loaded=1;swprintf(spaces[active_space].name,40,nova_text(L"工作区 %d",L"Workspace %d"),space_count);if(!save_config()){space_count--;active_space=previous;return;}refresh_spaces();SetWindowTextW(search_edit,L"");if(files_page)show_workspace_page();refresh_apps();edit_name();}
 static void delete_space(void){
     if(active_space==0||space_count<=1)return;
     if(MessageBoxW(main_window,nova_text(L"删除当前工作区及其中的启动项？原始文件和应用不会删除。",L"Delete the current workspace and its launch items? Original files and apps will not be deleted."),APP_NAME,MB_YESNO|MB_ICONQUESTION)!=IDYES)return;
+    Workspace previous[MAX_WORKSPACES];memcpy(previous,spaces,sizeof(previous));int old_count=space_count,old_active=active_space;
     for(int i=active_space;i<space_count-1;i++)spaces[i]=spaces[i+1];
     space_count--;if(active_space>=space_count)active_space=space_count-1;
-    save_config();refresh_spaces();SetWindowTextW(search_edit,L"");refresh_apps();
+    if(!save_config()){memcpy(spaces,previous,sizeof(previous));space_count=old_count;active_space=old_active;return;}refresh_spaces();SetWindowTextW(search_edit,L"");refresh_apps();
 }
 
 static LRESULT CALLBACK child_proc(HWND hwnd,UINT msg,WPARAM wp,LPARAM lp,UINT_PTR id,DWORD_PTR data){

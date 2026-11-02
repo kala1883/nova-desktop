@@ -169,7 +169,7 @@ BOOL sy_rpc(SyncRun *r,const char *request,const void *data,size_t size,SyncRepl
         /* Legacy brokers have no capability field or structured unsupported code. */
         if((code&&!strcmp(code,"unsupported"))||(message&&!strcmp(message,"不支持的请求"))){
             char *action=sync_json_string(r->db,request,"$.action");
-            if(action&&(!strcmp(action,"overview")||!strcmp(action,"repairs")||!strcmp(action,"repair_prepare")))reason=SYNC_UPGRADE;
+            if(action&&(!strcmp(action,"overview")||!strcmp(action,"repairs")||!strcmp(action,"repair_prepare")||!strcmp(action,"retire_dataset")))reason=SYNC_UPGRADE;
             free(action);
         }
         free(code);

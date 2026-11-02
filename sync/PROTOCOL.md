@@ -16,7 +16,7 @@ carry `_raw_size` and `_encoding: "zlib"`. Responses contain `ok` plus `result`
 or `error`. Identity headers are `device` (A–P, allocated automatically) and `node_id`.
 Existing A/B identities and chunksync-v2 manifests remain valid.
 
-Actions: register/ping/status, dataset_create, bind/unbind, prepare/put/commit,
+Actions: register/ping/status, dataset_create, retire_dataset, bind/unbind, prepare/put/commit,
 pending/get/ack. Bindings record local paths as metadata only. Native prepare
 requests include `native: true` and may omit `path_key`; the server validates,
 casefolds the path and returns the canonical manifest. Legacy requests retain
@@ -92,3 +92,9 @@ Configure-server bootstrap may install remote Python using fixed package-manager
 commands only when the authenticated SSH account already has uid 0. Package output
 uses stderr; paths and source remain stdin data. There is no sudo, local subprocess,
 or implicit installation during probes.
+
+A publisher may remove a publication after all devices unbind. The broker
+rejects removal if any binding or unfinished synchronization version exists, retains all
+files, and records a retired ID so stale clients cannot recreate it. Retrying
+the same removal by the publisher is idempotent. Older brokers require an
+explicit server update before supporting this action.

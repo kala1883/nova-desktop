@@ -16,6 +16,7 @@ int main(void){
     assert(workspace_move(w,2,0,0,1,-1)==1);assert(w[0].app_count==2&&w[1].app_count==1);
     w[1].apps[1]=w[0].apps[0];w[1].app_count=2;
     Workspace before[2];memcpy(before,w,sizeof(w));assert(workspace_move(w,2,0,0,1,-1)==-1);assert(!memcmp(before,w,sizeof(w)));
+    w[1].apps[1].target[0]=L'c';memcpy(before,w,sizeof(w));assert(workspace_move(w,2,0,0,1,-1)==-1);assert(!memcmp(before,w,sizeof(w)));
     assert(workspace_move(w,2,-1,0,1,0)==-1);assert(workspace_move(w,2,0,20,1,0)==-1);
     w[1].app_count=MAX_APPS;assert(workspace_move(w,2,0,0,1,0)==-1);
     puts("PASS reorder forward/back/append, cross-workspace move, duplicate/full/invalid rollback");

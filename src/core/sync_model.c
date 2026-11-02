@@ -37,7 +37,7 @@ bool sync_relative_path(const wchar_t *s){
     for(const wchar_t *p=s;;p++){
         if(*p&&*p<32)return false;
         if(*p==L'/'||!*p){size_t n=(size_t)(p-part);
-            if(!n||n>255||part[n-1]==L'.'||part[n-1]==L' '||(n==1&&part[0]==L'.')||(n==2&&!wcsncmp(part,L"..",2))||(n==4&&!wcsncmp(part,L".git",4)))return false;
+            if(!n||n>255||part[n-1]==L'.'||part[n-1]==L' '||(n==1&&part[0]==L'.')||(n==2&&!wcsncmp(part,L"..",2))||(n==4&&part[0]==L'.'&&towlower(part[1])==L'g'&&towlower(part[2])==L'i'&&towlower(part[3])==L't'))return false;
             if(!*p)break;
             part=p+1;
             }

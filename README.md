@@ -468,10 +468,12 @@ identities are allocated automatically, up to 16 devices.
 
 Use **Publish folder** on the source and **Subscribe** on another computer,
 choosing its own local directory. Refresh shows available publications and their
-source device. Saving exchanges metadata; click **Sync selected** to transfer.
-**Check all** hashes every local sync folder without transferring work files.
-Check the folders to **Push selected**, **Pull selected**, or synchronize both ways.
-New and migrated folders keep automatic synchronization paused.
+source device. Saving exchanges metadata; click **Sync checked** to transfer.
+**Check all** hashes every local sync folder without transferring work files. Use **Select all** or **Clear checks** to adjust the batch scope; selecting a row only changes the folder details. Batch completion reports the number of folders involved. Use **Folder actions** beside the selected folder for editing, automatic sync, or disconnecting it.
+Check the folders to **Push checked**, **Pull checked**, or synchronize both ways.
+New and migrated folders keep automatic synchronization paused. If login is cancelled after saving a folder, the local configuration is retained and **Retry connection** starts the server binding again.
+
+In **Available folders**, the publishing device can remove a publication from the server after all devices disconnect it. Existing files are retained. Removal is refused while version deliveries are unfinished; delivered history remains intact. Update the server first if it does not support removal.
 
 Re-saving a binding preserves version history and receipts. Deleting one file
 publishes only that deletion when deletion sync is enabled. Each check still

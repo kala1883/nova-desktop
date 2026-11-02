@@ -121,8 +121,8 @@ BOOL store_open_from(const wchar_t *directory,const wchar_t *legacy){
 }
 BOOL store_get(const wchar_t *scope,const wchar_t *section,const wchar_t *key,const wchar_t *fallback,wchar_t *value,int capacity){
     lstrcpynW(value,fallback,capacity);sqlite3_stmt *s=prepare("SELECT value FROM settings WHERE scope=? AND section=? AND key=?");if(!s)return FALSE;
-    bind_text(s,1,scope);bind_text(s,2,section);bind_text(s,3,key);int rc=sqlite3_step(s);if(rc==SQLITE_ROW)read_text(s,0,value,capacity);
-    BOOL ok=check(rc);sqlite3_finalize(s);return ok;
+    bind_text(s,1,scope);bind_text(s,2,section);bind_text(s,3,key);int rc=sqlite3_step(s);BOOL fits=rc!=SQLITE_ROW||sqlite3_column_bytes16(s,0)<capacity*(int)sizeof(wchar_t);if(rc==SQLITE_ROW&&fits)read_text(s,0,value,capacity);
+    BOOL ok=check(rc)&&fits;sqlite3_finalize(s);return ok;
 }
 int store_int(const wchar_t *scope,const wchar_t *section,const wchar_t *key,int fallback){
     wchar_t value[48],*end;store_get(scope,section,key,L"",value,48);if(!value[0])return fallback;

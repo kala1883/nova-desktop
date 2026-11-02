@@ -54,6 +54,30 @@ class Workflow(unittest.TestCase):
     def ack(self, role, plan):
         return self.call(role, 'ack', job=plan['id'], mhash=plan['mhash'])
 
+    def test_stale_staging_releases_quota_but_resumable_job_survives(self):
+        a, b = [self.register(node) for node in ('source', 'peer')]
+        self.bind(a)
+        self.bind(b)
+        self.broker.config['quota'] = 2
+        def stage(role, identifier, data, path):
+            digest = hashlib.sha256(data).hexdigest()
+            manifest = dict(format='chunksync-v2', id=identifier, dataset='work', path=path,
+                            origin=role, parent=None, kind='PUT', size=len(data), mtime_ns=1,
+                            sha256=digest, chunks=[dict(hash=digest, size=len(data))])
+            result = self.call(role, 'prepare', native=True, manifest=manifest)
+            self.call(role, 'put', data, job=identifier, hash=digest, offset=0)
+            return result
+        winner = stage(a, 'winner', b'a', 'same')
+        stage(b, 'stale', b'b', 'same')
+        self.call(a, 'commit', job='winner')
+        with self.assertRaises(broker_module.VersionConflict):
+            self.call(b, 'commit', job='stale')
+        self.ack(b, winner)
+        stage(a, 'next', b'cc', 'other')
+        with self.broker.connect() as db:
+            self.assertIsNone(db.execute('SELECT id FROM jobs WHERE id=?', ('stale',)).fetchone())
+            self.assertEqual(db.execute('SELECT state FROM jobs WHERE id=?', ('next',)).fetchone()[0], 'STAGING')
+
     def test_fanout_and_late_subscription(self):
         a, b, c = [self.register(node) for node in ('laptop', 'desktop', 'workstation')]
         self.assertEqual((a, b, c), ('A', 'B', 'C'))
@@ -80,6 +104,41 @@ class Workflow(unittest.TestCase):
         status = self.call(d, 'status')
         self.assertEqual(status['datasets'][0]['publisher'], a)
         self.assertEqual(len(status['devices']), 4)
+
+    def test_remove_publication_requires_publisher_no_bindings_or_pending_versions(self):
+        a, b = [self.register(node) for node in ('publisher', 'peer')]
+        self.bind(a)
+        with self.assertRaises(broker_module.SyncError):
+            self.call(b, 'retire_dataset', dataset='work')
+        with self.assertRaises(broker_module.SyncError):
+            self.call(a, 'retire_dataset', dataset='work')
+        self.call(a, 'unbind', dataset='work')
+        result = self.call(a, 'retire_dataset', dataset='work')
+        self.assertTrue(result['removed'])
+        self.assertFalse(result['files_deleted'])
+        self.assertEqual(self.call(b, 'status')['datasets'], [])
+        self.assertTrue(self.call(a, 'retire_dataset', dataset='work')['removed'])
+        with self.assertRaises(broker_module.SyncError):
+            self.bind(a)  # A stale device cannot silently recreate the removed ID.
+        self.call(a, 'dataset_create', dataset='history', name='History')
+        self.call(a, 'bind', dataset='history', name='History', path='C:\\synthetic')
+        # An existing version must survive a refused removal.
+        self.call(a, 'dataset_create', dataset='work2', name='Work 2')
+        self.call(a, 'bind', dataset='work2', name='Work 2', path='C:\\synthetic2')
+        # The fixture publisher helper uses the dataset named work.
+        self.call(a, 'dataset_create', dataset='work-new', name='Work new')
+        with self.broker.connect(True) as db:
+            db.execute("INSERT INTO jobs(id,dataset,path_key,origin,manifest,mhash,state) VALUES (?,?,?,?,?,?,?)", ('retained-job','work-new','file',a,'{}','hash','READY'))
+        with self.assertRaises(broker_module.SyncError):
+            self.call(a, 'retire_dataset', dataset='work-new')
+        with self.broker.connect() as db:
+            self.assertIsNotNone(db.execute("SELECT id FROM jobs WHERE id='retained-job'").fetchone())
+            self.assertIsNotNone(db.execute("SELECT id FROM datasets WHERE id='work-new'").fetchone())
+        with self.broker.connect(True) as db:
+            db.execute("UPDATE jobs SET state='DELIVERED' WHERE id='retained-job'")
+        self.assertTrue(self.call(a, 'retire_dataset', dataset='work-new')['removed'])
+        with self.broker.connect() as db:
+            self.assertIsNotNone(db.execute("SELECT id FROM jobs WHERE id='retained-job'").fetchone())
 
     def test_no_subscriber_keeps_initial_contents(self):
         a = self.register('publisher')

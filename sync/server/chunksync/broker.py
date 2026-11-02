@@ -25,6 +25,7 @@ CREATE INDEX IF NOT EXISTS jobs_state ON jobs(state,seq);
 CREATE INDEX IF NOT EXISTS chunks_hash ON job_chunks(hash);
 CREATE INDEX IF NOT EXISTS jobs_path ON jobs(dataset,path_key,seq);
 CREATE TABLE IF NOT EXISTS publishers(dataset TEXT PRIMARY KEY,device TEXT NOT NULL);
+CREATE TABLE IF NOT EXISTS retired_datasets(dataset TEXT PRIMARY KEY,device TEXT NOT NULL);
 CREATE TABLE IF NOT EXISTS recipients(job TEXT NOT NULL,device TEXT NOT NULL,PRIMARY KEY(job,device));
 """
 
@@ -76,7 +77,8 @@ class Broker:
         with self.connect() as db:
             db.executescript("BEGIN IMMEDIATE;" + SCHEMA + """
                 INSERT OR IGNORE INTO publishers SELECT dataset,origin FROM jobs j
-                  WHERE seq=(SELECT min(seq) FROM jobs k WHERE k.dataset=j.dataset);
+                  WHERE seq=(SELECT min(seq) FROM jobs k WHERE k.dataset=j.dataset)
+                  AND NOT EXISTS(SELECT 1 FROM retired_datasets r WHERE r.dataset=j.dataset);
                 INSERT OR IGNORE INTO recipients SELECT id,origin FROM jobs;
                 INSERT OR IGNORE INTO recipients SELECT j.id,b.device FROM jobs j JOIN bindings b ON b.dataset=j.dataset;
                 COMMIT;
@@ -146,6 +148,14 @@ class Broker:
         if request.get("native") is True and isinstance(manifest,dict) and "path_key" not in manifest:
             manifest={**manifest,"path_key":relative_key(manifest.get("path"))}
         self.validate_manifest(manifest)
+        with self.connect() as db:
+            self.authenticate(db, request)
+            allocated = db.execute("SELECT coalesce(sum(size),0) FROM objects").fetchone()[0]
+        # Only scan staging jobs under quota pressure. A stale parent can never
+        # commit, while a matching parent must remain available for resumption.
+        requested = sum({c['hash']: c['size'] for c in manifest['chunks']}.values())
+        if allocated + requested > self.config['quota'] or shutil.disk_usage(self.root).free < requested + self.config['reserve']:
+            self.discard_stale_staging()
         encoded = canonical(manifest)
         digest = manifest_id(manifest)
         with self.connect(True) as db:
@@ -198,6 +208,19 @@ class Broker:
         if request.get("native") is True:
             result["manifest"]=manifest
         return result
+
+    def discard_stale_staging(self):
+        with self.connect(True) as db:
+            rows = db.execute("SELECT id,dataset,path_key,manifest FROM jobs WHERE state='STAGING'").fetchall()
+            for job in rows:
+                head = db.execute("SELECT job FROM heads WHERE dataset=? AND path_key=?", (job['dataset'], job['path_key'])).fetchone()
+                if (head[0] if head else None) != json.loads(job['manifest']).get('parent'):
+                    db.execute("DELETE FROM needs WHERE job=?", (job['id'],))
+                    db.execute("DELETE FROM job_chunks WHERE job=?", (job['id'],))
+                    db.execute("DELETE FROM recipients WHERE job=?", (job['id'],))
+                    db.execute("DELETE FROM receipts WHERE job=?", (job['id'],))
+                    db.execute("DELETE FROM jobs WHERE id=?", (job['id'],))
+        self.gc()
 
     def object_offset(self, db, digest, size):
         target = self.chunks / digest
@@ -326,7 +349,7 @@ class Broker:
             return self.commit(request), b""
         if action == "ack":
             return self.acknowledge(request), b""
-        with self.connect(action in ("dataset_create","bind","unbind","status")) as db:
+        with self.connect(action in ("dataset_create","retire_dataset","bind","unbind","status")) as db:
             role = self.authenticate(db,request)
             if action in ("bind","unbind"):
                 dataset=checked_id(request.get("dataset"))
@@ -343,9 +366,29 @@ class Broker:
                     db.execute("INSERT OR IGNORE INTO recipients SELECT id,? FROM jobs WHERE dataset=?", (role,dataset))
                     db.execute("UPDATE jobs SET state='READY' WHERE dataset=? AND state='DELIVERED' AND NOT EXISTS(SELECT 1 FROM receipts WHERE job=jobs.id AND device=?)", (dataset,role))
                 return {"bound":action=="bind","files_deleted":False},b""
+            if action == "retire_dataset":
+                dataset = checked_id(request.get("dataset"))
+                retired = db.execute("SELECT device FROM retired_datasets WHERE dataset=?", (dataset,)).fetchone()
+                if retired:
+                    if retired[0] != role:
+                        raise SyncError("只有发布设备可以移除 / Only the publishing device can remove this publication")
+                    return {"removed":True,"files_deleted":False}, b""
+                publisher = db.execute("SELECT device FROM publishers WHERE dataset=?", (dataset,)).fetchone()
+                if not publisher or publisher[0] != role:
+                    raise SyncError("只有发布设备可以移除 / Only the publishing device can remove this publication")
+                if db.execute("SELECT 1 FROM bindings WHERE dataset=?", (dataset,)).fetchone():
+                    raise SyncError("请先在所有设备断开此目录 / Disconnect this folder on all devices first")
+                if db.execute("SELECT 1 FROM jobs WHERE dataset=? AND state!='DELIVERED'", (dataset,)).fetchone():
+                    raise SyncError("存在未完成的同步版本，暂不能移除；记录已保留 / Unfinished synchronization versions prevent removal; records preserved")
+                db.execute("INSERT INTO retired_datasets VALUES (?,?)", (dataset, role))
+                db.execute("DELETE FROM publishers WHERE dataset=?", (dataset,))
+                db.execute("DELETE FROM datasets WHERE id=?", (dataset,))
+                return {"removed":True,"files_deleted":False}, b""
             if action == "dataset_create":
                 dataset = checked_id(request.get("dataset"))
                 name = request.get("name","").strip()
+                if db.execute("SELECT 1 FROM retired_datasets WHERE dataset=?", (dataset,)).fetchone():
+                    raise SyncError("此发布目录已移除 / This publication was removed")
                 if not 1 <= len(name) <= 120:
                     raise SyncError("请填写同步组名称")
                 old = db.execute("SELECT name FROM datasets WHERE id=?",(dataset,)).fetchone()

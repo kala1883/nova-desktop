@@ -28,6 +28,7 @@ typedef struct SyncResult { SyncFailure failure;DWORD native_error;SshResult ssh
 enum { SYNC_JOB_REFRESH=1,SYNC_JOB_REGISTER,SYNC_JOB_RUN,SYNC_JOB_BIND,SYNC_JOB_UNBIND };
 enum { SYNC_JOB_CHECK=6,SYNC_JOB_PUSH,SYNC_JOB_PULL,SYNC_JOB_RESOLVE };
 enum { SYNC_JOB_SERVER_PROBE=10,SYNC_JOB_SERVER_DEPLOY,SYNC_JOB_SERVER_ATTACH,SYNC_JOB_SERVER_MIGRATE,SYNC_JOB_SERVER_RESTORE };
+enum { SYNC_JOB_RETIRE=15 };
 BOOL sync_server_run(SyncRequest *request,int action,SyncResult *result);
 BOOL sync_server_pending(SyncRequest *request);
 BOOL sync_server_commit_local(const wchar_t *state_directory);

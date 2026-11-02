@@ -30,6 +30,7 @@ static void model_tests(void){
     facts.inspected=false;assert(sync_folder_state(&facts).phase==SYNC_FOLDER_CHECK);
     SyncSettings *s=malloc(sizeof(*s)),*before=malloc(sizeof(*before));assert(s&&before);sync_settings_default(s);assert(sync_settings_valid(s));SyncPair p;fixture_pair(&p);assert(sync_pair_set(s,0,&p)==0);*before=*s;assert(sync_pair_set(s,1,&p)<0&&!memcmp(s,before,sizeof(*s)));
     wcscpy(p.id,L"fixture-second");wcscpy(p.dataset,L"different-group");wcscpy(p.directory,L"c:\\FIXTURE-ONLY");assert(sync_pair_set(s,1,&p)<0&&!memcmp(s,before,sizeof(*s)));assert(sync_relative_path(L"folder/中文.txt"));assert(!sync_relative_path(L"../escape")&&!sync_relative_path(L"/absolute")&&!sync_relative_path(L".git/index"));
+    assert(!sync_relative_path(L".GIT/hooks/post-checkout"));
     s->version=2;assert(!sync_settings_valid(s));free(before);free(s);puts("PASS sync model: bounded collection, duplicates, immutable failures, Unicode and traversal checks");
 }
 static void settings_tests(const wchar_t *dir){

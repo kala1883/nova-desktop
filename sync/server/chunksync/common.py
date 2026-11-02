@@ -48,7 +48,7 @@ def relative_key(value):
     if any(ch in value for ch in '<>:"\\|?*'):
         raise SyncError("文件路径含不支持的字符")
     for part in value.split("/"):
-        if part in ("", ".", "..", ".git") or part.endswith((" ", ".")):
+        if part in ("", ".", "..") or part.casefold() == ".git" or part.endswith((" ", ".")):
             raise SyncError("拒绝越界路径或 Git 内部目录")
         if any(ord(ch) < 32 for ch in part) or re.fullmatch(r"CON|PRN|AUX|NUL|COM[1-9]|LPT[1-9]", part.split(".")[0], re.I):
             raise SyncError("不兼容的文件名")

@@ -758,7 +758,7 @@ BOOL sy_sync(SyncRun *r){
     return ok&&!sy_cancel(r);
 }
 BOOL sync_client_run(SyncRequest *request,int action,SyncResult *result){
-    if(action>=SYNC_JOB_SERVER_PROBE)return sync_server_run(request,action,result);
+    if(action>=SYNC_JOB_SERVER_PROBE&&action<=SYNC_JOB_SERVER_RESTORE)return sync_server_run(request,action,result);
     int chosen_resolution=request->resolution;
     if(action!=SYNC_JOB_RESOLVE)request->resolution=0;
     if(action==SYNC_JOB_RUN||action==SYNC_JOB_PUSH||action==SYNC_JOB_PULL)request->direction=action==SYNC_JOB_PUSH?1:action==SYNC_JOB_PULL?2:0;
@@ -804,6 +804,11 @@ BOOL sync_client_run(SyncRequest *request,int action,SyncResult *result){
        fresh comparison after successful work, never a stale "push" after upload. */
     if(ok&&(action==SYNC_JOB_RUN||action==SYNC_JOB_PUSH||action==SYNC_JOB_PULL||action==SYNC_JOB_RESOLVE))ok=inspect(&r);
     if(ok&&action==SYNC_JOB_BIND)ok=bind_pair(&r);
+    if(ok&&action==SYNC_JOB_RETIRE){char *dataset=sync_utf8(request->pair.dataset);
+        ok=dataset&&command(&r,"retire_dataset","dataset",dataset,&reply);
+        nova_log_write(ok?NOVA_LOG_INFO:NOVA_LOG_WARN,"sync","publication_retire_result",L"run=%ld ok=%d failure=%d",r.log_id,ok,result->failure);
+        free(dataset);sy_reply_free(&reply);
+        }
     if(ok&&action==SYNC_JOB_UNBIND){char *dataset=sync_utf8(request->pair.dataset);
         ok=dataset&&command(&r,"unbind","dataset",dataset,&reply);
         free(dataset);
