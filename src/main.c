@@ -453,13 +453,12 @@ static void gauge_symbol(HDC dc,int x,int y,int kind,BOOL compact,COLORREF color
     if(kind==MON_DISK){Rectangle(dc,x-5*unit,y-4*unit,x+5*unit,y+4*unit);Ellipse(dc,x-3*unit,y-3*unit,x+3*unit,y+3*unit);Ellipse(dc,x-unit,y-unit,x+unit,y+unit);}
     else if(kind==MON_GPU){Rectangle(dc,x-6*unit,y-4*unit,x+6*unit,y+4*unit);Ellipse(dc,x-3*unit,y-3*unit,x+3*unit,y+3*unit);}
     else if(kind==MON_NET){
-        /* Opposed transfer arrows fit the same 12 x 10 unit envelope as the hardware icons. */
-        POINT down[]={{x-3*unit,y-5*unit},{x-3*unit,y+5*unit}};
-        POINT down_head[]={{x-6*unit,y+2*unit},{x-3*unit,y+5*unit},{x,y+2*unit}};
-        POINT up[]={{x+3*unit,y+5*unit},{x+3*unit,y-5*unit}};
-        POINT up_head[]={{x,y-2*unit},{x+3*unit,y-5*unit},{x+6*unit,y-2*unit}};
-        Polyline(dc,down,2);Polyline(dc,down_head,3);
-        Polyline(dc,up,2);Polyline(dc,up_head,3);
+        /* RJ45 socket: same hardware-outline style as the other glyphs. */
+        POINT port[]={{x-6*unit,y-4*unit},{x+6*unit,y-4*unit},{x+6*unit,y+2*unit},
+            {x+3*unit,y+2*unit},{x+3*unit,y+4*unit},{x-3*unit,y+4*unit},
+            {x-3*unit,y+2*unit},{x-6*unit,y+2*unit},{x-6*unit,y-4*unit}};
+        Polyline(dc,port,sizeof(port)/sizeof(port[0]));
+        for(int i=-3;i<=3;i+=2){MoveToEx(dc,x+i*unit,y-3*unit,NULL);LineTo(dc,x+i*unit,y-unit);}
     }
     else if(memory){
         Rectangle(dc,x-6*unit,y-3*unit,x+6*unit,y+3*unit);
@@ -494,6 +493,7 @@ static int monitor_hit(HWND hwnd,POINT point,BOOL allow_empty){
         if(row*columns+col>=count)return count-1;}
     return -1;
 }
+#include "ui/monitor_detail.inc"
 static BOOL monitor_reorder(int from,int to){
     int positions[MON_COUNT],count=0;
     for(int i=0;i<MON_COUNT;i++)if(monitor.mask[monitor.order[i]])positions[count++]=i;
@@ -516,7 +516,7 @@ static void dashboard_surface(HDC dc,int width,int height,BOOL highlighted,BOOL 
     RECT bounds=box(0,0,width,height);FillRect(dc,&bounds,panel_brush);
     int count=monitor_count();if(!count)return;
     int index=0;
-    const COLORREF colors[]={RGB(63,209,242),RGB(175,137,255),RGB(245,183,94),RGB(93,216,152),RGB(104,166,255)};
+    const COLORREF *colors=monitor_colors;
     for(int i=0;i<MON_COUNT;i++){
         int kind=monitor.order[i],mask=monitor.mask[kind];if(!mask)continue;
         RECT cell;int visible_index=index++;
@@ -531,7 +531,8 @@ static void dashboard_surface(HDC dc,int width,int height,BOOL highlighted,BOOL 
         int top=cell.top+px(2);
         int saved=SaveDC(dc);IntersectClipRect(dc,cell.left,cell.top,cell.right,cell.bottom);
         HFONT compact_font=line<px(12)?CreateFontW(-line,0,0,0,FW_NORMAL,0,0,0,DEFAULT_CHARSET,0,0,CLEARTYPE_QUALITY,0,L"Segoe UI"):NULL;
-        if(arc){
+        if(kind==MON_NET)monitor_network_surface(dc,cell,mask,attrs,line,compact_font);
+        else if(arc){
             int radius=(cw-px(12))/2,vertical=(ch-line*(attrs-1)-px(6))/2;if(radius>vertical)radius=vertical;if(radius>px(42))radius=px(42);
             int y=top+radius+px(2);
             double v=kind==MON_CPU?system_cpu:kind==MON_RAM?memory_load:monitor_value[kind][primary];
@@ -546,7 +547,7 @@ static void dashboard_surface(HDC dc,int width,int height,BOOL highlighted,BOOL 
             text(dc,monitor_name(kind),box(cell.left+px(23),top,cw-px(24),px(14)),small_font,colors[kind],DT_SINGLELINE|DT_VCENTER|DT_END_ELLIPSIS);
             top+=px(15);
         }
-        for(int a=0;a<monitor_attrs[kind];a++)if((mask&(1<<a))&&(!arc||a!=primary)){
+        for(int a=0;kind!=MON_NET&&a<monitor_attrs[kind];a++)if((mask&(1<<a))&&(!arc||a!=primary)){
             wchar_t value[64],label[100];monitor_format(kind,a,value,64);
             if(cw<px(78)){
                 const wchar_t *short_label=kind==MON_NET&&a==0?L"↓":kind==MON_NET&&a==1?L"↑":L"";
@@ -620,6 +621,7 @@ static void draw_icon(DRAWITEMSTRUCT *d){
 static void move(HWND h,int x,int y,int w,int height){MoveWindow(h,x,y+caption_height(),w,height,TRUE);}
 static void layout_controls(void) {
     if(!app_list)return;
+    monitor_detail_hide();
     RECT r;GetClientRect(main_window,&r);r.bottom-=caption_height();int left=content_left(),width=r.right-left-px(32);
     int list_x=px(sidebar_collapsed?8:16),list_width=sidebar_width()-list_x-px(sidebar_collapsed?8:16);
     int columns=monitor_columns(),rows=(monitor_count()+columns-1)/columns,attrs=1;
@@ -864,16 +866,22 @@ static LRESULT CALLBACK child_proc(HWND hwnd,UINT msg,WPARAM wp,LPARAM lp,UINT_P
         if(msg==WM_CONTEXTMENU){POINT p={GET_X_LPARAM(lp),GET_Y_LPARAM(lp)};int row=(int)SendMessageW(hwnd,LB_GETCURSEL,0,0);if(p.x==-1&&p.y==-1){RECT r;GetWindowRect(hwnd,&r);p=(POINT){r.left,r.top+px(22)};}else{POINT q=p;ScreenToClient(hwnd,&q);LRESULT hit=SendMessageW(hwnd,LB_ITEMFROMPOINT,0,MAKELPARAM(q.x,q.y));if(HIWORD(hit))return 0;row=LOWORD(hit);}workspace_order_menu(row,p);return 0;}
         if((msg==WM_KEYDOWN||msg==WM_SYSKEYDOWN)&&(GetKeyState(VK_MENU)&0x8000)&&(wp==VK_UP||wp==VK_DOWN)){int row=workspace_row(active_space);workspace_reorder(row,row+(wp==VK_UP?-1:1));return 0;}
     }
-    if(hwnd==pin_button||hwnd==desktop_button||hwnd==settings_button||hwnd==new_button||hwnd==sidebar_button||hwnd==minimize_button||hwnd==maximize_button||hwnd==close_button||hwnd==system_dashboard){
+    if(hwnd==pin_button||hwnd==desktop_button||hwnd==settings_button||hwnd==new_button||hwnd==sidebar_button||hwnd==minimize_button||hwnd==maximize_button||hwnd==close_button){
         if(msg==WM_MOUSEMOVE&&hover_button!=hwnd){hover_button=hwnd;TRACKMOUSEEVENT t={sizeof(t),TME_LEAVE,hwnd,0};TrackMouseEvent(&t);InvalidateRect(hwnd,NULL,TRUE);}
         if(msg==WM_MOUSELEAVE){if(hover_button==hwnd)hover_button=NULL;InvalidateRect(hwnd,NULL,TRUE);}
     }
     if(hwnd==system_dashboard){
+        if(msg==WM_MOUSEMOVE&&monitor_drag_from<0){
+            TRACKMOUSEEVENT t={sizeof(t),TME_LEAVE,hwnd,0};TrackMouseEvent(&t);
+            POINT point={GET_X_LPARAM(lp),GET_Y_LPARAM(lp)};monitor_detail_hover(hwnd,point);return 0;
+        }
+        if(msg==WM_MOUSELEAVE){monitor_detail_hide();return 0;}
+        if(msg==WM_SHOWWINDOW&&!wp)monitor_detail_hide();
         if(msg==BM_CLICK){SendMessageW(main_window,WM_COMMAND,MAKEWPARAM(ID_SYSTEM_DASHBOARD,BN_CLICKED),(LPARAM)hwnd);return 0;}
         if(msg==WM_LBUTTONDOWN){
             POINT point={GET_X_LPARAM(lp),GET_Y_LPARAM(lp)};
             int from=monitor_hit(hwnd,point,FALSE);if(from<0)return 0;
-            SetFocus(hwnd);monitor_drag_reset(hwnd);
+            monitor_detail_hide();SetFocus(hwnd);monitor_drag_reset(hwnd);
             monitor_drag_from=monitor_drag_to=from;monitor_drag_point=point;
             SetCapture(hwnd);if(!SetTimer(hwnd,MONITOR_DRAG_TIMER,MONITOR_HOLD_MS,NULL))monitor_drag_cancelled=TRUE;
             return 0;
@@ -903,7 +911,7 @@ static LRESULT CALLBACK child_proc(HWND hwnd,UINT msg,WPARAM wp,LPARAM lp,UINT_P
             return 0;
         }
         if(msg==WM_CANCELMODE||(msg==WM_CAPTURECHANGED&&(HWND)lp!=hwnd)||(msg==WM_KEYDOWN&&wp==VK_ESCAPE&&monitor_drag_from>=0)){
-            monitor_drag_reset(hwnd);if(msg==WM_KEYDOWN)return 0;
+            monitor_detail_hide();monitor_drag_reset(hwnd);if(msg==WM_KEYDOWN)return 0;
         }
         if(msg==WM_SETCURSOR){SetCursor(LoadCursorW(NULL,monitor_dragging?(monitor_drag_to<0?IDC_NO:IDC_SIZEALL):IDC_HAND));return TRUE;}
         if(msg==WM_GETDLGCODE&&wp==VK_RETURN)return DLGC_WANTALLKEYS;
@@ -1077,7 +1085,8 @@ static void update_dashboard_description(void){
         for(int a=0;a<monitor_attrs[kind];a++)if(mask&(1<<a)){wchar_t value[64],part[120];monitor_format(kind,a,value,64);swprintf(part,120,L"%ls %ls; ",monitor_attr(kind,a),value);if(wcslen(next)+wcslen(part)<1450)lstrcatW(next,part);}
     }
     lstrcatW(next,nova_text(L"点击打开 Windows 任务管理器；长按拖动调整监控位置。",L"Click to open Windows Task Manager; hold and drag to reorder monitors."));
-    if(lstrcmpW(dashboard_description,next)){lstrcpyW(dashboard_description,next);SetWindowTextW(system_dashboard,dashboard_description);update_tooltip(system_dashboard,dashboard_description);}
+    if(lstrcmpW(dashboard_description,next)){lstrcpyW(dashboard_description,next);SetWindowTextW(system_dashboard,dashboard_description);}
+    monitor_detail_refresh();
 }
 
 static void sample_stats(void){
@@ -1133,7 +1142,6 @@ static LRESULT CALLBACK window_proc(HWND hwnd,UINT msg,WPARAM wp,LPARAM lp){
         tooltip=CreateWindowExW(WS_EX_TOPMOST,TOOLTIPS_CLASSW,NULL,WS_POPUP|TTS_ALWAYSTIP|TTS_NOPREFIX,CW_USEDEFAULT,CW_USEDEFAULT,CW_USEDEFAULT,CW_USEDEFAULT,hwnd,NULL,GetModuleHandleW(NULL),NULL);
         add_tooltip(desktop_button,nova_text(L"桌面围栏 / 恢复普通窗口",L"Desktop fence / restore normal window"));add_tooltip(pin_button,nova_text(L"置顶 / 取消置顶 (F11)",L"Always on top / unpin (F11)"));add_tooltip(settings_button,nova_text(L"设置：硬件监控、设备同步、批量任务、语言、开机启动、工作区管理",L"Settings: hardware monitor, device sync, batch tasks, language, startup, and workspace management"));add_tooltip(new_button,nova_text(L"新建工作区（最多 8 个）",L"New workspace (up to 8)"));
         add_tooltip(sidebar_button,sidebar_collapsed?nova_text(L"展开侧边栏 (Ctrl+B)",L"Expand sidebar (Ctrl+B)"):nova_text(L"折叠侧边栏 (Ctrl+B)",L"Collapse sidebar (Ctrl+B)"));
-        add_tooltip(system_dashboard,nova_text(L"打开 Windows 任务管理器",L"Open Windows Task Manager"));
         add_tooltip(launch_button,nova_text(L"将当前工作区的每个项目各打开一次",L"Open every item in this workspace once"));
         add_tooltip(minimize_button,nova_text(L"最小化",L"Minimize"));add_tooltip(maximize_button,nova_text(L"最大化 / 还原",L"Maximize / restore"));add_tooltip(close_button,nova_text(L"关闭",L"Close"));
         refresh_spaces();refresh_apps();layout_controls();sample_stats();SetTimer(hwnd,STATS_TIMER,monitor.interval,NULL);if(prefer_desktop)SetTimer(hwnd,START_DESKTOP_TIMER,800,NULL);else if(prefer_pin)SetTimer(hwnd,START_PIN_TIMER,800,NULL);
@@ -1144,6 +1152,7 @@ static LRESULT CALLBACK window_proc(HWND hwnd,UINT msg,WPARAM wp,LPARAM lp){
     case WM_NCCALCSIZE:if(wp){RECT original=((NCCALCSIZE_PARAMS*)lp)->rgrc[0];DefWindowProcW(hwnd,msg,wp,lp);((NCCALCSIZE_PARAMS*)lp)->rgrc[0].top=original.top+(IsZoomed(hwnd)?GetSystemMetrics(SM_CYSIZEFRAME)+GetSystemMetrics(SM_CXPADDEDBORDER):1);return 0;}break;
     case WM_NCHITTEST:{LRESULT result=DefWindowProcW(hwnd,msg,wp,lp);if(result!=HTCLIENT)return result;POINT p={GET_X_LPARAM(lp),GET_Y_LPARAM(lp)};ScreenToClient(hwnd,&p);RECT r;GetClientRect(hwnd,&r);if(!IsZoomed(hwnd)&&p.y<px(4))return HTTOP;if(p.y<caption_height()&&p.x<r.right-px(276))return HTCAPTION;return HTCLIENT;}
     case WM_GETMINMAXINFO:{MINMAXINFO *m=(MINMAXINFO*)lp;m->ptMinTrackSize.x=px(780);m->ptMinTrackSize.y=px(600);return 0;}
+    case WM_MOVE:monitor_detail_hide();break;
     case WM_SIZE:layout_controls();SetWindowTextW(maximize_button,IsZoomed(hwnd)?nova_text(L"还原",L"Restore"):nova_text(L"最大化",L"Maximize"));InvalidateRect(maximize_button,NULL,TRUE);if(wp==SIZE_MINIMIZED&&!pinned)ShowWindow(hwnd,SW_HIDE);return 0;
     case WM_ERASEBKGND:return 1;
     case WM_PAINT:{PAINTSTRUCT ps;HDC dc=BeginPaint(hwnd,&ps);RECT r;GetClientRect(hwnd,&r);paint(dc,r);paint_generation++;EndPaint(hwnd,&ps);return 0;}
@@ -1214,8 +1223,10 @@ static LRESULT CALLBACK window_proc(HWND hwnd,UINT msg,WPARAM wp,LPARAM lp){
     case WM_NOVA_BATCH_SHORTCUT:choose_batch_workspace((const BatchTask*)lp);return 0;
     case WM_NOVA_BATCH_CHANGED:if(app_list)refresh_apps();return 0;
     case WM_TRAY:if(lp==WM_LBUTTONUP)restore_window();if(lp==WM_RBUTTONUP)tray_menu();return 0;
-    case WM_CLOSE:file_manager_close();DestroyWindow(hwnd);return 0;
-    case WM_DESTROY:nova_log_write(NOVA_LOG_INFO,"app","shutdown_begin",L"workers_join_before_storage_close=1");sync_manager_shutdown();batch_tasks_shutdown();file_manager_close();save_config();KillTimer(hwnd,STATS_TIMER);monitor_shutdown();KillTimer(hwnd,START_PIN_TIMER);KillTimer(hwnd,START_DESKTOP_TIMER);UnregisterHotKey(hwnd,ID_HOTKEY);if(!test_mode)Shell_NotifyIconW(NIM_DELETE,&tray);PostQuitMessage(0);return 0;
+    case WM_SHOWWINDOW:if(!wp)monitor_detail_hide();break;
+    case WM_ACTIVATE:if(LOWORD(wp)==WA_INACTIVE)monitor_detail_hide();break;
+    case WM_CLOSE:monitor_detail_hide();file_manager_close();DestroyWindow(hwnd);return 0;
+    case WM_DESTROY:monitor_detail_hide();if(IsWindow(monitor_detail))DestroyWindow(monitor_detail);monitor_detail=NULL;nova_log_write(NOVA_LOG_INFO,"app","shutdown_begin",L"workers_join_before_storage_close=1");sync_manager_shutdown();batch_tasks_shutdown();file_manager_close();save_config();KillTimer(hwnd,STATS_TIMER);monitor_shutdown();KillTimer(hwnd,START_PIN_TIMER);KillTimer(hwnd,START_DESKTOP_TIMER);UnregisterHotKey(hwnd,ID_HOTKEY);if(!test_mode)Shell_NotifyIconW(NIM_DELETE,&tray);PostQuitMessage(0);return 0;
     }return DefWindowProcW(hwnd,msg,wp,lp);
 }
 

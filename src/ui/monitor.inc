@@ -121,9 +121,9 @@ static void monitor_gpu_sensors(void){
     if(!monitor_nvml_ready)return;
     void *device=NULL;unsigned value;
     if(monitor_nvml_handle(0,&device)!=0||!device)return;
-    if((monitor.mask[MON_GPU]&2)&&monitor_nvml_temp&&monitor_nvml_temp(device,0,&value)==0)monitor_value[MON_GPU][1]=value;
-    if((monitor.mask[MON_GPU]&8)&&monitor_nvml_clock&&monitor_nvml_clock(device,0,&value)==0)monitor_value[MON_GPU][3]=value;
-    if((monitor.mask[MON_GPU]&16)&&monitor_nvml_power&&monitor_nvml_power(device,&value)==0)monitor_value[MON_GPU][4]=value/1000.0;
+    if(monitor_nvml_temp&&monitor_nvml_temp(device,0,&value)==0)monitor_value[MON_GPU][1]=value;
+    if(monitor_nvml_clock&&monitor_nvml_clock(device,0,&value)==0)monitor_value[MON_GPU][3]=value;
+    if(monitor_nvml_power&&monitor_nvml_power(device,&value)==0)monitor_value[MON_GPU][4]=value/1000.0;
 }
 static void monitor_network_links(void){
     if(!monitor_if_attempted){
@@ -187,15 +187,15 @@ static double monitor_scaled(double v,double divisor){return v<0?-1:v/divisor;}
 static void monitor_sample_extra(const MEMORYSTATUSEX *ms){
     for(int i=0;i<MON_COUNT;i++)for(int j=0;j<MON_ATTRS;j++)monitor_value[i][j]=-1;
     if(ms->ullTotalPhys){monitor_value[MON_RAM][1]=(double)(ms->ullTotalPhys-ms->ullAvailPhys)/1073741824.0;monitor_value[MON_RAM][2]=(double)ms->ullAvailPhys/1073741824.0;}
-    if(monitor.mask[MON_DISK]&1){DWORD drives=GetLogicalDrives();double total=0,free_bytes=0;
+    if(monitor.mask[MON_DISK]){DWORD drives=GetLogicalDrives();double total=0,free_bytes=0;
         for(int i=0;i<26;i++)if(drives&(1UL<<i)){wchar_t root[]={L'A'+i,L':',L'\\',0};ULARGE_INTEGER capacity,free_space;if(GetDriveTypeW(root)==DRIVE_FIXED&&GetDiskFreeSpaceExW(root,NULL,&capacity,&free_space)){total+=(double)capacity.QuadPart;free_bytes+=(double)free_space.QuadPart;}}
         if(total>0)monitor_value[MON_DISK][0]=100.0*(total-free_bytes)/total;}
     if(test_mode)return;
     monitor_init();
     if(monitor_query&&monitor_collect(monitor_query)==0){
         monitor_value[MON_CPU][1]=monitor_counter(0,FALSE,FALSE);
-        if(monitor.mask[MON_CPU]&8)monitor_value[MON_CPU][3]=monitor_scaled(monitor_counter(9,FALSE,FALSE),1000);
-        if(monitor.mask[MON_CPU]&16){double kelvin=monitor_counter(10,TRUE,TRUE);if(kelvin>=273.15&&kelvin<473.15)monitor_value[MON_CPU][4]=kelvin-273.15;}
+        if(monitor.mask[MON_CPU])monitor_value[MON_CPU][3]=monitor_scaled(monitor_counter(9,FALSE,FALSE),1000);
+        if(monitor.mask[MON_CPU]){double kelvin=monitor_counter(10,TRUE,TRUE);if(kelvin>=273.15&&kelvin<473.15)monitor_value[MON_CPU][4]=kelvin-273.15;}
         monitor_value[MON_DISK][1]=monitor_scaled(monitor_counter(1,FALSE,FALSE),1000000);
         monitor_value[MON_DISK][2]=monitor_scaled(monitor_counter(2,FALSE,FALSE),1000000);
         double busy=monitor_counter(3,FALSE,FALSE);monitor_value[MON_DISK][3]=busy>100?100:busy;
@@ -205,8 +205,8 @@ static void monitor_sample_extra(const MEMORYSTATUSEX *ms){
         monitor_value[MON_GPU][2]=monitor_scaled(monitor_counter(7,TRUE,FALSE),1073741824.0);
         monitor_value[MON_NET][2]=monitor_scaled(monitor_counter(8,TRUE,FALSE),1000000);
     }
-    if(monitor.mask[MON_DISK]&16)monitor_value[MON_DISK][4]=monitor_disk_temperature();
-    if(monitor.mask[MON_GPU]&26)monitor_gpu_sensors();
-    if(monitor.mask[MON_NET]&12)monitor_network_links();
+    if(monitor.mask[MON_DISK])monitor_value[MON_DISK][4]=monitor_disk_temperature();
+    if(monitor.mask[MON_GPU])monitor_gpu_sensors();
+    if(monitor.mask[MON_NET])monitor_network_links();
 }
 static void monitor_shutdown(void){if(monitor_iphlp)FreeLibrary(monitor_iphlp);monitor_iphlp=NULL;if(monitor_nvml_ready&&monitor_nvml_shutdown)monitor_nvml_shutdown();if(monitor_nvml)FreeLibrary(monitor_nvml);monitor_nvml=NULL;monitor_nvml_ready=FALSE;if(monitor_query&&monitor_close_query)monitor_close_query(monitor_query);monitor_query=NULL;if(monitor_pdh)FreeLibrary(monitor_pdh);monitor_pdh=NULL;}

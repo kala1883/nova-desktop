@@ -198,8 +198,11 @@ atomic publication and rollback. See [configuration format](config/README.md).
   reorder the hardware with Move up/down or hold a sidebar icon for 350 ms and drag it to another grid cell, choose one to three columns and set
   the sampling interval (250–3600000 ms; default 3000). Uncheck all attributes
   to hide a hardware card. Changes take effect after Save and persist in JSON.
-  The compact rail uses one column. Hover for the full readings; click or
-  press Enter/Space on the monitor to open Windows Task Manager.
+  The compact rail uses one column. Hover over a hardware icon for a stable,
+  dark detail panel showing all of that hardware's readings, including attributes
+  not selected for the sidebar. Unavailable readings are shown as N/A. Network
+  uses a port glyph and aligned transfer values. Click or press Enter/Space
+  on the monitor to open Windows Task Manager.
   CPU/RAM use Win32 APIs; optional Windows performance counters provide disk
   activity/rates, GPU busiest performance counter and dedicated-memory usage, and network
   throughput; the Windows IP Helper API supplies the count and summed receive-link speed of active physical NICs. Capacity aggregates fixed drive-letter volumes. NVIDIA driver NVML, if

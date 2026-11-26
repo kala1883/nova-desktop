@@ -54,6 +54,57 @@ static void test_monitor_native_temperature(void){
     fixture.header.count=3;fixture.header.size=sizeof(fixture)+1;assert(monitor_disk_temp_parse((const BYTE*)&fixture,sizeof(fixture))<0);
     puts("PASS native storage temperature descriptor, max sensor, sentinel and malformed bounds");
 }
+static void test_monitor_detail_hover(void){
+    RECT r,a,b;GetClientRect(system_dashboard,&r);
+    assert(monitor_cell(0,r.right,r.bottom,&a)&&monitor_cell(1,r.right,r.bottom,&b));
+    LPARAM p=MAKELPARAM((a.left+a.right)/2,(a.top+a.bottom)/2),q=MAKELPARAM((b.left+b.right)/2,(b.top+b.bottom)/2);
+    HWND focus=GetFocus();
+    TOOLINFOW info={0};info.cbSize=sizeof(info);info.hwnd=main_window;info.uId=(UINT_PTR)system_dashboard;info.uFlags=TTF_IDISHWND;
+    assert(!SendMessageW(tooltip,TTM_GETTOOLINFOW,0,(LPARAM)&info));
+    SendMessageW(system_dashboard,WM_MOUSEMOVE,0,p);
+    int kind=monitor_kind_at(0);
+    assert(monitor_hover_kind==kind&&IsWindowVisible(monitor_detail)&&GetFocus()==focus);
+    HWND detail=monitor_detail;RECT before,after;GetWindowRect(detail,&before);
+    for(int attr=0;attr<monitor_attrs[kind];attr++)assert(wcsstr(monitor_detail_description,monitor_attr(kind,attr)));
+    SendMessageW(system_dashboard,WM_MOUSEMOVE,0,p);update_dashboard_description();
+    GetWindowRect(detail,&after);assert(EqualRect(&before,&after)&&detail==monitor_detail&&IsWindowVisible(detail));
+    SendMessageW(system_dashboard,WM_MOUSEMOVE,0,q);
+    assert(monitor_hover_kind==monitor_kind_at(1)&&detail==monitor_detail&&IsWindowVisible(detail));
+    assert(!wcsncmp(monitor_detail_description,monitor_name(monitor_kind_at(1)),wcslen(monitor_name(monitor_kind_at(1)))));
+    SendMessageW(system_dashboard,WM_MOUSELEAVE,0,0);assert(monitor_hover_kind<0&&!IsWindowVisible(detail));
+    SendMessageW(system_dashboard,WM_MOUSEMOVE,0,p);assert(IsWindowVisible(detail));
+    SendMessageW(system_dashboard,WM_LBUTTONDOWN,MK_LBUTTON,p);assert(!IsWindowVisible(detail));
+    SendMessageW(system_dashboard,WM_CANCELMODE,0,0);assert(monitor_drag_from<0);
+    if(GetEnvironmentVariableW(L"NOVA_TEST_CAPTURE",NULL,0)){
+        SendMessageW(system_dashboard,WM_MOUSEMOVE,0,p);UpdateWindow(detail);
+        SendMessageW(system_dashboard,WM_MOUSELEAVE,0,0);
+    }
+    puts("PASS hardware-specific full hover readings, stable window, no native tooltip, no focus theft, leave and drag hide");
+}
+static void test_monitor_detail_over_files(void){
+    assert(files_page&&IsWindowVisible(files_view));
+    RECT r,cell;GetClientRect(system_dashboard,&r);assert(monitor_cell(0,r.right,r.bottom,&cell));
+    LPARAM point=MAKELPARAM((cell.left+cell.right)/2,(cell.top+cell.bottom)/2);
+    HWND focus=GetFocus();
+    SendMessageW(system_dashboard,WM_MOUSEMOVE,0,point);
+    HWND detail=monitor_detail;
+    assert(IsWindowVisible(detail)&&GetFocus()==focus);
+    /* A sibling child cannot reliably overlay embedded native Shell descendants.
+       Require an owned top-level popup and inspect real top-level z-order. */
+    assert((GetWindowLongPtrW(detail,GWL_STYLE)&WS_POPUP)&&!(GetWindowLongPtrW(detail,GWL_STYLE)&WS_CHILD));
+    assert(GetAncestor(detail,GA_ROOT)==detail&&GetWindow(detail,GW_OWNER)==main_window);
+    assert((GetWindowLongPtrW(detail,GWL_EXSTYLE)&WS_EX_NOACTIVATE)&&!(GetWindowLongPtrW(detail,GWL_EXSTYLE)&WS_EX_TOPMOST));
+    RECT popup,files,overlap;GetWindowRect(detail,&popup);GetWindowRect(files_view,&files);
+    assert(IntersectRect(&overlap,&popup,&files));
+    HWND next=detail;while(next&&next!=main_window)next=GetWindow(next,GW_HWNDNEXT);assert(next==main_window);
+    RedrawWindow(files_view,NULL,NULL,RDW_INVALIDATE|RDW_ALLCHILDREN|RDW_UPDATENOW);
+    update_dashboard_description();
+    next=detail;while(next&&next!=main_window)next=GetWindow(next,GW_HWNDNEXT);
+    assert(next==main_window&&IsWindowVisible(detail)&&GetFocus()==focus);
+    RECT after;GetWindowRect(detail,&after);assert(EqualRect(&popup,&after));
+    SendMessageW(system_dashboard,WM_MOUSELEAVE,0,0);assert(!IsWindowVisible(detail));
+    puts("PASS owned hardware popup overlaps actual embedded file manager, stays above owner after repaint and does not activate or become topmost");
+}
 static void test_monitor_hold_drag(void){
     MonitorConfig previous=monitor;
     int first=monitor.order[0],second=monitor.order[1];
@@ -335,7 +386,7 @@ int wmain(int argc,wchar_t **argv) {
         assert(sidebar_collapsed&&collapsed_apps.left<expanded_apps.left&&wcsstr(sidebar_name,L"展开"));
         SendMessageW(window,WM_COMMAND,ID_SIDEBAR,0);assert(!sidebar_collapsed&&store_int(L"app",L"Nova",L"SidebarCollapsed",1)==0);
         puts("PASS collapsible sidebar expands content, remains keyboard-accessible and persists its state");
-        test_monitor_settings(window);test_monitor_native_temperature();test_monitor_hold_drag();test_workspace_display_order();
+        test_monitor_settings(window);test_monitor_native_temperature();test_monitor_detail_hover();test_monitor_hold_drag();test_workspace_display_order();
         BatchTaskList *shortcut_tasks=calloc(1,sizeof(*shortcut_tasks));assert(shortcut_tasks);shortcut_tasks->count=2;
         for(int task_index=0;task_index<2;task_index++){
             BatchTask *value=&shortcut_tasks->tasks[task_index];swprintf(value->name,BATCH_NAME_CAP,L"Task %d",task_index+1);lstrcpyW(value->command,task_index?L"exit /b 0":L"exit /b 17");value->mode=task_index;
@@ -534,6 +585,7 @@ int wmain(int argc,wchar_t **argv) {
         open_file_manager();assert(files_page&&IsWindow(files_view));
         assert(GetParent(files_view)==window&&GetAncestor(files_view,GA_ROOT)==window);
         assert(IsWindowVisible(files_view)&&!IsWindowVisible(app_list)&&IsWindowVisible(space_list));
+        test_monitor_detail_over_files();
         HWND original_view=files_view;active_space=0;show_workspace_page();assert(files_page&&IsWindowVisible(files_view)&&!IsWindowVisible(app_list));
         int before_delete=space_count;edit_name();delete_space();assert(!editing_name&&space_count==before_delete&&!lstrcmpW(spaces[0].name,L"目录"));
         SendMessageW(space_list,LB_SETCURSEL,1,0);
