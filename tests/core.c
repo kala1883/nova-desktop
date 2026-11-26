@@ -6,6 +6,14 @@
 #include "log_capture.h"
 #include <stdlib.h>
 
+static int dashboard_dispatch_count;
+static INT_PTR dashboard_dispatch_result=42;
+static HINSTANCE WINAPI dashboard_fake_execute(HWND owner,LPCWSTR verb,LPCWSTR executable,LPCWSTR parameters,LPCWSTR directory,INT show){
+    wchar_t expected[MAX_PATH];assert(GetSystemDirectoryW(expected,MAX_PATH));lstrcatW(expected,L"\\taskmgr.exe");
+    assert(owner==main_window&&!wcscmp(verb,L"open")&&!wcscmp(executable,expected));
+    assert(!parameters&&!directory&&show==SW_SHOWNORMAL);
+    dashboard_dispatch_count++;return (HINSTANCE)dashboard_dispatch_result;
+}
 static HANDLE batch_gate,batch_cancel;
 static volatile LONG batch_calls;
 static int batch_parallel,batch_cancel_after_first;
@@ -43,7 +51,12 @@ static void capture_batch(HWND target,const wchar_t *path){
     HDC dc=GetDC(target),memory=CreateCompatibleDC(dc);BITMAPINFO info={0};
     info.bmiHeader.biSize=sizeof(BITMAPINFOHEADER);info.bmiHeader.biWidth=width;info.bmiHeader.biHeight=-height;info.bmiHeader.biPlanes=1;info.bmiHeader.biBitCount=32;
     void *bits=NULL;HBITMAP bitmap=CreateDIBSection(dc,&info,DIB_RGB_COLORS,&bits,NULL,0);assert(bitmap&&bits);
-    HGDIOBJ previous=SelectObject(memory,bitmap);RedrawWindow(target,NULL,NULL,RDW_INVALIDATE|RDW_ERASE|RDW_ALLCHILDREN|RDW_UPDATENOW);assert(PrintWindow(target,memory,0));
+    HGDIOBJ previous=SelectObject(memory,bitmap);RedrawWindow(target,NULL,NULL,RDW_INVALIDATE|RDW_ERASE|RDW_ALLCHILDREN|RDW_UPDATENOW);if(target==system_dashboard){
+        /* Owner-drawn BUTTON does not implement PrintWindow; use its real parent draw callback. */
+        DRAWITEMSTRUCT draw={0};draw.CtlType=ODT_BUTTON;draw.CtlID=ID_SYSTEM_DASHBOARD;draw.itemAction=ODA_DRAWENTIRE;
+        draw.hwndItem=target;draw.hDC=memory;GetClientRect(target,&draw.rcItem);
+        assert(SendMessageW(GetParent(target),WM_DRAWITEM,ID_SYSTEM_DASHBOARD,(LPARAM)&draw));
+    }else assert(PrintWindow(target,memory,0));
     BITMAPFILEHEADER header={0};header.bfType=0x4d42;header.bfOffBits=sizeof(header)+sizeof(info.bmiHeader);header.bfSize=header.bfOffBits+(DWORD)(width*height*4);
     HANDLE file=CreateFileW(path,GENERIC_WRITE,0,NULL,CREATE_ALWAYS,0,NULL);assert(file!=INVALID_HANDLE_VALUE);DWORD written;
     assert(WriteFile(file,&header,sizeof(header),&written,NULL));assert(WriteFile(file,&info.bmiHeader,sizeof(info.bmiHeader),&written,NULL));assert(WriteFile(file,bits,(DWORD)(width*height*4),&written,NULL));CloseHandle(file);
@@ -187,10 +200,42 @@ int wmain(int argc,wchar_t **argv) {
         MONITORINFO monitor={0};monitor.cbSize=sizeof(monitor);assert(GetMonitorInfoW(MonitorFromWindow(window,MONITOR_DEFAULTTONEAREST),&monitor));GetWindowRect(window,&after);
         assert(after.left>=monitor.rcWork.left&&after.top>=monitor.rcWork.top&&after.right<=monitor.rcWork.right&&after.bottom<=monitor.rcWork.bottom);
         assert(after.right-after.left<=px(1100)&&after.bottom-after.top<=px(760));
+        assert(IsWindow(system_dashboard)&&(GetWindowLongPtrW(system_dashboard,GWL_STYLE)&WS_TABSTOP));
+        task_manager_execute=dashboard_fake_execute;dashboard_dispatch_count=0;
+        SendMessageW(system_dashboard,BM_CLICK,0,0);assert(dashboard_dispatch_count==1);
+        assert(SendMessageW(system_dashboard,WM_GETDLGCODE,VK_RETURN,0)&DLGC_WANTALLKEYS);
+        SendMessageW(system_dashboard,WM_KEYDOWN,VK_RETURN,0);assert(dashboard_dispatch_count==2);
+        SetFocus(system_dashboard);SendMessageW(system_dashboard,WM_KEYDOWN,VK_SPACE,0);SendMessageW(system_dashboard,WM_KEYUP,VK_SPACE,0);assert(dashboard_dispatch_count==3);
+        dashboard_dispatch_result=SE_ERR_FNF;assert(!open_task_manager()&&dashboard_dispatch_count==4);
+        dashboard_dispatch_result=42;task_manager_execute=ShellExecuteW;
+        wchar_t metric_name[224];system_cpu=-1;memory_load=-1;update_dashboard_description();
+        GetWindowTextW(system_dashboard,metric_name,224);assert(wcsstr(metric_name,L"暂无数据"));
+        system_cpu=0;memory_load=100;update_dashboard_description();
+        GetWindowTextW(system_dashboard,metric_name,224);assert(wcsstr(metric_name,L"0%")&&wcsstr(metric_name,L"100%"));
+        nova_english=TRUE;update_dashboard_description();GetWindowTextW(system_dashboard,metric_name,224);assert(wcsstr(metric_name,L"Task Manager"));
+        nova_english=FALSE;stats_baseline=FALSE;sample_stats();assert(system_cpu==-1);
+        system_cpu=29;memory_load=79;update_dashboard_description();
+        RECT gauge_rect,spaces_rect;GetWindowRect(system_dashboard,&gauge_rect);GetWindowRect(space_list,&spaces_rect);
+        assert(spaces_rect.bottom<gauge_rect.top&&gauge_rect.bottom<=after.bottom);
+        SendMessageW(window,WM_TIMER,STATS_TIMER,0);assert(GetUpdateRect(system_dashboard,NULL,FALSE));
+        system_cpu=29;memory_load=79;update_dashboard_description();
+        RedrawWindow(system_dashboard,NULL,NULL,RDW_INVALIDATE|RDW_UPDATENOW);
+        DWORD before_gdi=GetGuiResources(GetCurrentProcess(),GR_GDIOBJECTS);
+        for(int draw=0;draw<100;draw++)RedrawWindow(system_dashboard,NULL,NULL,RDW_INVALIDATE|RDW_UPDATENOW);
+        assert(GetGuiResources(GetCurrentProcess(),GR_GDIOBJECTS)<=before_gdi+1);
+        if(GetEnvironmentVariableW(L"NOVA_TEST_CAPTURE",NULL,0))capture_batch(system_dashboard,L"build\\dashboard-expanded.bmp");
+        SetWindowPos(window,NULL,0,0,px(780),px(600),SWP_NOMOVE|SWP_NOZORDER|SWP_NOACTIVATE);
+        GetWindowRect(space_list,&spaces_rect);GetWindowRect(system_dashboard,&gauge_rect);
+        assert(spaces_rect.bottom<gauge_rect.top&&spaces_rect.bottom-spaces_rect.top>=px(44));
+        SetWindowPos(window,NULL,0,0,after.right-after.left,after.bottom-after.top,SWP_NOMOVE|SWP_NOZORDER|SWP_NOACTIVATE);
+        puts("PASS vertical dashboard mouse/Enter/Space dispatch, trusted target, failure path, localized accessible values, minimum geometry, partial redraw and GDI lifetime");
         RECT expanded_apps,collapsed_apps;GetWindowRect(app_list,&expanded_apps);
         if(GetEnvironmentVariableW(L"NOVA_TEST_CAPTURE",NULL,0))capture_batch(window,L"build\\sidebar-expanded.bmp");
         SendMessageW(window,WM_COMMAND,ID_SIDEBAR,0);GetWindowRect(app_list,&collapsed_apps);
         if(GetEnvironmentVariableW(L"NOVA_TEST_CAPTURE",NULL,0))capture_batch(window,L"build\\sidebar-collapsed.bmp");
+        GetWindowRect(system_dashboard,&gauge_rect);GetWindowRect(space_list,&spaces_rect);
+        assert(IsWindowVisible(system_dashboard)&&spaces_rect.bottom<gauge_rect.top&&gauge_rect.right-gauge_rect.left==px(48));
+        if(GetEnvironmentVariableW(L"NOVA_TEST_CAPTURE",NULL,0))capture_batch(system_dashboard,L"build\\dashboard-collapsed.bmp");
         wchar_t sidebar_name[80];GetWindowTextW(sidebar_button,sidebar_name,80);
         assert(sidebar_collapsed&&collapsed_apps.left<expanded_apps.left&&wcsstr(sidebar_name,L"展开"));
         SendMessageW(window,WM_COMMAND,ID_SIDEBAR,0);assert(!sidebar_collapsed&&store_int(L"app",L"Nova",L"SidebarCollapsed",1)==0);

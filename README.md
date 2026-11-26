@@ -193,6 +193,12 @@ atomic publication and rollback. See [configuration format](config/README.md).
 - Use the chevron beside the NOVA wordmark, or press `Ctrl+B`, to collapse or
   expand the workspace sidebar. The compact rail keeps workspace switching
   available, and the chosen state is restored on the next launch.
+- The bottom of the sidebar shows CPU and memory gauges in one vertical column.
+  Chip and RAM icons replace visible labels; percentages remain readable. Click
+  anywhere on the card, or focus it with Tab and press Enter/Space, to open
+  Windows Task Manager. Hover for localized metric names. The compact rail keeps
+  both gauges; unavailable samples display an em dash. Updates use the existing
+  three-second visible-window sampling, without continuous animation.
 - Press `Ctrl+K` to search the active workspace. Clear the search before
   reordering items. In an unfiltered workspace, drag an icon onto another icon
   to reorder it, or onto another normal workspace to move it. Dragging starts

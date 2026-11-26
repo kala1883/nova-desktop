@@ -11,6 +11,7 @@
 #include <dwmapi.h>
 #include <stdio.h>
 #include <wchar.h>
+#include <math.h>
 #include "core/workspace.h"
 #include "core/launch_queue.h"
 #include "platform/shell_icons.h"
@@ -54,6 +55,7 @@
 #define ID_BATCH_TASKS 125
 #define ID_SIDEBAR 126
 #define ID_SYNC_MANAGER 127
+#define ID_SYSTEM_DASHBOARD 128
 #define STATS_TIMER 1
 #define START_PIN_TIMER 2
 #define START_DESKTOP_TIMER 4
@@ -63,11 +65,11 @@ static Workspace spaces[MAX_WORKSPACES];
 static int space_count=4, active_space, dpi=96;
 static HWND main_window, space_list, app_list, search_edit, name_edit;
 static HWND add_button, folder_button, launch_button, pin_button, desktop_button, settings_button, new_button, sidebar_button, tooltip, hover_button;
-static HWND minimize_button, maximize_button, close_button;
+static HWND minimize_button, maximize_button, close_button, system_dashboard;
 static HWND files_view;
 static BOOL files_page;
 static BOOL storage_failed;
-static HFONT body_font, small_font, title_font, brand_font;
+static HFONT body_font, small_font, title_font, brand_font, metric_font;
 static HBRUSH background, panel_brush;
 static HIMAGELIST images;
 static NOTIFYICONDATAW tray;
@@ -82,7 +84,10 @@ static LONG_PTR floating_style, floating_exstyle;
 static wchar_t config_path[MAX_PATH], notice[256]=L"拖入应用、快捷方式或文件夹，添加到当前工作区。";
 static wchar_t configuration_directory[MAX_PATH];
 static ULONGLONG prev_idle, prev_kernel, prev_user;
-static int system_cpu, memory_load;
+static int system_cpu=-1, memory_load=-1;
+static BOOL stats_baseline;
+static wchar_t dashboard_description[224];
+static HINSTANCE (WINAPI *task_manager_execute)(HWND,LPCWSTR,LPCWSTR,LPCWSTR,LPCWSTR,INT)=ShellExecuteW;
 static const COLORREF BG=RGB(14,19,29), PANEL=RGB(22,29,42), TEXT=RGB(236,241,249), MUTED=RGB(167,181,202);
 
 static int px(int x) { return MulDiv(x,dpi,96); }
@@ -98,6 +103,7 @@ static void launch_workspace(void);
 static void error_message(const wchar_t *message);
 static void end_name_edit(BOOL commit);
 static void apply_language(BOOL english);
+static void update_dashboard_description(void);
 static void show_workspace_page(void){
     if(active_space==0){if(IsWindow(files_view))SetFocus(files_view);return;}
     files_page=FALSE;file_manager_hide();
@@ -351,14 +357,14 @@ static void paint(HDC dc,RECT client) {
     text(dc,nova_text(L"启动项",L"LAUNCH ITEMS"),box(left,px(157),width,px(25)),body_font,TEXT,DT_LEFT);
     RECT status=box(left,client.bottom-px(56),width,px(50));FillRect(dc,&status,background);
     text(dc,notice,box(left,client.bottom-px(49),width,px(23)),small_font,MUTED,DT_LEFT|DT_SINGLELINE|DT_END_ELLIPSIS);
-    wchar_t metrics[80];swprintf(metrics,80,nova_text(L"系统 CPU %d%%    内存 %d%%",L"System CPU %d%%    Memory %d%%"),system_cpu,memory_load);
-    if(!sidebar_collapsed)text(dc,metrics,box(px(20),client.bottom-px(38),px(188),px(25)),small_font,MUTED,DT_LEFT);
+
     RestoreDC(dc,saved);
 }
 static void create_fonts(void) {
     body_font=CreateFontW(-px(15),0,0,0,FW_NORMAL,0,0,0,DEFAULT_CHARSET,0,0,CLEARTYPE_QUALITY,0,L"Microsoft YaHei UI");
     small_font=CreateFontW(-px(12),0,0,0,FW_NORMAL,0,0,0,DEFAULT_CHARSET,0,0,CLEARTYPE_QUALITY,0,L"Microsoft YaHei UI");
     title_font=CreateFontW(-px(32),0,0,0,FW_SEMIBOLD,0,0,0,DEFAULT_CHARSET,0,0,CLEARTYPE_QUALITY,0,L"Microsoft YaHei UI");
+    metric_font=CreateFontW(-px(23),0,0,0,FW_SEMIBOLD,0,0,0,DEFAULT_CHARSET,0,0,ANTIALIASED_QUALITY,0,L"Segoe UI");
     brand_font=CreateFontW(-px(29),0,0,0,FW_BOLD,0,0,0,DEFAULT_CHARSET,0,0,CLEARTYPE_QUALITY,0,L"Segoe UI");
 }
 static HWND control(const wchar_t *cls,const wchar_t *caption,DWORD style,int id) {
@@ -396,6 +402,7 @@ static void apply_language(BOOL english){
     update_tooltip(sidebar_button,sidebar_collapsed?nova_text(L"展开侧边栏 (Ctrl+B)",L"Expand sidebar (Ctrl+B)"):nova_text(L"折叠侧边栏 (Ctrl+B)",L"Collapse sidebar (Ctrl+B)"));
     update_tooltip(launch_button,nova_text(L"将当前工作区的每个项目各打开一次",L"Open every item in this workspace once"));
     update_tooltip(minimize_button,nova_text(L"最小化",L"Minimize"));update_tooltip(maximize_button,nova_text(L"最大化 / 还原",L"Maximize / restore"));update_tooltip(close_button,nova_text(L"关闭",L"Close"));
+    update_dashboard_description();
     refresh_spaces();
     batch_tasks_language_changed();
     sync_manager_language_changed();
@@ -404,6 +411,90 @@ static void apply_language(BOOL english){
     set_notice(nova_text(L"界面语言已切换为简体中文。",L"Interface language changed to English."));
     save_config();layout_controls();InvalidateRect(main_window,NULL,TRUE);
 }
+/* Only the small dashboard is supersampled; no animation timer or full-window buffer. */
+static POINT gauge_point(int x,int y,int radius,double fraction){
+    double angle=(135.0+270.0*fraction)*3.14159265358979323846/180.0;
+    POINT p={x+(LONG)lround(radius*cos(angle)),y+(LONG)lround(radius*sin(angle))};return p;
+}
+static void gauge_arc(HDC dc,int x,int y,int radius,int width,COLORREF color,double fraction){
+    if(fraction<=0.0)return;
+    if(fraction>1.0)fraction=1.0;
+    POINT points[73];int count=(int)ceil(72*fraction);if(count<1)count=1;
+    for(int i=0;i<=count;i++)points[i]=gauge_point(x,y,radius,fraction*i/count);
+    LOGBRUSH brush={BS_SOLID,color,0};HPEN pen=ExtCreatePen(PS_GEOMETRIC|PS_SOLID|PS_ENDCAP_ROUND|PS_JOIN_ROUND,width,&brush,0,NULL);
+    if(!pen)return;
+    HGDIOBJ old=SelectObject(dc,pen);Polyline(dc,points,count+1);SelectObject(dc,old);DeleteObject(pen);
+}
+static void gauge_symbol(HDC dc,int x,int y,BOOL memory,BOOL compact,COLORREF color){
+    int unit=px(compact?1:2);if(unit<1)unit=1;
+    HPEN pen=CreatePen(PS_SOLID,px(1),color);if(!pen)return;
+    HGDIOBJ old=SelectObject(dc,pen),brush=SelectObject(dc,GetStockObject(NULL_BRUSH));
+    if(memory){
+        Rectangle(dc,x-6*unit,y-3*unit,x+6*unit,y+3*unit);
+        for(int i=-3;i<=3;i+=3)Rectangle(dc,x+(i-1)*unit,y-unit,x+(i+1)*unit,y+unit);
+        for(int i=-4;i<=4;i+=2){MoveToEx(dc,x+i*unit,y+3*unit,NULL);LineTo(dc,x+i*unit,y+5*unit);}
+    }else{
+        Rectangle(dc,x-3*unit,y-3*unit,x+3*unit,y+3*unit);
+        Rectangle(dc,x-unit,y-unit,x+unit,y+unit);
+        for(int i=-2;i<=2;i+=2){
+            MoveToEx(dc,x+i*unit,y-5*unit,NULL);LineTo(dc,x+i*unit,y-3*unit);
+            MoveToEx(dc,x+i*unit,y+3*unit,NULL);LineTo(dc,x+i*unit,y+5*unit);
+            MoveToEx(dc,x-5*unit,y+i*unit,NULL);LineTo(dc,x-3*unit,y+i*unit);
+            MoveToEx(dc,x+3*unit,y+i*unit,NULL);LineTo(dc,x+5*unit,y+i*unit);
+        }
+    }
+    SelectObject(dc,brush);SelectObject(dc,old);DeleteObject(pen);
+}
+static void draw_gauge(HDC dc,int x,int y,int radius,int value,BOOL memory,BOOL compact){
+    COLORREF accent=memory?RGB(175,137,255):RGB(63,209,242);
+    int stroke=px(compact?3:5);
+    if(!compact){
+        HPEN pen=CreatePen(PS_SOLID,px(1),RGB(71,87,111));
+        if(pen){HGDIOBJ old=SelectObject(dc,pen);
+            for(int i=0;i<=20;i++){POINT a=gauge_point(x,y,radius+px(6),i/20.0),b=gauge_point(x,y,radius+px(i%5?8:10),i/20.0);MoveToEx(dc,a.x,a.y,NULL);LineTo(dc,b.x,b.y);}
+            SelectObject(dc,old);DeleteObject(pen);
+        }
+    }
+    gauge_arc(dc,x,y,radius,stroke,RGB(39,52,73),1.0);
+    if(value>=0){
+        if(value>100)value=100;
+        if(!compact)gauge_arc(dc,x,y,radius,stroke+px(4),memory?RGB(47,38,70):RGB(24,55,68),value/100.0);
+        gauge_arc(dc,x,y,radius,stroke,accent,value/100.0);
+    }
+    gauge_symbol(dc,x,y-px(compact?7:13),memory,compact,accent);
+    wchar_t number[12];if(value<0)lstrcpyW(number,L"\x2014");else swprintf(number,12,L"%d%%",value);
+    text(dc,number,box(x-radius,y-px(compact?2:1),radius*2,px(compact?16:30)),compact?small_font:metric_font,TEXT,DT_CENTER|DT_SINGLELINE|DT_VCENTER);
+}
+static void dashboard_surface(HDC dc,int width,int height,BOOL highlighted,BOOL pressed){
+    RECT bounds=box(0,0,width,height);FillRect(dc,&bounds,panel_brush);
+    HPEN edge=CreatePen(PS_SOLID,px(1),highlighted?RGB(83,139,186):RGB(47,64,88));
+    HBRUSH fill=CreateSolidBrush(pressed?RGB(25,39,59):RGB(17,25,39));
+    if(edge&&fill){HGDIOBJ oldpen=SelectObject(dc,edge),oldbrush=SelectObject(dc,fill);
+        RoundRect(dc,px(1),px(1),width-px(1),height-px(1),px(12),px(12));
+        SelectObject(dc,oldbrush);SelectObject(dc,oldpen);
+    }
+    if(fill)DeleteObject(fill);
+    if(edge)DeleteObject(edge);
+    BOOL compact=width<px(90);int radius=px(compact?18:42),x=width/2;
+    draw_gauge(dc,x,height/4,radius,system_cpu,FALSE,compact);
+    draw_gauge(dc,x,height*3/4,radius,memory_load,TRUE,compact);
+}
+static void draw_dashboard(DRAWITEMSTRUCT *d){
+    int width=d->rcItem.right-d->rcItem.left,height=d->rcItem.bottom-d->rcItem.top;if(width<=0||height<=0)return;
+    BOOL highlighted=hover_button==d->hwndItem||(d->itemState&ODS_FOCUS),pressed=(d->itemState&ODS_SELECTED)!=0;
+    HDC buffer=CreateCompatibleDC(d->hDC);HBITMAP bitmap=buffer?CreateCompatibleBitmap(d->hDC,width*2,height*2):NULL;
+    if(buffer&&bitmap){
+        HGDIOBJ old=SelectObject(buffer,bitmap);SetMapMode(buffer,MM_ANISOTROPIC);SetWindowExtEx(buffer,width,height,NULL);SetViewportExtEx(buffer,width*2,height*2,NULL);
+        dashboard_surface(buffer,width,height,highlighted,pressed);
+        SetMapMode(buffer,MM_TEXT);int saved=SaveDC(d->hDC);SetStretchBltMode(d->hDC,HALFTONE);SetBrushOrgEx(d->hDC,0,0,NULL);
+        StretchBlt(d->hDC,d->rcItem.left,d->rcItem.top,width,height,buffer,0,0,width*2,height*2,SRCCOPY);RestoreDC(d->hDC,saved);
+        SelectObject(buffer,old);
+    }else dashboard_surface(d->hDC,width,height,highlighted,pressed);
+    if(bitmap)DeleteObject(bitmap);
+    if(buffer)DeleteDC(buffer);
+    if(d->itemState&ODS_FOCUS){RECT focus=d->rcItem;InflateRect(&focus,-px(4),-px(4));DrawFocusRect(d->hDC,&focus);}
+}
+
 static void draw_icon(DRAWITEMSTRUCT *d){
     BOOL active=(d->CtlID==ID_PIN&&pinned)||(d->CtlID==ID_DESKTOP&&desktop_mode);
     BOOL panel_icon=d->CtlID==ID_NEW||d->CtlID==ID_SIDEBAR;
@@ -448,7 +539,10 @@ static void layout_controls(void) {
     if(!app_list)return;
     RECT r;GetClientRect(main_window,&r);r.bottom-=caption_height();int left=content_left(),width=r.right-left-px(32);
     int list_x=px(sidebar_collapsed?8:16),list_width=sidebar_width()-list_x-px(sidebar_collapsed?8:16);
-    move(space_list,list_x,px(112),list_width,r.bottom-px(sidebar_collapsed?128:170));
+    int dashboard_height=px(sidebar_collapsed?112:232),dashboard_top=r.bottom-px(16)-dashboard_height;
+    int list_height=dashboard_top-px(124);if(list_height<px(44))list_height=px(44);
+    move(space_list,list_x,px(112),list_width,list_height);
+    move(system_dashboard,list_x,dashboard_top,list_width,dashboard_height);
     move(sidebar_button,px(sidebar_collapsed?12:174),px(sidebar_collapsed?20:27),px(36),px(36));
     move(new_button,px(sidebar_collapsed?12:162),px(68),px(40),px(36));
     HWND caption_buttons[]={settings_button,desktop_button,pin_button,minimize_button,maximize_button,close_button};
@@ -631,9 +725,14 @@ static void delete_space(void){
 static LRESULT CALLBACK child_proc(HWND hwnd,UINT msg,WPARAM wp,LPARAM lp,UINT_PTR id,DWORD_PTR data){
     (void)id;(void)data;
     if(hwnd==app_list&&hold_drag_message(&hold_drag,msg,wp,lp))return 0;
-    if(hwnd==pin_button||hwnd==desktop_button||hwnd==settings_button||hwnd==new_button||hwnd==sidebar_button||hwnd==minimize_button||hwnd==maximize_button||hwnd==close_button){
+    if(hwnd==pin_button||hwnd==desktop_button||hwnd==settings_button||hwnd==new_button||hwnd==sidebar_button||hwnd==minimize_button||hwnd==maximize_button||hwnd==close_button||hwnd==system_dashboard){
         if(msg==WM_MOUSEMOVE&&hover_button!=hwnd){hover_button=hwnd;TRACKMOUSEEVENT t={sizeof(t),TME_LEAVE,hwnd,0};TrackMouseEvent(&t);InvalidateRect(hwnd,NULL,TRUE);}
         if(msg==WM_MOUSELEAVE){if(hover_button==hwnd)hover_button=NULL;InvalidateRect(hwnd,NULL,TRUE);}
+    }
+    if(hwnd==system_dashboard){
+        if(msg==WM_SETCURSOR){SetCursor(LoadCursorW(NULL,IDC_HAND));return TRUE;}
+        if(msg==WM_GETDLGCODE&&wp==VK_RETURN)return DLGC_WANTALLKEYS;
+        if(msg==WM_KEYDOWN&&wp==VK_RETURN){SendMessageW(main_window,WM_COMMAND,MAKEWPARAM(ID_SYSTEM_DASHBOARD,BN_CLICKED),(LPARAM)hwnd);return 0;}
     }
     if(msg==WM_DROPFILES){handle_drop((HDROP)wp);return 0;}
     if(msg==WM_KEYDOWN){
@@ -720,11 +819,45 @@ static void tray_menu(void){
     SetForegroundWindow(main_window);UINT id=TrackPopupMenu(m,TPM_RETURNCMD|TPM_RIGHTBUTTON,p.x,p.y,0,main_window,NULL);DestroyMenu(m);if(id)SendMessageW(main_window,WM_COMMAND,id,0);PostMessageW(main_window,WM_NULL,0,0);
 }
 static ULONGLONG ft(FILETIME v){ULARGE_INTEGER n;n.LowPart=v.dwLowDateTime;n.HighPart=v.dwHighDateTime;return n.QuadPart;}
+static void update_dashboard_description(void){
+    if(!IsWindow(system_dashboard))return;
+    wchar_t cpu[32],memory[32],next[224];
+    if(system_cpu<0)lstrcpyW(cpu,nova_text(L"暂无数据",L"unavailable"));else swprintf(cpu,32,L"%d%%",system_cpu);
+    if(memory_load<0)lstrcpyW(memory,nova_text(L"暂无数据",L"unavailable"));else swprintf(memory,32,L"%d%%",memory_load);
+    swprintf(next,224,nova_text(L"CPU 使用率 %ls；内存使用率 %ls。打开 Windows 任务管理器。",L"CPU usage %ls; memory usage %ls. Open Windows Task Manager."),cpu,memory);
+    if(lstrcmpW(dashboard_description,next)){
+        lstrcpyW(dashboard_description,next);SetWindowTextW(system_dashboard,dashboard_description);
+        update_tooltip(system_dashboard,dashboard_description);
+    }
+}
 static void sample_stats(void){
-    FILETIME a,b,c;if(GetSystemTimes(&a,&b,&c)){ULONGLONG idle=ft(a),kernel=ft(b),user=ft(c),total=kernel-prev_kernel+user-prev_user,rest=idle-prev_idle;
-        if(prev_kernel&&total&&rest<=total)system_cpu=(int)(100*(total-rest)/total);
-        prev_idle=idle;prev_kernel=kernel;prev_user=user;}
-    MEMORYSTATUSEX ms={0};ms.dwLength=sizeof(ms);if(GlobalMemoryStatusEx(&ms))memory_load=(int)ms.dwMemoryLoad;
+    system_cpu=-1;memory_load=-1;
+    FILETIME a,b,c;
+    if(GetSystemTimes(&a,&b,&c)){
+        ULONGLONG idle=ft(a),kernel=ft(b),user=ft(c);
+        if(stats_baseline&&idle>=prev_idle&&kernel>=prev_kernel&&user>=prev_user){
+            ULONGLONG total=kernel-prev_kernel+user-prev_user,rest=idle-prev_idle;
+            if(total&&rest<=total)system_cpu=(int)(100*(total-rest)/total);
+        }
+        prev_idle=idle;prev_kernel=kernel;prev_user=user;stats_baseline=TRUE;
+    }else stats_baseline=FALSE;
+    MEMORYSTATUSEX ms={0};ms.dwLength=sizeof(ms);if(GlobalMemoryStatusEx(&ms)&&ms.dwMemoryLoad<=100)memory_load=(int)ms.dwMemoryLoad;
+    update_dashboard_description();
+}
+static BOOL open_task_manager(void){
+    NovaLogSpan span=nova_log_begin("app","task_manager",0);
+    wchar_t path[MAX_PATH];UINT length=GetSystemDirectoryW(path,MAX_PATH);DWORD error=0;BOOL accepted=FALSE;
+    if(!length)error=GetLastError();
+    else if(length>=MAX_PATH-13)error=ERROR_INSUFFICIENT_BUFFER;
+    else{
+        lstrcatW(path,L"\\taskmgr.exe");
+        INT_PTR result=(INT_PTR)task_manager_execute(main_window,L"open",path,NULL,NULL,SW_SHOWNORMAL);
+        accepted=result>32;if(!accepted)error=(DWORD)result;
+    }
+    nova_log_write(accepted?NOVA_LOG_INFO:NOVA_LOG_WARN,"app","task_manager_dispatch",L"op=%ld accepted=%d code=%lu",span.id,accepted,error);
+    nova_log_end(span,accepted,error);
+    if(!accepted)error_message(nova_text(L"无法打开 Windows 任务管理器。请按 Ctrl+Shift+Esc 重试。",L"Unable to open Windows Task Manager. Try Ctrl+Shift+Esc."));
+    return accepted;
 }
 static LRESULT CALLBACK window_proc(HWND hwnd,UINT msg,WPARAM wp,LPARAM lp){
     if(taskbar_message&&msg==taskbar_message){add_tray();return 0;}
@@ -732,6 +865,8 @@ static LRESULT CALLBACK window_proc(HWND hwnd,UINT msg,WPARAM wp,LPARAM lp){
     case WM_CREATE:{
         main_window=hwnd;HDC dc=GetDC(hwnd);dpi=GetDeviceCaps(dc,LOGPIXELSX);ReleaseDC(hwnd,dc);create_fonts();
         space_list=control(L"LISTBOX",nova_text(L"工作区",L"Workspaces"),LBS_NOTIFY|LBS_OWNERDRAWFIXED|LBS_HASSTRINGS|WS_VSCROLL,ID_SPACES);SendMessageW(space_list,LB_SETITEMHEIGHT,0,px(44));
+        system_dashboard=button(nova_text(L"打开 Windows 任务管理器",L"Open Windows Task Manager"),ID_SYSTEM_DASHBOARD);
+        dashboard_description[0]=0;stats_baseline=FALSE;
         new_button=button(nova_text(L"新建工作区",L"New workspace"),ID_NEW);
         sidebar_button=button(sidebar_collapsed?nova_text(L"展开侧边栏 (Ctrl+B)",L"Expand sidebar (Ctrl+B)"):nova_text(L"折叠侧边栏 (Ctrl+B)",L"Collapse sidebar (Ctrl+B)"),ID_SIDEBAR);
         startup_enabled=read_startup();settings_button=button(nova_text(L"设置",L"Settings"),ID_SETTINGS);pin_button=button(nova_text(L"窗口置顶 (F11)",L"Always on top (F11)"),ID_PIN);desktop_button=button(nova_text(L"放到桌面",L"Place on desktop"),ID_DESKTOP);
@@ -742,11 +877,12 @@ static LRESULT CALLBACK window_proc(HWND hwnd,UINT msg,WPARAM wp,LPARAM lp){
         hold_drag_init(&hold_drag,app_list,space_list,moved_item,NULL);
         ListView_SetBkColor(app_list,BG);ListView_SetTextBkColor(app_list,BG);ListView_SetTextColor(app_list,TEXT);ListView_SetExtendedListViewStyle(app_list,LVS_EX_DOUBLEBUFFER|LVS_EX_INFOTIP);ListView_SetIconSpacing(app_list,px(136),px(112));SetWindowTheme(app_list,L"DarkMode_Explorer",NULL);
         name_edit=control(L"EDIT",L"",ES_AUTOHSCROLL,ID_NAME);SendMessageW(name_edit,EM_SETLIMITTEXT,39,0);ShowWindow(name_edit,SW_HIDE);
-        HWND children[]={space_list,new_button,sidebar_button,settings_button,pin_button,desktop_button,minimize_button,maximize_button,close_button,search_edit,add_button,folder_button,launch_button,app_list,name_edit};
+        HWND children[]={space_list,system_dashboard,new_button,sidebar_button,settings_button,pin_button,desktop_button,minimize_button,maximize_button,close_button,search_edit,add_button,folder_button,launch_button,app_list,name_edit};
         for(unsigned i=0;i<sizeof(children)/sizeof(children[0]);i++){SetWindowSubclass(children[i],child_proc,1,0);DragAcceptFiles(children[i],TRUE);}DragAcceptFiles(hwnd,TRUE);
         tooltip=CreateWindowExW(WS_EX_TOPMOST,TOOLTIPS_CLASSW,NULL,WS_POPUP|TTS_ALWAYSTIP|TTS_NOPREFIX,CW_USEDEFAULT,CW_USEDEFAULT,CW_USEDEFAULT,CW_USEDEFAULT,hwnd,NULL,GetModuleHandleW(NULL),NULL);
         add_tooltip(desktop_button,nova_text(L"桌面围栏 / 恢复普通窗口",L"Desktop fence / restore normal window"));add_tooltip(pin_button,nova_text(L"置顶 / 取消置顶 (F11)",L"Always on top / unpin (F11)"));add_tooltip(settings_button,nova_text(L"设置：设备同步、批量任务、语言、开机启动、工作区管理",L"Settings: device sync, batch tasks, language, startup, and workspace management"));add_tooltip(new_button,nova_text(L"新建工作区（最多 8 个）",L"New workspace (up to 8)"));
         add_tooltip(sidebar_button,sidebar_collapsed?nova_text(L"展开侧边栏 (Ctrl+B)",L"Expand sidebar (Ctrl+B)"):nova_text(L"折叠侧边栏 (Ctrl+B)",L"Collapse sidebar (Ctrl+B)"));
+        add_tooltip(system_dashboard,nova_text(L"打开 Windows 任务管理器",L"Open Windows Task Manager"));
         add_tooltip(launch_button,nova_text(L"将当前工作区的每个项目各打开一次",L"Open every item in this workspace once"));
         add_tooltip(minimize_button,nova_text(L"最小化",L"Minimize"));add_tooltip(maximize_button,nova_text(L"最大化 / 还原",L"Maximize / restore"));add_tooltip(close_button,nova_text(L"关闭",L"Close"));
         refresh_spaces();refresh_apps();layout_controls();sample_stats();SetTimer(hwnd,STATS_TIMER,3000,NULL);if(prefer_desktop)SetTimer(hwnd,START_DESKTOP_TIMER,800,NULL);else if(prefer_pin)SetTimer(hwnd,START_PIN_TIMER,800,NULL);
@@ -764,6 +900,7 @@ static LRESULT CALLBACK window_proc(HWND hwnd,UINT msg,WPARAM wp,LPARAM lp){
     case WM_DRAWITEM:{
         DRAWITEMSTRUCT *d=(DRAWITEMSTRUCT*)lp;wchar_t caption[80];BOOL selected=(d->itemState&ODS_SELECTED)!=0;
         if(d->CtlID==ID_PIN||d->CtlID==ID_DESKTOP||d->CtlID==ID_SETTINGS||d->CtlID==ID_NEW||d->CtlID==ID_SIDEBAR||d->CtlID==ID_MINIMIZE||d->CtlID==ID_MAXIMIZE||d->CtlID==ID_CLOSE){draw_icon(d);return TRUE;}
+        if(d->CtlID==ID_SYSTEM_DASHBOARD){draw_dashboard(d);return TRUE;}
         COLORREF fill=selected?RGB(48,65,95):PANEL;
         if(d->CtlID==ID_ADD||d->CtlID==ID_LAUNCH_ALL)fill=selected?RGB(76,103,159):RGB(53,77,122);
         BOOL drop_hover=d->CtlID==ID_SPACES&&hold_drag.dragging&&hold_drag.hover_workspace==(int)d->itemID;
@@ -782,6 +919,7 @@ static LRESULT CALLBACK window_proc(HWND hwnd,UINT msg,WPARAM wp,LPARAM lp){
         if(id==ID_MINIMIZE){ShowWindow(hwnd,SW_MINIMIZE);return 0;}
         if(id==ID_MAXIMIZE){toggle_maximize();return 0;}
         if(id==ID_CLOSE){PostMessageW(hwnd,WM_CLOSE,0,0);return 0;}
+        if(id==ID_SYSTEM_DASHBOARD){open_task_manager();return 0;}
         if(id==ID_SETTINGS){settings_menu();return 0;}
         if(id==ID_BATCH_TASKS){batch_tasks_open(main_window);return 0;}
         if(id==ID_SYNC_MANAGER){if(!sync_manager_open(main_window))error_message(nova_text(L"无法打开同步管理；本机配置可能损坏或来自更新版本，原文件保留。",L"Unable to open synchronization; local configuration may be damaged or newer. Original data preserved."));return 0;}
@@ -817,7 +955,7 @@ static LRESULT CALLBACK window_proc(HWND hwnd,UINT msg,WPARAM wp,LPARAM lp){
     case WM_KEYDOWN:if(wp==VK_F11)set_pinned(!pinned);if(wp=='B'&&(GetKeyState(VK_CONTROL)&0x8000))set_sidebar_collapsed(!sidebar_collapsed);if(wp==VK_ESCAPE&&pinned)set_pinned(FALSE);return 0;
     case WM_TIMER:
         if(wp==START_DESKTOP_TIMER){KillTimer(hwnd,START_DESKTOP_TIMER);set_desktop_mode(TRUE);return 0;}
-        if(wp==START_PIN_TIMER){KillTimer(hwnd,START_PIN_TIMER);set_pinned(TRUE);return 0;}if(IsWindowVisible(hwnd)&&!IsIconic(hwnd)){sample_stats();RECT r;GetClientRect(hwnd,&r);r.top=r.bottom-px(60);InvalidateRect(hwnd,&r,FALSE);}return 0;
+        if(wp==START_PIN_TIMER){KillTimer(hwnd,START_PIN_TIMER);set_pinned(TRUE);return 0;}if(wp==STATS_TIMER&&IsWindowVisible(hwnd)&&!IsIconic(hwnd)){sample_stats();InvalidateRect(system_dashboard,NULL,FALSE);}return 0;
     case WM_RESTORE_NOVA:case WM_HOTKEY:restore_window();return 0;
     case WM_NOVA_BATCH_EVENT:batch_tasks_handle_event(lp);return 0;
     case WM_NOVA_BATCH_SHORTCUT:choose_batch_workspace((const BatchTask*)lp);return 0;
@@ -906,5 +1044,5 @@ int WINAPI wWinMain(HINSTANCE instance,HINSTANCE previous,PWSTR command,int show
         if(!IsDialogMessageW(hwnd,&msg)){TranslateMessage(&msg);DispatchMessageW(&msg);}
     }
     if(images)ImageList_Destroy(images);
-    DeleteObject(body_font);DeleteObject(small_font);DeleteObject(title_font);DeleteObject(brand_font);DeleteObject(background);DeleteObject(panel_brush);store_close();nova_log_write(NOVA_LOG_INFO,"app","stop",L"exit=%llu",(unsigned long long)msg.wParam);nova_log_close();CloseHandle(mutex);OleUninitialize();return (int)msg.wParam;
+    DeleteObject(body_font);DeleteObject(small_font);DeleteObject(title_font);DeleteObject(brand_font);DeleteObject(metric_font);DeleteObject(background);DeleteObject(panel_brush);store_close();nova_log_write(NOVA_LOG_INFO,"app","stop",L"exit=%llu",(unsigned long long)msg.wParam);nova_log_close();CloseHandle(mutex);OleUninitialize();return (int)msg.wParam;
 }
