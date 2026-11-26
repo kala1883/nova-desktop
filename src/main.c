@@ -452,7 +452,15 @@ static void gauge_symbol(HDC dc,int x,int y,int kind,BOOL compact,COLORREF color
     HGDIOBJ old=SelectObject(dc,pen),brush=SelectObject(dc,GetStockObject(NULL_BRUSH));
     if(kind==MON_DISK){Rectangle(dc,x-5*unit,y-4*unit,x+5*unit,y+4*unit);Ellipse(dc,x-3*unit,y-3*unit,x+3*unit,y+3*unit);Ellipse(dc,x-unit,y-unit,x+unit,y+unit);}
     else if(kind==MON_GPU){Rectangle(dc,x-6*unit,y-4*unit,x+6*unit,y+4*unit);Ellipse(dc,x-3*unit,y-3*unit,x+3*unit,y+3*unit);}
-    else if(kind==MON_NET){Rectangle(dc,x-2*unit,y-5*unit,x+2*unit,y-unit);Rectangle(dc,x-6*unit,y+unit,x-2*unit,y+5*unit);Rectangle(dc,x+2*unit,y+unit,x+6*unit,y+5*unit);MoveToEx(dc,x,y-unit,NULL);LineTo(dc,x,y);LineTo(dc,x-4*unit,y);LineTo(dc,x-4*unit,y+unit);MoveToEx(dc,x,y,NULL);LineTo(dc,x+4*unit,y);LineTo(dc,x+4*unit,y+unit);}
+    else if(kind==MON_NET){
+        /* Opposed transfer arrows fit the same 12 x 10 unit envelope as the hardware icons. */
+        POINT down[]={{x-3*unit,y-5*unit},{x-3*unit,y+5*unit}};
+        POINT down_head[]={{x-6*unit,y+2*unit},{x-3*unit,y+5*unit},{x,y+2*unit}};
+        POINT up[]={{x+3*unit,y+5*unit},{x+3*unit,y-5*unit}};
+        POINT up_head[]={{x,y-2*unit},{x+3*unit,y-5*unit},{x+6*unit,y-2*unit}};
+        Polyline(dc,down,2);Polyline(dc,down_head,3);
+        Polyline(dc,up,2);Polyline(dc,up_head,3);
+    }
     else if(memory){
         Rectangle(dc,x-6*unit,y-3*unit,x+6*unit,y+3*unit);
         for(int i=-3;i<=3;i+=3)Rectangle(dc,x+(i-1)*unit,y-unit,x+(i+1)*unit,y+unit);
