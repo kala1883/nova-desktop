@@ -215,3 +215,8 @@ UI 依赖 controller 与 core 的只读视图；controller 依赖 core 和平台
 - UI 在主线程顺序调度最多 16 个目录的请求；每个 worker 独占 SSH、SQLite 和请求快照。CHECK 使用临时表比较文件哈希、基线与远端头，不上传或应用工作文件；推送与拉取分别限制方向。批量任务支持勾选，取消停止后续调度，连接/迁移错误停止整批，普通目录错误独立呈现。
 - 当前文件版本的本机/服务器选择携带所检查的本机 SHA 和服务器版本。替换前复制并校验私有 recovery/<sha>/<相对路径>，保留普通文件名。接收链沿用 inbox 的 APPLIED/ack 约束；保留本机时在最新接收基线上发布新子版本。versions 附加表保存替换前清单；过期选择拒绝。界面只提供当前两端版本选择，不自动合并文本。
 - 服务器配置在现有已认证 SSH 通道执行固定引导：当远端账户本身为 root 时可通过 apt-get/dnf/yum/apk 安装缺失 Python；无 sudo、提权或本机子进程。探测不会安装软件。路径、配额、迁移和过滤/删除选项收进高级设置；所有界面和错误保持中英双语。
+
+## Sidebar monitoring and workspace display order
+
+- The monitor configuration and sampling helpers are in `src/ui/monitor.inc`, included by the native main window; the UI thread owns the timer and bounded rendering state. Optional PDH/NVML libraries load by absolute system-directory path; unsupported counters remain unavailable and libraries are released on shutdown. The optional native sensor providers include Intel RAPL Package0 PDH power, ACPI thermal-zone PDH readings and read-only Windows Storage temperature queries on fixed volumes. CPU core temperature is never inferred from ACPI zones. Disk query rate is bounded to once per second. No new runtime, elevated process or service is installed.
+- The monitor settings use the existing transactional JSON store. Attribute masks, display permutation, columns and interval are bounded; a failed save restores the prior configuration. Workspace display order uses stable IDs in the app settings, separately from the underlying workspace array and fixed Files index. Row-to-workspace mapping is applied to selection and launch-item drops.

@@ -14,6 +14,101 @@ static HINSTANCE WINAPI dashboard_fake_execute(HWND owner,LPCWSTR verb,LPCWSTR e
     assert(!parameters&&!directory&&show==SW_SHOWNORMAL);
     dashboard_dispatch_count++;return (HINSTANCE)dashboard_dispatch_result;
 }
+static int monitor_test_phase;
+static BOOL CALLBACK monitor_find_dialog(HWND hwnd,LPARAM lp){
+    if(GetWindow(hwnd,GW_OWNER)==main_window&&GetDlgItem(hwnd,MD_LIST)){*(HWND*)lp=hwnd;return FALSE;}return TRUE;
+}
+static VOID CALLBACK monitor_test_timer(HWND unused,UINT message,UINT_PTR timer,DWORD time){
+    (void)unused;(void)message;(void)time;
+    HWND dialog=NULL;EnumThreadWindows(GetCurrentThreadId(),monitor_find_dialog,(LPARAM)&dialog);if(!dialog)return;
+    KillTimer(NULL,timer);monitor_test_phase++;
+    SendDlgItemMessageW(dialog,MD_LIST,LB_SETCURSEL,MON_GPU,0);
+    SendMessageW(dialog,WM_COMMAND,MAKEWPARAM(MD_LIST,LBN_SELCHANGE),(LPARAM)GetDlgItem(dialog,MD_LIST));
+    SendMessageW(dialog,WM_COMMAND,MAKEWPARAM(MD_UP,BN_CLICKED),(LPARAM)GetDlgItem(dialog,MD_UP));
+    SendMessageW(GetDlgItem(dialog,MD_ATTR+1),BM_CLICK,0,0);
+    SendDlgItemMessageW(dialog,MD_COLUMNS,CB_SETCURSEL,2,0);
+    SetDlgItemInt(dialog,MD_INTERVAL,1750,FALSE);
+    SendMessageW(dialog,WM_COMMAND,monitor_test_phase==1?IDCANCEL:IDOK,0);
+}
+static void test_monitor_settings(HWND window){
+    MonitorConfig previous=monitor;monitor_test_phase=0;
+    UINT_PTR timer=SetTimer(NULL,0,10,monitor_test_timer);assert(timer);
+    SendMessageW(window,WM_COMMAND,ID_MONITOR_SETTINGS,0);KillTimer(NULL,timer);
+    assert(monitor_test_phase==1&&!memcmp(&previous,&monitor,sizeof(monitor)));
+    timer=SetTimer(NULL,0,10,monitor_test_timer);assert(timer);
+    SendMessageW(window,WM_COMMAND,ID_MONITOR_SETTINGS,0);KillTimer(NULL,timer);
+    assert(monitor_test_phase==2&&monitor.interval==1750&&monitor.columns==3);
+    assert(monitor.order[2]==MON_GPU&&(monitor.mask[MON_GPU]&2));
+    MonitorConfig saved=monitor;monitor=previous;monitor_load();assert(!memcmp(&saved,&monitor,sizeof(monitor)));
+    update_dashboard_description();assert(wcsstr(dashboard_description,L"GPU")&&wcsstr(dashboard_description,L"温度"));
+    monitor=previous;assert(monitor_save());KillTimer(window,STATS_TIMER);SetTimer(window,STATS_TIMER,monitor.interval,NULL);layout_controls();update_dashboard_description();
+    puts("PASS hardware monitor native settings dialog cancel/save, multi-attribute selection, order, columns, custom interval and persisted reload");
+}
+static void test_monitor_native_temperature(void){
+    struct {NovaTempHeader header;NovaTempInfo info[3];} fixture={0};
+    fixture.header.version=sizeof(NovaTempHeader);fixture.header.size=sizeof(fixture);fixture.header.count=3;
+    fixture.info[0].temperature=46;fixture.info[1].temperature=47;fixture.info[2].temperature=-32768;
+    assert(monitor_disk_temp_parse((const BYTE*)&fixture,sizeof(fixture))==47);
+    assert(monitor_disk_temp_parse((const BYTE*)&fixture,sizeof(NovaTempHeader)-1)<0);
+    fixture.header.count=4;assert(monitor_disk_temp_parse((const BYTE*)&fixture,sizeof(fixture))<0);
+    fixture.header.count=3;fixture.header.size=sizeof(fixture)+1;assert(monitor_disk_temp_parse((const BYTE*)&fixture,sizeof(fixture))<0);
+    puts("PASS native storage temperature descriptor, max sensor, sentinel and malformed bounds");
+}
+static void test_monitor_hold_drag(void){
+    MonitorConfig previous=monitor;
+    int first=monitor.order[0],second=monitor.order[1];
+    assert(monitor.mask[first]&&monitor.mask[second]&&monitor_count()>=2);
+    RECT r,a,b;GetClientRect(system_dashboard,&r);
+    assert(monitor_cell(0,r.right,r.bottom,&a)&&monitor_cell(1,r.right,r.bottom,&b));
+    LPARAM p=MAKELPARAM((a.left+a.right)/2,(a.top+a.bottom)/2),q=MAKELPARAM((b.left+b.right)/2,(b.top+b.bottom)/2);
+    task_manager_execute=dashboard_fake_execute;dashboard_dispatch_count=0;
+    SendMessageW(system_dashboard,WM_LBUTTONDOWN,MK_LBUTTON,p);
+    assert(monitor_drag_from==0&&!monitor_dragging);
+    SendMessageW(system_dashboard,WM_LBUTTONUP,0,p);
+    assert(dashboard_dispatch_count==1&&!monitor_dragging&&monitor_drag_from<0);
+    SendMessageW(system_dashboard,WM_LBUTTONDOWN,MK_LBUTTON,p);
+    SendMessageW(system_dashboard,WM_MOUSEMOVE,MK_LBUTTON,q);
+    SendMessageW(system_dashboard,WM_TIMER,MONITOR_DRAG_TIMER,0);
+    SendMessageW(system_dashboard,WM_LBUTTONUP,0,q);
+    assert(dashboard_dispatch_count==1&&!memcmp(&previous,&monitor,sizeof(monitor)));
+    SendMessageW(system_dashboard,WM_LBUTTONDOWN,MK_LBUTTON,p);
+    SendMessageW(system_dashboard,WM_TIMER,MONITOR_DRAG_TIMER,0);
+    assert(monitor_dragging);
+    SendMessageW(system_dashboard,WM_MOUSEMOVE,MK_LBUTTON,q);
+    assert(monitor_drag_to==1);
+    SendMessageW(system_dashboard,WM_LBUTTONUP,0,q);
+    assert(!monitor_dragging&&dashboard_dispatch_count==1&&monitor.order[0]==second&&monitor.order[1]==first);
+    MonitorConfig saved=monitor;monitor=previous;monitor_load();assert(!memcmp(&saved,&monitor,sizeof(monitor)));
+    SendMessageW(system_dashboard,WM_LBUTTONDOWN,MK_LBUTTON,p);
+    SendMessageW(system_dashboard,WM_TIMER,MONITOR_DRAG_TIMER,0);
+    SendMessageW(system_dashboard,WM_KEYDOWN,VK_ESCAPE,0);
+    assert(!monitor_dragging&&monitor_drag_from<0&&!memcmp(&saved,&monitor,sizeof(monitor)));
+    SendMessageW(system_dashboard,WM_LBUTTONDOWN,MK_LBUTTON,p);
+    SendMessageW(system_dashboard,WM_TIMER,MONITOR_DRAG_TIMER,0);
+    SendMessageW(system_dashboard,WM_LBUTTONUP,0,MAKELPARAM(-1,-1));
+    assert(!memcmp(&saved,&monitor,sizeof(monitor))&&dashboard_dispatch_count==1);
+    monitor=previous;assert(monitor_save());update_dashboard_description();
+    task_manager_execute=ShellExecuteW;
+    puts("PASS monitor hold drag, short click, threshold, cancel, outside drop and persisted order");
+}
+static void test_workspace_display_order(void){
+    int selected=active_space;long long first=spaces[0].id,second=spaces[1].id;
+    MonitorConfig old_monitor=monitor;for(int i=0;i<MON_COUNT;i++)monitor.mask[i]=0;monitor.mask[MON_CPU]=1;
+    layout_controls();SendMessageW(space_list,LB_SETTOPINDEX,0,0);
+    RECT a,b;assert(SendMessageW(space_list,LB_GETITEMRECT,0,(LPARAM)&a)!=LB_ERR);assert(SendMessageW(space_list,LB_GETITEMRECT,1,(LPARAM)&b)!=LB_ERR);
+    LPARAM p=MAKELPARAM((a.left+a.right)/2,(a.top+a.bottom)/2),q=MAKELPARAM((b.left+b.right)/2,(b.top+b.bottom)/2);
+    RECT client;GetClientRect(space_list,&client);POINT point_a={GET_X_LPARAM(p),GET_Y_LPARAM(p)},point_b={GET_X_LPARAM(q),GET_Y_LPARAM(q)};
+    assert(PtInRect(&client,point_a)&&PtInRect(&client,point_b));
+    SendMessageW(space_list,WM_LBUTTONDOWN,MK_LBUTTON,p);
+    assert(workspace_drag_from==0);
+    SendMessageW(space_list,WM_MOUSEMOVE,MK_LBUTTON,q);assert(workspace_dragging);SendMessageW(space_list,WM_LBUTTONUP,0,q);
+    assert(workspace_at_row(0)==1&&workspace_at_row(1)==0&&active_space==selected&&spaces[0].id==first&&spaces[1].id==second&&hold_drag.fixed_workspace_row==1);
+    wchar_t saved[256];assert(store_get(L"app",L"Nova",L"WorkspaceDisplayOrder",L"",saved,256)&&*saved);
+    int before=spaces[selected].app_count;moved_item(0,1,-1,NULL);assert(spaces[selected].app_count==before);
+    assert(workspace_reorder(1,0)&&workspace_at_row(0)==0&&active_space==selected&&hold_drag.fixed_workspace_row==0);
+    monitor=old_monitor;layout_controls();update_dashboard_description();
+    puts("PASS workspace name drag, stable identity/selection, persisted display order and protected Files drop mapping");
+}
 static HANDLE batch_gate,batch_cancel;
 static volatile LONG batch_calls;
 static int batch_parallel,batch_cancel_after_first;
@@ -240,6 +335,7 @@ int wmain(int argc,wchar_t **argv) {
         assert(sidebar_collapsed&&collapsed_apps.left<expanded_apps.left&&wcsstr(sidebar_name,L"展开"));
         SendMessageW(window,WM_COMMAND,ID_SIDEBAR,0);assert(!sidebar_collapsed&&store_int(L"app",L"Nova",L"SidebarCollapsed",1)==0);
         puts("PASS collapsible sidebar expands content, remains keyboard-accessible and persists its state");
+        test_monitor_settings(window);test_monitor_native_temperature();test_monitor_hold_drag();test_workspace_display_order();
         BatchTaskList *shortcut_tasks=calloc(1,sizeof(*shortcut_tasks));assert(shortcut_tasks);shortcut_tasks->count=2;
         for(int task_index=0;task_index<2;task_index++){
             BatchTask *value=&shortcut_tasks->tasks[task_index];swprintf(value->name,BATCH_NAME_CAP,L"Task %d",task_index+1);lstrcpyW(value->command,task_index?L"exit /b 0":L"exit /b 17");value->mode=task_index;

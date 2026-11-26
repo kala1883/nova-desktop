@@ -1,9 +1,12 @@
 #define _WIN32_WINNT 0x0601
 #define WINVER 0x0601
 #define WIN32_LEAN_AND_MEAN
+#include <winsock2.h>
+#include <ws2tcpip.h>
 #include <windows.h>
 #include <windowsx.h>
 #include <commctrl.h>
+#include <winioctl.h>
 #include <commdlg.h>
 #include <shellapi.h>
 #include <shlobj.h>
@@ -56,7 +59,10 @@
 #define ID_SIDEBAR 126
 #define ID_SYNC_MANAGER 127
 #define ID_SYSTEM_DASHBOARD 128
+#define ID_MONITOR_SETTINGS 129
 #define STATS_TIMER 1
+#define MONITOR_DRAG_TIMER 7702
+#define MONITOR_HOLD_MS 350
 #define START_PIN_TIMER 2
 #define START_DESKTOP_TIMER 4
 
@@ -86,9 +92,19 @@ static wchar_t configuration_directory[MAX_PATH];
 static ULONGLONG prev_idle, prev_kernel, prev_user;
 static int system_cpu=-1, memory_load=-1;
 static BOOL stats_baseline;
-static wchar_t dashboard_description[224];
+static wchar_t dashboard_description[1536];
+static int space_rows[MAX_WORKSPACES];
+static long long space_order[MAX_WORKSPACES];
+static int workspace_drag_from=-1,workspace_drag_to=-1;
+static POINT workspace_drag_point;
+static BOOL workspace_dragging;
+static int monitor_drag_from=-1,monitor_drag_to=-1;
+static BOOL monitor_dragging,monitor_drag_cancelled;
+static POINT monitor_drag_point;
 static HINSTANCE (WINAPI *task_manager_execute)(HWND,LPCWSTR,LPCWSTR,LPCWSTR,LPCWSTR,INT)=ShellExecuteW;
 static const COLORREF BG=RGB(14,19,29), PANEL=RGB(22,29,42), TEXT=RGB(236,241,249), MUTED=RGB(167,181,202);
+
+#include "ui/monitor.inc"
 
 static int px(int x) { return MulDiv(x,dpi,96); }
 static int caption_height(void){return px(30);}
@@ -237,6 +253,10 @@ static void load_config(void){
     prefer_desktop=store_int(L"app",L"Nova",L"DesktopMode",0)!=0;
     sidebar_collapsed=store_int(L"app",L"Nova",L"SidebarCollapsed",0)!=0;
     if(prefer_desktop)prefer_pin=FALSE;
+    monitor_load();
+    wchar_t ordering[256],*cursor,*end;
+    store_get(L"app",L"Nova",L"WorkspaceDisplayOrder",L"",ordering,256);cursor=ordering;ZeroMemory(space_order,sizeof(space_order));
+    for(int i=0;i<MAX_WORKSPACES&&*cursor;i++){long long id=wcstoll(cursor,&end,10);if(end==cursor||id<=0||(*end&&*end!=L','))break;space_order[i]=id;cursor=*end?end+1:end;}
     if(!ensure_items(active_space))return;
     if(repair_loaded_names()){
         save_config();
@@ -397,7 +417,7 @@ static void apply_language(BOOL english){
     SendMessageW(search_edit,EM_SETCUEBANNER,TRUE,(LPARAM)nova_text(L"搜索当前工作区  Ctrl+K",L"Search this workspace  Ctrl+K"));
     update_tooltip(desktop_button,nova_text(L"桌面围栏 / 恢复普通窗口",L"Desktop fence / restore normal window"));
     update_tooltip(pin_button,nova_text(L"置顶 / 取消置顶 (F11)",L"Always on top / unpin (F11)"));
-    update_tooltip(settings_button,nova_text(L"设置：设备同步、批量任务、语言、开机启动、工作区管理",L"Settings: device sync, batch tasks, language, startup, and workspace management"));
+    update_tooltip(settings_button,nova_text(L"设置：硬件监控、设备同步、批量任务、语言、开机启动、工作区管理",L"Settings: hardware monitor, device sync, batch tasks, language, startup, and workspace management"));
     update_tooltip(new_button,nova_text(L"新建工作区（最多 8 个）",L"New workspace (up to 8)"));
     update_tooltip(sidebar_button,sidebar_collapsed?nova_text(L"展开侧边栏 (Ctrl+B)",L"Expand sidebar (Ctrl+B)"):nova_text(L"折叠侧边栏 (Ctrl+B)",L"Collapse sidebar (Ctrl+B)"));
     update_tooltip(launch_button,nova_text(L"将当前工作区的每个项目各打开一次",L"Open every item in this workspace once"));
@@ -425,11 +445,15 @@ static void gauge_arc(HDC dc,int x,int y,int radius,int width,COLORREF color,dou
     if(!pen)return;
     HGDIOBJ old=SelectObject(dc,pen);Polyline(dc,points,count+1);SelectObject(dc,old);DeleteObject(pen);
 }
-static void gauge_symbol(HDC dc,int x,int y,BOOL memory,BOOL compact,COLORREF color){
+static void gauge_symbol(HDC dc,int x,int y,int kind,BOOL compact,COLORREF color){
+    BOOL memory=kind==MON_RAM;
     int unit=px(compact?1:2);if(unit<1)unit=1;
     HPEN pen=CreatePen(PS_SOLID,px(1),color);if(!pen)return;
     HGDIOBJ old=SelectObject(dc,pen),brush=SelectObject(dc,GetStockObject(NULL_BRUSH));
-    if(memory){
+    if(kind==MON_DISK){Rectangle(dc,x-5*unit,y-4*unit,x+5*unit,y+4*unit);Ellipse(dc,x-3*unit,y-3*unit,x+3*unit,y+3*unit);Ellipse(dc,x-unit,y-unit,x+unit,y+unit);}
+    else if(kind==MON_GPU){Rectangle(dc,x-6*unit,y-4*unit,x+6*unit,y+4*unit);Ellipse(dc,x-3*unit,y-3*unit,x+3*unit,y+3*unit);}
+    else if(kind==MON_NET){Rectangle(dc,x-2*unit,y-5*unit,x+2*unit,y-unit);Rectangle(dc,x-6*unit,y+unit,x-2*unit,y+5*unit);Rectangle(dc,x+2*unit,y+unit,x+6*unit,y+5*unit);MoveToEx(dc,x,y-unit,NULL);LineTo(dc,x,y);LineTo(dc,x-4*unit,y);LineTo(dc,x-4*unit,y+unit);MoveToEx(dc,x,y,NULL);LineTo(dc,x+4*unit,y);LineTo(dc,x+4*unit,y+unit);}
+    else if(memory){
         Rectangle(dc,x-6*unit,y-3*unit,x+6*unit,y+3*unit);
         for(int i=-3;i<=3;i+=3)Rectangle(dc,x+(i-1)*unit,y-unit,x+(i+1)*unit,y+unit);
         for(int i=-4;i<=4;i+=2){MoveToEx(dc,x+i*unit,y+3*unit,NULL);LineTo(dc,x+i*unit,y+5*unit);}
@@ -445,39 +469,90 @@ static void gauge_symbol(HDC dc,int x,int y,BOOL memory,BOOL compact,COLORREF co
     }
     SelectObject(dc,brush);SelectObject(dc,old);DeleteObject(pen);
 }
-static void draw_gauge(HDC dc,int x,int y,int radius,int value,BOOL memory,BOOL compact){
-    COLORREF accent=memory?RGB(175,137,255):RGB(63,209,242);
-    int stroke=px(compact?3:5);
-    if(!compact){
-        HPEN pen=CreatePen(PS_SOLID,px(1),RGB(71,87,111));
-        if(pen){HGDIOBJ old=SelectObject(dc,pen);
-            for(int i=0;i<=20;i++){POINT a=gauge_point(x,y,radius+px(6),i/20.0),b=gauge_point(x,y,radius+px(i%5?8:10),i/20.0);MoveToEx(dc,a.x,a.y,NULL);LineTo(dc,b.x,b.y);}
-            SelectObject(dc,old);DeleteObject(pen);
-        }
-    }
-    gauge_arc(dc,x,y,radius,stroke,RGB(39,52,73),1.0);
-    if(value>=0){
-        if(value>100)value=100;
-        if(!compact)gauge_arc(dc,x,y,radius,stroke+px(4),memory?RGB(47,38,70):RGB(24,55,68),value/100.0);
-        gauge_arc(dc,x,y,radius,stroke,accent,value/100.0);
-    }
-    gauge_symbol(dc,x,y-px(compact?7:13),memory,compact,accent);
-    wchar_t number[12];if(value<0)lstrcpyW(number,L"\x2014");else swprintf(number,12,L"%d%%",value);
-    text(dc,number,box(x-radius,y-px(compact?2:1),radius*2,px(compact?16:30)),compact?small_font:metric_font,TEXT,DT_CENTER|DT_SINGLELINE|DT_VCENTER);
+static int monitor_columns(void){return sidebar_collapsed?1:monitor.columns;}
+static BOOL monitor_cell(int index,int width,int height,RECT *cell){
+    int count=monitor_count(),columns=monitor_columns(),rows=(count+columns-1)/columns;
+    if(index<0||index>=count||width<=0||height<=0||!rows)return FALSE;
+    int col=index%columns,row=index/columns;
+    *cell=(RECT){width*col/columns,height*row/rows,width*(col+1)/columns,height*(row+1)/rows};return TRUE;
+}
+static int monitor_hit(HWND hwnd,POINT point,BOOL allow_empty){
+    RECT bounds,cell;GetClientRect(hwnd,&bounds);
+    if(!PtInRect(&bounds,point))return -1;
+    int count=monitor_count();
+    for(int i=0;i<count;i++)if(monitor_cell(i,bounds.right,bounds.bottom,&cell)&&PtInRect(&cell,point))return i;
+    if(allow_empty&&count){int columns=monitor_columns(),rows=(count+columns-1)/columns;
+        int row=point.y*rows/bounds.bottom,col=point.x*columns/bounds.right;
+        if(row*columns+col>=count)return count-1;}
+    return -1;
+}
+static BOOL monitor_reorder(int from,int to){
+    int positions[MON_COUNT],count=0;
+    for(int i=0;i<MON_COUNT;i++)if(monitor.mask[monitor.order[i]])positions[count++]=i;
+    if(from<0||from>=count||to<0||to>=count||from==to)return FALSE;
+    MonitorConfig previous=monitor;int kind=monitor.order[positions[from]];
+    for(int i=from;i!=to;i+=from<to?1:-1)monitor.order[positions[i]]=monitor.order[positions[i+(from<to?1:-1)]];
+    monitor.order[positions[to]]=kind;
+    NovaLogSpan span=nova_log_begin("monitor","reorder",0);
+    BOOL ok=monitor_save();
+    if(!ok){monitor=previous;set_notice(store_error());}
+    nova_log_end(span,ok,ok?0:GetLastError());update_dashboard_description();return ok;
+}
+static void monitor_drag_reset(HWND hwnd){
+    KillTimer(hwnd,MONITOR_DRAG_TIMER);monitor_drag_from=monitor_drag_to=-1;monitor_dragging=monitor_drag_cancelled=FALSE;
+    if(GetCapture()==hwnd)ReleaseCapture();
+    InvalidateRect(hwnd,NULL,FALSE);
 }
 static void dashboard_surface(HDC dc,int width,int height,BOOL highlighted,BOOL pressed){
+    (void)highlighted;(void)pressed;
     RECT bounds=box(0,0,width,height);FillRect(dc,&bounds,panel_brush);
-    HPEN edge=CreatePen(PS_SOLID,px(1),highlighted?RGB(83,139,186):RGB(47,64,88));
-    HBRUSH fill=CreateSolidBrush(pressed?RGB(25,39,59):RGB(17,25,39));
-    if(edge&&fill){HGDIOBJ oldpen=SelectObject(dc,edge),oldbrush=SelectObject(dc,fill);
-        RoundRect(dc,px(1),px(1),width-px(1),height-px(1),px(12),px(12));
-        SelectObject(dc,oldbrush);SelectObject(dc,oldpen);
+    int count=monitor_count();if(!count)return;
+    int index=0;
+    const COLORREF colors[]={RGB(63,209,242),RGB(175,137,255),RGB(245,183,94),RGB(93,216,152),RGB(104,166,255)};
+    for(int i=0;i<MON_COUNT;i++){
+        int kind=monitor.order[i],mask=monitor.mask[kind];if(!mask)continue;
+        RECT cell;int visible_index=index++;
+        if(!monitor_cell(visible_index,width,height,&cell))continue;
+        if(monitor_dragging&&visible_index==monitor_drag_from){HBRUSH ghost=CreateSolidBrush(RGB(30,45,60));if(ghost){FillRect(dc,&cell,ghost);DeleteObject(ghost);}}
+        int cw=cell.right-cell.left,ch=cell.bottom-cell.top,x=(cell.left+cell.right)/2;
+        int attrs=0,primary=-1;for(int a=0;a<monitor_attrs[kind];a++)if(mask&(1<<a)){attrs++;if(primary<0)primary=a;}
+        BOOL compact=cw<px(88)||ch<px(85);int line=px(compact?11:15);
+        if(attrs>1&&line*attrs+px(17)>ch)line=(ch-px(17))/attrs;
+        if(line<px(8))line=px(8);
+        BOOL arc=monitor_percent(kind,primary)&&ch>=px(56)+line*(attrs-1)&&cw>=px(42);
+        int top=cell.top+px(2);
+        int saved=SaveDC(dc);IntersectClipRect(dc,cell.left,cell.top,cell.right,cell.bottom);
+        HFONT compact_font=line<px(12)?CreateFontW(-line,0,0,0,FW_NORMAL,0,0,0,DEFAULT_CHARSET,0,0,CLEARTYPE_QUALITY,0,L"Segoe UI"):NULL;
+        if(arc){
+            int radius=(cw-px(12))/2,vertical=(ch-line*(attrs-1)-px(6))/2;if(radius>vertical)radius=vertical;if(radius>px(42))radius=px(42);
+            int y=top+radius+px(2);
+            double v=kind==MON_CPU?system_cpu:kind==MON_RAM?memory_load:monitor_value[kind][primary];
+            gauge_arc(dc,x,y,radius,px(compact?3:4),RGB(39,52,73),1.0);
+            if(v>=0)gauge_arc(dc,x,y,radius,px(compact?3:4),colors[kind],v/100.0);
+            gauge_symbol(dc,x,y-px(8),kind,TRUE,colors[kind]);
+            wchar_t value[64];monitor_format(kind,primary,value,64);if(v<0)lstrcpyW(value,L"\x2014");
+            text(dc,value,box(cell.left,y-px(1),cw,px(19)),compact?small_font:metric_font,TEXT,DT_CENTER|DT_SINGLELINE|DT_VCENTER|DT_END_ELLIPSIS);
+            top=y+radius+px(3);
+        }else{
+            gauge_symbol(dc,cell.left+px(12),top+px(7),kind,TRUE,colors[kind]);
+            text(dc,monitor_name(kind),box(cell.left+px(23),top,cw-px(24),px(14)),small_font,colors[kind],DT_SINGLELINE|DT_VCENTER|DT_END_ELLIPSIS);
+            top+=px(15);
+        }
+        for(int a=0;a<monitor_attrs[kind];a++)if((mask&(1<<a))&&(!arc||a!=primary)){
+            wchar_t value[64],label[100];monitor_format(kind,a,value,64);
+            if(cw<px(78)){
+                const wchar_t *short_label=kind==MON_NET&&a==0?L"↓":kind==MON_NET&&a==1?L"↑":L"";
+                swprintf(label,100,L"%ls%ls",short_label,wcscmp(value,nova_text(L"暂无数据",L"N/A"))?value:L"N/A");
+            }else swprintf(label,100,L"%ls %ls",monitor_attr(kind,a),value);
+            text(dc,label,box(cell.left+px(2),top,cw-px(4),line),compact_font?compact_font:small_font,TEXT,DT_CENTER|DT_SINGLELINE|DT_VCENTER|DT_END_ELLIPSIS);top+=line;
+        }
+        RestoreDC(dc,saved);if(compact_font)DeleteObject(compact_font);
+        if(monitor_dragging&&visible_index==monitor_drag_to&&monitor_drag_to!=monitor_drag_from){
+            HPEN edge=CreatePen(PS_SOLID,px(2),RGB(63,209,242));if(edge){HGDIOBJ old=SelectObject(dc,edge);HGDIOBJ brush=SelectObject(dc,GetStockObject(NULL_BRUSH));
+                RECT mark=cell;InflateRect(&mark,-px(2),-px(2));Rectangle(dc,mark.left,mark.top,mark.right,mark.bottom);
+                SelectObject(dc,brush);SelectObject(dc,old);DeleteObject(edge);}
+        }
     }
-    if(fill)DeleteObject(fill);
-    if(edge)DeleteObject(edge);
-    BOOL compact=width<px(90);int radius=px(compact?18:42),x=width/2;
-    draw_gauge(dc,x,height/4,radius,system_cpu,FALSE,compact);
-    draw_gauge(dc,x,height*3/4,radius,memory_load,TRUE,compact);
 }
 static void draw_dashboard(DRAWITEMSTRUCT *d){
     int width=d->rcItem.right-d->rcItem.left,height=d->rcItem.bottom-d->rcItem.top;if(width<=0||height<=0)return;
@@ -539,7 +614,12 @@ static void layout_controls(void) {
     if(!app_list)return;
     RECT r;GetClientRect(main_window,&r);r.bottom-=caption_height();int left=content_left(),width=r.right-left-px(32);
     int list_x=px(sidebar_collapsed?8:16),list_width=sidebar_width()-list_x-px(sidebar_collapsed?8:16);
-    int dashboard_height=px(sidebar_collapsed?112:232),dashboard_top=r.bottom-px(16)-dashboard_height;
+    int columns=monitor_columns(),rows=(monitor_count()+columns-1)/columns,attrs=1;
+    for(int i=0;i<MON_COUNT;i++){int n=0;for(int a=0;a<monitor_attrs[i];a++)if(monitor.mask[i]&(1<<a))n++;if(n>attrs)attrs=n;}
+    int dashboard_height=rows*px((sidebar_collapsed?52:100)+(attrs-1)*14);
+    int maximum=r.bottom-px(188);if(maximum<0)maximum=0;if(dashboard_height>maximum)dashboard_height=maximum;
+    int dashboard_top=r.bottom-px(16)-dashboard_height;
+    ShowWindow(system_dashboard,rows?SW_SHOW:SW_HIDE);
     int list_height=dashboard_top-px(124);if(list_height<px(44))list_height=px(44);
     move(space_list,list_x,px(112),list_width,list_height);
     move(system_dashboard,list_x,dashboard_top,list_width,dashboard_height);
@@ -559,18 +639,50 @@ static void layout_controls(void) {
 }
 static void set_sidebar_collapsed(BOOL value){
     if(value==sidebar_collapsed)return;
+    if(monitor_drag_from>=0)monitor_drag_reset(system_dashboard);
     if(hold_drag.dragging||hold_drag.armed)hold_drag_cancel(&hold_drag);
     end_name_edit(TRUE);sidebar_collapsed=value;
     SetWindowTextW(sidebar_button,sidebar_collapsed?nova_text(L"展开侧边栏 (Ctrl+B)",L"Expand sidebar (Ctrl+B)"):nova_text(L"折叠侧边栏 (Ctrl+B)",L"Collapse sidebar (Ctrl+B)"));
     update_tooltip(sidebar_button,sidebar_collapsed?nova_text(L"展开侧边栏 (Ctrl+B)",L"Expand sidebar (Ctrl+B)"):nova_text(L"折叠侧边栏 (Ctrl+B)",L"Collapse sidebar (Ctrl+B)"));
     save_config();layout_controls();InvalidateRect(main_window,NULL,TRUE);
 }
+static int workspace_at_row(int row){return row>=0&&row<space_count?space_rows[row]:-1;}
+static int workspace_row(int index){for(int i=0;i<space_count;i++)if(space_rows[i]==index)return i;return -1;}
 static void refresh_spaces(void) {
+    int used=0,n=0;
+    for(int i=0;i<MAX_WORKSPACES;i++)if(space_order[i])for(int j=0;j<space_count;j++)if(spaces[j].id==space_order[i]&&!(used&(1<<j))){space_rows[n++]=j;used|=1<<j;break;}
+    for(int j=0;j<space_count;j++)if(!(used&(1<<j)))space_rows[n++]=j;
     SendMessageW(space_list,LB_RESETCONTENT,0,0);
-    for(int i=0;i<space_count;i++)SendMessageW(space_list,LB_ADDSTRING,0,(LPARAM)(i==0?nova_text(L"目录",L"Files"):spaces[i].name));
-    SendMessageW(space_list,LB_SETCURSEL,active_space,0);
+    for(int row=0;row<space_count;row++){int i=space_rows[row];SendMessageW(space_list,LB_ADDSTRING,0,(LPARAM)(i==0?nova_text(L"目录",L"Files"):spaces[i].name));}
+    SendMessageW(space_list,LB_SETCURSEL,workspace_row(active_space),0);
+    hold_drag.fixed_workspace_row=workspace_row(0);
     EnableWindow(new_button,space_count<MAX_WORKSPACES);
 }
+static BOOL workspace_reorder(int from,int to){
+    if(from<0||from>=space_count||to<0||to>=space_count||from==to)return FALSE;
+    for(int i=0;i<space_count;i++)if(!spaces[i].id)return FALSE;
+    long long previous[MAX_WORKSPACES];memcpy(previous,space_order,sizeof(previous));
+    int index=space_rows[from];
+    for(int i=from;i!=to;i+=from<to?1:-1)space_rows[i]=space_rows[i+(from<to?1:-1)];
+    space_rows[to]=index;
+    wchar_t value[256]=L"",part[32];ZeroMemory(space_order,sizeof(space_order));
+    for(int i=0;i<space_count;i++){space_order[i]=spaces[space_rows[i]].id;swprintf(part,32,i?L",%lld":L"%lld",space_order[i]);lstrcatW(value,part);}
+    NovaLogSpan span=nova_log_begin("app","workspace_reorder",0);
+    BOOL ok=!storage_failed&&store_set(L"app",L"Nova",L"WorkspaceDisplayOrder",value);
+    if(!ok){memcpy(space_order,previous,sizeof(previous));set_notice(store_error());}
+    nova_log_end(span,ok,ok?0:GetLastError());refresh_spaces();InvalidateRect(space_list,NULL,TRUE);return ok;
+}
+static void workspace_order_menu(int row,POINT p){
+    if(row<0||row>=space_count)return;
+    HMENU menu=CreatePopupMenu();if(!menu)return;
+    AppendMenuW(menu,MF_STRING|(row==0?MF_GRAYED:0),1,nova_text(L"上移",L"Move up"));
+    AppendMenuW(menu,MF_STRING|(row==space_count-1?MF_GRAYED:0),2,nova_text(L"下移",L"Move down"));
+    AppendMenuW(menu,MF_STRING|(row==0?MF_GRAYED:0),3,nova_text(L"移至顶部",L"Move to top"));
+    AppendMenuW(menu,MF_STRING|(row==space_count-1?MF_GRAYED:0),4,nova_text(L"移至底部",L"Move to bottom"));
+    UINT id=TrackPopupMenu(menu,TPM_RETURNCMD|TPM_RIGHTBUTTON,p.x,p.y,0,main_window,NULL);DestroyMenu(menu);
+    if(id)workspace_reorder(row,id==1?row-1:id==2?row+1:id==3?0:space_count-1);
+}
+
 static BOOL contains(const wchar_t *value,const wchar_t *query) {
     if(!*query)return TRUE;
     return FindNLSStringEx(LOCALE_NAME_USER_DEFAULT,FIND_FROMSTART|NORM_IGNORECASE,value,-1,query,-1,NULL,NULL,NULL,0)>=0;
@@ -645,7 +757,8 @@ static int selected_app(void) {
     LVITEMW item={0};item.mask=LVIF_PARAM;item.iItem=index;SendMessageW(app_list,LVM_GETITEMW,0,(LPARAM)&item);return (int)item.lParam;
 }
 static void moved_item(int source,int destination,int at,void *context){
-    (void)context;if(destination<0)destination=active_space;
+    (void)context;if(destination<0)destination=active_space;else destination=workspace_at_row(destination);
+    if(destination<0)return;
     if(destination==0){set_notice(nova_text(L"「目录」是固定的文件管理工作区，不接收启动项。",L"Files is a fixed file-management workspace and cannot receive launch items."));return;}
     if(!ensure_items(active_space)||!ensure_items(destination))return;
     Workspace source_before=spaces[active_space],destination_before=spaces[destination];
@@ -725,12 +838,66 @@ static void delete_space(void){
 static LRESULT CALLBACK child_proc(HWND hwnd,UINT msg,WPARAM wp,LPARAM lp,UINT_PTR id,DWORD_PTR data){
     (void)id;(void)data;
     if(hwnd==app_list&&hold_drag_message(&hold_drag,msg,wp,lp))return 0;
+    if(hwnd==space_list){
+        if(msg==WM_LBUTTONDOWN){LRESULT hit=SendMessageW(hwnd,LB_ITEMFROMPOINT,0,lp);workspace_drag_from=HIWORD(hit)?-1:LOWORD(hit);workspace_drag_to=workspace_drag_from;workspace_drag_point=(POINT){GET_X_LPARAM(lp),GET_Y_LPARAM(lp)};workspace_dragging=FALSE;
+            RECT item;if(workspace_drag_from>=0&&SendMessageW(hwnd,LB_GETITEMRECT,workspace_drag_from,(LPARAM)&item)!=LB_ERR&&PtInRect(&item,workspace_drag_point)){SetFocus(hwnd);SetCapture(hwnd);return 0;}workspace_drag_from=-1;}
+        if(msg==WM_LBUTTONDBLCLK){workspace_drag_from=-1;workspace_dragging=FALSE;if(GetCapture()==hwnd)ReleaseCapture();SendMessageW(main_window,WM_COMMAND,MAKEWPARAM(ID_SPACES,LBN_DBLCLK),(LPARAM)hwnd);return 0;}
+        if(msg==WM_MOUSEMOVE&&workspace_drag_from>=0&&(wp&MK_LBUTTON)){
+            if(!workspace_dragging&&(abs(GET_X_LPARAM(lp)-workspace_drag_point.x)>=GetSystemMetrics(SM_CXDRAG)||abs(GET_Y_LPARAM(lp)-workspace_drag_point.y)>=GetSystemMetrics(SM_CYDRAG))){workspace_dragging=TRUE;if(GetCapture()!=hwnd)SetCapture(hwnd);}
+            if(workspace_dragging){RECT r;GetClientRect(hwnd,&r);POINT point={GET_X_LPARAM(lp),GET_Y_LPARAM(lp)};int next=-1;
+                if(point.x>=r.left&&point.x<r.right){int top=(int)SendMessageW(hwnd,LB_GETTOPINDEX,0,0);if(point.y<px(10)&&top>0)SendMessageW(hwnd,LB_SETTOPINDEX,top-1,0);else if(point.y>=r.bottom-px(10)&&top<space_count-1)SendMessageW(hwnd,LB_SETTOPINDEX,top+1,0);
+                    LRESULT hit=SendMessageW(hwnd,LB_ITEMFROMPOINT,0,lp);next=LOWORD(hit);if(next>=space_count)next=space_count-1;}
+                if(next!=workspace_drag_to){workspace_drag_to=next;InvalidateRect(hwnd,NULL,FALSE);}return 0;}
+        }
+        if(msg==WM_LBUTTONUP&&workspace_drag_from>=0){int from=workspace_drag_from,to=workspace_drag_to;BOOL dragging=workspace_dragging;workspace_dragging=FALSE;workspace_drag_from=-1;if(GetCapture()==hwnd)ReleaseCapture();
+            if(dragging)workspace_reorder(from,to);else{SendMessageW(hwnd,LB_SETCURSEL,from,0);if(workspace_at_row(from)!=active_space)SendMessageW(main_window,WM_COMMAND,MAKEWPARAM(ID_SPACES,LBN_SELCHANGE),(LPARAM)hwnd);}InvalidateRect(hwnd,NULL,FALSE);return 0;}
+        if(msg==WM_KEYDOWN&&wp==VK_ESCAPE&&workspace_drag_from>=0){workspace_drag_from=-1;workspace_dragging=FALSE;if(GetCapture()==hwnd)ReleaseCapture();InvalidateRect(hwnd,NULL,FALSE);return 0;}
+        if(msg==WM_LBUTTONUP||(msg==WM_CAPTURECHANGED&&(HWND)lp!=hwnd)||msg==WM_CANCELMODE){workspace_drag_from=-1;workspace_dragging=FALSE;InvalidateRect(hwnd,NULL,FALSE);}
+        if(msg==WM_CONTEXTMENU){POINT p={GET_X_LPARAM(lp),GET_Y_LPARAM(lp)};int row=(int)SendMessageW(hwnd,LB_GETCURSEL,0,0);if(p.x==-1&&p.y==-1){RECT r;GetWindowRect(hwnd,&r);p=(POINT){r.left,r.top+px(22)};}else{POINT q=p;ScreenToClient(hwnd,&q);LRESULT hit=SendMessageW(hwnd,LB_ITEMFROMPOINT,0,MAKELPARAM(q.x,q.y));if(HIWORD(hit))return 0;row=LOWORD(hit);}workspace_order_menu(row,p);return 0;}
+        if((msg==WM_KEYDOWN||msg==WM_SYSKEYDOWN)&&(GetKeyState(VK_MENU)&0x8000)&&(wp==VK_UP||wp==VK_DOWN)){int row=workspace_row(active_space);workspace_reorder(row,row+(wp==VK_UP?-1:1));return 0;}
+    }
     if(hwnd==pin_button||hwnd==desktop_button||hwnd==settings_button||hwnd==new_button||hwnd==sidebar_button||hwnd==minimize_button||hwnd==maximize_button||hwnd==close_button||hwnd==system_dashboard){
         if(msg==WM_MOUSEMOVE&&hover_button!=hwnd){hover_button=hwnd;TRACKMOUSEEVENT t={sizeof(t),TME_LEAVE,hwnd,0};TrackMouseEvent(&t);InvalidateRect(hwnd,NULL,TRUE);}
         if(msg==WM_MOUSELEAVE){if(hover_button==hwnd)hover_button=NULL;InvalidateRect(hwnd,NULL,TRUE);}
     }
     if(hwnd==system_dashboard){
-        if(msg==WM_SETCURSOR){SetCursor(LoadCursorW(NULL,IDC_HAND));return TRUE;}
+        if(msg==BM_CLICK){SendMessageW(main_window,WM_COMMAND,MAKEWPARAM(ID_SYSTEM_DASHBOARD,BN_CLICKED),(LPARAM)hwnd);return 0;}
+        if(msg==WM_LBUTTONDOWN){
+            POINT point={GET_X_LPARAM(lp),GET_Y_LPARAM(lp)};
+            int from=monitor_hit(hwnd,point,FALSE);if(from<0)return 0;
+            SetFocus(hwnd);monitor_drag_reset(hwnd);
+            monitor_drag_from=monitor_drag_to=from;monitor_drag_point=point;
+            SetCapture(hwnd);if(!SetTimer(hwnd,MONITOR_DRAG_TIMER,MONITOR_HOLD_MS,NULL))monitor_drag_cancelled=TRUE;
+            return 0;
+        }
+        if(msg==WM_TIMER&&wp==MONITOR_DRAG_TIMER){
+            KillTimer(hwnd,MONITOR_DRAG_TIMER);
+            if(monitor_drag_from>=0&&!monitor_drag_cancelled&&GetCapture()==hwnd){
+                monitor_dragging=TRUE;SetCursor(LoadCursorW(NULL,IDC_SIZEALL));InvalidateRect(hwnd,NULL,FALSE);
+            }
+            return 0;
+        }
+        if(msg==WM_MOUSEMOVE&&monitor_drag_from>=0){
+            POINT point={GET_X_LPARAM(lp),GET_Y_LPARAM(lp)};
+            if(!monitor_dragging&&!monitor_drag_cancelled&&(abs(point.x-monitor_drag_point.x)>=GetSystemMetrics(SM_CXDRAG)||abs(point.y-monitor_drag_point.y)>=GetSystemMetrics(SM_CYDRAG))){
+                KillTimer(hwnd,MONITOR_DRAG_TIMER);monitor_drag_cancelled=TRUE;
+            }
+            if(monitor_dragging){int to=monitor_hit(hwnd,point,TRUE);if(to!=monitor_drag_to){monitor_drag_to=to;InvalidateRect(hwnd,NULL,FALSE);}SetCursor(LoadCursorW(NULL,to<0?IDC_NO:IDC_SIZEALL));}
+            return 0;
+        }
+        if(msg==WM_LBUTTONUP&&monitor_drag_from>=0){
+            POINT point={GET_X_LPARAM(lp),GET_Y_LPARAM(lp)};
+            int from=monitor_drag_from,to=monitor_hit(hwnd,point,TRUE);BOOL dragging=monitor_dragging;
+            BOOL click=!dragging&&!monitor_drag_cancelled&&monitor_hit(hwnd,point,FALSE)==from;
+            monitor_drag_reset(hwnd);
+            if(dragging&&to>=0)monitor_reorder(from,to);
+            else if(click)SendMessageW(main_window,WM_COMMAND,MAKEWPARAM(ID_SYSTEM_DASHBOARD,BN_CLICKED),(LPARAM)hwnd);
+            return 0;
+        }
+        if(msg==WM_CANCELMODE||(msg==WM_CAPTURECHANGED&&(HWND)lp!=hwnd)||(msg==WM_KEYDOWN&&wp==VK_ESCAPE&&monitor_drag_from>=0)){
+            monitor_drag_reset(hwnd);if(msg==WM_KEYDOWN)return 0;
+        }
+        if(msg==WM_SETCURSOR){SetCursor(LoadCursorW(NULL,monitor_dragging?(monitor_drag_to<0?IDC_NO:IDC_SIZEALL):IDC_HAND));return TRUE;}
         if(msg==WM_GETDLGCODE&&wp==VK_RETURN)return DLGC_WANTALLKEYS;
         if(msg==WM_KEYDOWN&&wp==VK_RETURN){SendMessageW(main_window,WM_COMMAND,MAKEWPARAM(ID_SYSTEM_DASHBOARD,BN_CLICKED),(LPARAM)hwnd);return 0;}
     }
@@ -795,6 +962,80 @@ static void choose_batch_workspace(const BatchTask *value){
     const wchar_t *message=result==1?nova_text(L"批量任务已添加到工作区，可双击或使用全部启动。",L"Batch task added. Double-click it or use Launch all."):result==0?nova_text(L"该工作区已经有此任务的快捷入口。",L"This workspace already has a shortcut to this task."):result==-2?nova_text(L"工作区已满，最多 20 个启动项。",L"The workspace is full (20 launch items maximum)."):nova_text(L"无法保存任务快捷入口，请检查工作区和本地数据库。",L"Unable to save the task shortcut. Check the workspace and local database.");
     set_notice(message);MessageBoxW(owner,message,L"NOVA Desktop",MB_OK|(result>=0?MB_ICONINFORMATION:MB_ICONWARNING));
 }
+static void sample_stats(void);
+enum { MD_LIST=4101,MD_UP,MD_DOWN,MD_COLUMNS,MD_INTERVAL,MD_ATTR=4120 };
+static HWND monitor_control(HWND dialog,const wchar_t *cls,const wchar_t *title,DWORD style,int id,int x,int y,int w,int h){
+    RECT r={x,y,x+w,y+h};MapDialogRect(dialog,&r);
+    HWND child=CreateWindowExW(0,cls,title,WS_CHILD|WS_VISIBLE|style,r.left,r.top,r.right-r.left,r.bottom-r.top,dialog,(HMENU)(INT_PTR)id,GetModuleHandleW(NULL),NULL);
+    if(child)SendMessageW(child,WM_SETFONT,(WPARAM)body_font,TRUE);
+    return child;
+}
+static void monitor_dialog_attrs(HWND dialog,const MonitorConfig *draft){
+    int row=(int)SendDlgItemMessageW(dialog,MD_LIST,LB_GETCURSEL,0,0);if(row<0||row>=MON_COUNT)row=0;
+    int kind=draft->order[row];
+    for(int a=0;a<MON_ATTRS;a++){HWND h=GetDlgItem(dialog,MD_ATTR+a);BOOL available=a<monitor_attrs[kind];ShowWindow(h,available?SW_SHOW:SW_HIDE);
+        if(available){SetWindowTextW(h,monitor_attr(kind,a));SendMessageW(h,BM_SETCHECK,(draft->mask[kind]&(1<<a))?BST_CHECKED:BST_UNCHECKED,0);}}
+    EnableWindow(GetDlgItem(dialog,MD_UP),row>0);EnableWindow(GetDlgItem(dialog,MD_DOWN),row<MON_COUNT-1);
+}
+static void monitor_dialog_list(HWND dialog,const MonitorConfig *draft,int row){
+    SendDlgItemMessageW(dialog,MD_LIST,LB_RESETCONTENT,0,0);
+    for(int i=0;i<MON_COUNT;i++){int kind=draft->order[i];wchar_t label[80];swprintf(label,80,L"%ls%ls",draft->mask[kind]?L"":L"[-] ",monitor_name(kind));SendDlgItemMessageW(dialog,MD_LIST,LB_ADDSTRING,0,(LPARAM)label);}
+    SendDlgItemMessageW(dialog,MD_LIST,LB_SETCURSEL,row,0);monitor_dialog_attrs(dialog,draft);
+}
+static INT_PTR CALLBACK monitor_dialog_proc(HWND dialog,UINT message,WPARAM wp,LPARAM lp){
+    MonitorConfig *draft=(MonitorConfig*)GetWindowLongPtrW(dialog,DWLP_USER);
+    if(message==WM_INITDIALOG){
+        draft=(MonitorConfig*)lp;SetWindowLongPtrW(dialog,DWLP_USER,(LONG_PTR)draft);
+        SetWindowTextW(dialog,nova_text(L"硬件监控设置",L"Hardware monitor settings"));
+        monitor_control(dialog,L"STATIC",nova_text(L"硬件顺序（从左到右、从上到下）",L"Hardware order (left to right, top to bottom)"),0,-1,9,8,250,13);
+        monitor_control(dialog,L"LISTBOX",L"",WS_TABSTOP|WS_BORDER|LBS_NOTIFY|LBS_NOINTEGRALHEIGHT,MD_LIST,9,23,105,78);
+        monitor_control(dialog,L"BUTTON",nova_text(L"上移",L"Move up"),WS_TABSTOP,MD_UP,9,104,50,15);
+        monitor_control(dialog,L"BUTTON",nova_text(L"下移",L"Move down"),WS_TABSTOP,MD_DOWN,64,104,50,15);
+        monitor_control(dialog,L"STATIC",nova_text(L"选择同一图标中的显示属性",L"Attributes on the same icon"),0,-1,124,23,150,12);
+        for(int a=0;a<MON_ATTRS;a++)monitor_control(dialog,L"BUTTON",L"",WS_TABSTOP|BS_AUTOCHECKBOX,MD_ATTR+a,124,39+a*15,145,14);
+        monitor_control(dialog,L"STATIC",nova_text(L"不勾选任何属性即隐藏该硬件。",L"Uncheck all attributes to hide a hardware card."),0,-1,9,126,260,12);
+        monitor_control(dialog,L"STATIC",nova_text(L"布局列数",L"Layout columns"),0,-1,9,145,80,12);
+        monitor_control(dialog,L"COMBOBOX",L"",WS_TABSTOP|CBS_DROPDOWNLIST|WS_VSCROLL,MD_COLUMNS,93,141,75,60);
+        for(int i=1;i<=3;i++){wchar_t value[16];swprintf(value,16,nova_text(L"%d 列",L"%d columns"),i);SendDlgItemMessageW(dialog,MD_COLUMNS,CB_ADDSTRING,0,(LPARAM)value);}
+        SendDlgItemMessageW(dialog,MD_COLUMNS,CB_SETCURSEL,draft->columns-1,0);
+        monitor_control(dialog,L"STATIC",nova_text(L"采样间隔 (ms)",L"Sample interval (ms)"),0,-1,9,167,80,12);
+        monitor_control(dialog,L"EDIT",L"",WS_TABSTOP|WS_BORDER|ES_NUMBER|ES_AUTOHSCROLL,MD_INTERVAL,93,164,75,15);
+        SendDlgItemMessageW(dialog,MD_INTERVAL,EM_SETLIMITTEXT,7,0);SetDlgItemInt(dialog,MD_INTERVAL,draft->interval,FALSE);
+        monitor_control(dialog,L"STATIC",L"250 - 3600000 ms",0,-1,174,167,100,12);
+        monitor_control(dialog,L"STATIC",nova_text(L"核心温度与 ACPI 热区不同；不可读显示暂无数据。",L"Core temperature differs from ACPI zones; unavailable readings show N/A."),0,-1,9,186,265,25);
+        monitor_control(dialog,L"BUTTON",nova_text(L"保存",L"Save"),WS_TABSTOP|BS_DEFPUSHBUTTON,IDOK,165,215,50,17);
+        monitor_control(dialog,L"BUTTON",nova_text(L"取消",L"Cancel"),WS_TABSTOP,IDCANCEL,220,215,50,17);
+        monitor_dialog_list(dialog,draft,0);return TRUE;
+    }
+    if(message==WM_CLOSE){EndDialog(dialog,IDCANCEL);return TRUE;}
+    if(message!=WM_COMMAND||!draft)return FALSE;
+    int id=LOWORD(wp),row=(int)SendDlgItemMessageW(dialog,MD_LIST,LB_GETCURSEL,0,0);
+    if(id==IDCANCEL){EndDialog(dialog,IDCANCEL);return TRUE;}
+    if(id==IDOK){
+        BOOL valid=FALSE;UINT interval=GetDlgItemInt(dialog,MD_INTERVAL,&valid,FALSE);
+        if(!valid||interval<250||interval>3600000){MessageBoxW(dialog,nova_text(L"请输入 250 至 3600000 毫秒。",L"Enter 250 to 3600000 milliseconds."),APP_NAME,MB_OK|MB_ICONWARNING);SetFocus(GetDlgItem(dialog,MD_INTERVAL));return TRUE;}
+        int columns=(int)SendDlgItemMessageW(dialog,MD_COLUMNS,CB_GETCURSEL,0,0);if(columns<0||columns>2)return TRUE;
+        draft->interval=(int)interval;draft->columns=columns+1;EndDialog(dialog,IDOK);return TRUE;
+    }
+    if(row<0||row>=MON_COUNT)return FALSE;
+    if(id==MD_LIST&&HIWORD(wp)==LBN_SELCHANGE){monitor_dialog_attrs(dialog,draft);return TRUE;}
+    if(id==MD_UP||id==MD_DOWN){int target=row+(id==MD_UP?-1:1);if(target>=0&&target<MON_COUNT){int kind=draft->order[row];draft->order[row]=draft->order[target];draft->order[target]=kind;monitor_dialog_list(dialog,draft,target);}return TRUE;}
+    if(id>=MD_ATTR&&id<MD_ATTR+MON_ATTRS&&HIWORD(wp)==BN_CLICKED){int kind=draft->order[row],a=id-MD_ATTR;if(a<monitor_attrs[kind]){draft->mask[kind]^=1<<a;monitor_dialog_list(dialog,draft,row);SetFocus(GetDlgItem(dialog,id));}return TRUE;}
+    return FALSE;
+}
+static void monitor_settings(void){
+    /* No resource-file change: a native, modal dialog template with runtime controls. */
+    struct {DLGTEMPLATE dialog;WORD menu,window_class,title;} definition={0};
+    definition.dialog.style=WS_POPUP|WS_CAPTION|WS_SYSMENU|DS_MODALFRAME|DS_CENTER;
+    definition.dialog.cx=280;definition.dialog.cy=240;
+    MonitorConfig draft=monitor,previous=monitor;
+    INT_PTR result=DialogBoxIndirectParamW(GetModuleHandleW(NULL),&definition.dialog,main_window,monitor_dialog_proc,(LPARAM)&draft);
+    if(result!=IDOK)return;
+    monitor=draft;
+    if(!monitor_save()){monitor=previous;error_message(nova_text(L"无法保存监控配置，原配置已恢复。",L"Unable to save monitor settings; previous settings restored."));return;}
+    KillTimer(main_window,STATS_TIMER);SetTimer(main_window,STATS_TIMER,monitor.interval,NULL);
+    sample_stats();layout_controls();InvalidateRect(system_dashboard,NULL,FALSE);
+}
 static void settings_menu(void){
     startup_enabled=read_startup();HMENU menu=CreatePopupMenu();
     HMENU language=CreatePopupMenu();
@@ -804,6 +1045,7 @@ static void settings_menu(void){
     AppendMenuW(menu,MF_STRING|(startup_enabled?MF_CHECKED:0),ID_STARTUP,nova_text(L"开机启动",L"Start with Windows"));
     AppendMenuW(menu,MF_STRING,ID_BATCH_TASKS,nova_text(L"批量任务…",L"Batch tasks…"));
     AppendMenuW(menu,MF_STRING,ID_SYNC_MANAGER,nova_text(L"设备与同步…",L"Devices and synchronization…"));
+    AppendMenuW(menu,MF_STRING,ID_MONITOR_SETTINGS,nova_text(L"硬件监控…",L"Hardware monitor…"));
     AppendMenuW(menu,MF_SEPARATOR,0,NULL);
     AppendMenuW(menu,MF_STRING|(active_space==0?MF_GRAYED:0),ID_RENAME,nova_text(L"重命名当前工作区",L"Rename current workspace"));
     AppendMenuW(menu,MF_STRING|(active_space==0||space_count<=1?MF_GRAYED:0),ID_DELETE,nova_text(L"删除当前工作区…",L"Delete current workspace…"));
@@ -821,15 +1063,15 @@ static void tray_menu(void){
 static ULONGLONG ft(FILETIME v){ULARGE_INTEGER n;n.LowPart=v.dwLowDateTime;n.HighPart=v.dwHighDateTime;return n.QuadPart;}
 static void update_dashboard_description(void){
     if(!IsWindow(system_dashboard))return;
-    wchar_t cpu[32],memory[32],next[224];
-    if(system_cpu<0)lstrcpyW(cpu,nova_text(L"暂无数据",L"unavailable"));else swprintf(cpu,32,L"%d%%",system_cpu);
-    if(memory_load<0)lstrcpyW(memory,nova_text(L"暂无数据",L"unavailable"));else swprintf(memory,32,L"%d%%",memory_load);
-    swprintf(next,224,nova_text(L"CPU 使用率 %ls；内存使用率 %ls。打开 Windows 任务管理器。",L"CPU usage %ls; memory usage %ls. Open Windows Task Manager."),cpu,memory);
-    if(lstrcmpW(dashboard_description,next)){
-        lstrcpyW(dashboard_description,next);SetWindowTextW(system_dashboard,dashboard_description);
-        update_tooltip(system_dashboard,dashboard_description);
+    wchar_t next[1536]=L"";
+    for(int i=0;i<MON_COUNT;i++){int kind=monitor.order[i],mask=monitor.mask[kind];if(!mask)continue;
+        lstrcatW(next,monitor_name(kind));lstrcatW(next,L": ");
+        for(int a=0;a<monitor_attrs[kind];a++)if(mask&(1<<a)){wchar_t value[64],part[120];monitor_format(kind,a,value,64);swprintf(part,120,L"%ls %ls; ",monitor_attr(kind,a),value);if(wcslen(next)+wcslen(part)<1450)lstrcatW(next,part);}
     }
+    lstrcatW(next,nova_text(L"点击打开 Windows 任务管理器；长按拖动调整监控位置。",L"Click to open Windows Task Manager; hold and drag to reorder monitors."));
+    if(lstrcmpW(dashboard_description,next)){lstrcpyW(dashboard_description,next);SetWindowTextW(system_dashboard,dashboard_description);update_tooltip(system_dashboard,dashboard_description);}
 }
+
 static void sample_stats(void){
     system_cpu=-1;memory_load=-1;
     FILETIME a,b,c;
@@ -842,6 +1084,7 @@ static void sample_stats(void){
         prev_idle=idle;prev_kernel=kernel;prev_user=user;stats_baseline=TRUE;
     }else stats_baseline=FALSE;
     MEMORYSTATUSEX ms={0};ms.dwLength=sizeof(ms);if(GlobalMemoryStatusEx(&ms)&&ms.dwMemoryLoad<=100)memory_load=(int)ms.dwMemoryLoad;
+    monitor_sample_extra(&ms);
     update_dashboard_description();
 }
 static BOOL open_task_manager(void){
@@ -880,12 +1123,12 @@ static LRESULT CALLBACK window_proc(HWND hwnd,UINT msg,WPARAM wp,LPARAM lp){
         HWND children[]={space_list,system_dashboard,new_button,sidebar_button,settings_button,pin_button,desktop_button,minimize_button,maximize_button,close_button,search_edit,add_button,folder_button,launch_button,app_list,name_edit};
         for(unsigned i=0;i<sizeof(children)/sizeof(children[0]);i++){SetWindowSubclass(children[i],child_proc,1,0);DragAcceptFiles(children[i],TRUE);}DragAcceptFiles(hwnd,TRUE);
         tooltip=CreateWindowExW(WS_EX_TOPMOST,TOOLTIPS_CLASSW,NULL,WS_POPUP|TTS_ALWAYSTIP|TTS_NOPREFIX,CW_USEDEFAULT,CW_USEDEFAULT,CW_USEDEFAULT,CW_USEDEFAULT,hwnd,NULL,GetModuleHandleW(NULL),NULL);
-        add_tooltip(desktop_button,nova_text(L"桌面围栏 / 恢复普通窗口",L"Desktop fence / restore normal window"));add_tooltip(pin_button,nova_text(L"置顶 / 取消置顶 (F11)",L"Always on top / unpin (F11)"));add_tooltip(settings_button,nova_text(L"设置：设备同步、批量任务、语言、开机启动、工作区管理",L"Settings: device sync, batch tasks, language, startup, and workspace management"));add_tooltip(new_button,nova_text(L"新建工作区（最多 8 个）",L"New workspace (up to 8)"));
+        add_tooltip(desktop_button,nova_text(L"桌面围栏 / 恢复普通窗口",L"Desktop fence / restore normal window"));add_tooltip(pin_button,nova_text(L"置顶 / 取消置顶 (F11)",L"Always on top / unpin (F11)"));add_tooltip(settings_button,nova_text(L"设置：硬件监控、设备同步、批量任务、语言、开机启动、工作区管理",L"Settings: hardware monitor, device sync, batch tasks, language, startup, and workspace management"));add_tooltip(new_button,nova_text(L"新建工作区（最多 8 个）",L"New workspace (up to 8)"));
         add_tooltip(sidebar_button,sidebar_collapsed?nova_text(L"展开侧边栏 (Ctrl+B)",L"Expand sidebar (Ctrl+B)"):nova_text(L"折叠侧边栏 (Ctrl+B)",L"Collapse sidebar (Ctrl+B)"));
         add_tooltip(system_dashboard,nova_text(L"打开 Windows 任务管理器",L"Open Windows Task Manager"));
         add_tooltip(launch_button,nova_text(L"将当前工作区的每个项目各打开一次",L"Open every item in this workspace once"));
         add_tooltip(minimize_button,nova_text(L"最小化",L"Minimize"));add_tooltip(maximize_button,nova_text(L"最大化 / 还原",L"Maximize / restore"));add_tooltip(close_button,nova_text(L"关闭",L"Close"));
-        refresh_spaces();refresh_apps();layout_controls();sample_stats();SetTimer(hwnd,STATS_TIMER,3000,NULL);if(prefer_desktop)SetTimer(hwnd,START_DESKTOP_TIMER,800,NULL);else if(prefer_pin)SetTimer(hwnd,START_PIN_TIMER,800,NULL);
+        refresh_spaces();refresh_apps();layout_controls();sample_stats();SetTimer(hwnd,STATS_TIMER,monitor.interval,NULL);if(prefer_desktop)SetTimer(hwnd,START_DESKTOP_TIMER,800,NULL);else if(prefer_pin)SetTimer(hwnd,START_PIN_TIMER,800,NULL);
         if(!test_mode){add_tray();RegisterHotKey(hwnd,ID_HOTKEY,MOD_CONTROL|MOD_ALT|MOD_NOREPEAT,'N');}
         BOOL dark=TRUE;DwmSetWindowAttribute(hwnd,20,&dark,sizeof(dark));return 0;
     }
@@ -904,14 +1147,15 @@ static LRESULT CALLBACK window_proc(HWND hwnd,UINT msg,WPARAM wp,LPARAM lp){
         COLORREF fill=selected?RGB(48,65,95):PANEL;
         if(d->CtlID==ID_ADD||d->CtlID==ID_LAUNCH_ALL)fill=selected?RGB(76,103,159):RGB(53,77,122);
         BOOL drop_hover=d->CtlID==ID_SPACES&&hold_drag.dragging&&hold_drag.hover_workspace==(int)d->itemID;
-        if(d->CtlID==ID_SPACES){if(d->itemID==(UINT)-1)return TRUE;SendMessageW(space_list,LB_GETTEXT,d->itemID,(LPARAM)caption);if((int)d->itemID==active_space)fill=RGB(42,56,79);if(drop_hover)fill=d->itemID?RGB(53,77,122):RGB(70,38,43);}
+        if(d->CtlID==ID_SPACES){if(d->itemID==(UINT)-1)return TRUE;SendMessageW(space_list,LB_GETTEXT,d->itemID,(LPARAM)caption);if(workspace_at_row((int)d->itemID)==active_space)fill=RGB(42,56,79);if(drop_hover)fill=workspace_at_row((int)d->itemID)!=0?RGB(53,77,122):RGB(70,38,43);}
         else GetWindowTextW(d->hwndItem,caption,80);
         HBRUSH b=CreateSolidBrush(fill);FillRect(d->hDC,&d->rcItem,b);DeleteObject(b);
-        if(drop_hover){COLORREF edge=d->itemID?RGB(193,213,255):RGB(226,118,118);HPEN pen=CreatePen(PS_SOLID,px(2),edge);HGDIOBJ oldpen=SelectObject(d->hDC,pen),oldbrush=SelectObject(d->hDC,GetStockObject(NULL_BRUSH));RECT outline=d->rcItem;InflateRect(&outline,-px(1),-px(1));Rectangle(d->hDC,outline.left,outline.top,outline.right,outline.bottom);SelectObject(d->hDC,oldbrush);SelectObject(d->hDC,oldpen);DeleteObject(pen);}
+        if(drop_hover){COLORREF edge=workspace_at_row((int)d->itemID)!=0?RGB(193,213,255):RGB(226,118,118);HPEN pen=CreatePen(PS_SOLID,px(2),edge);HGDIOBJ oldpen=SelectObject(d->hDC,pen),oldbrush=SelectObject(d->hDC,GetStockObject(NULL_BRUSH));RECT outline=d->rcItem;InflateRect(&outline,-px(1),-px(1));Rectangle(d->hDC,outline.left,outline.top,outline.right,outline.bottom);SelectObject(d->hDC,oldbrush);SelectObject(d->hDC,oldpen);DeleteObject(pen);}
         RECT t=d->rcItem;t.left+=px(sidebar_collapsed&&d->CtlID==ID_SPACES?2:12);t.right-=px(sidebar_collapsed&&d->CtlID==ID_SPACES?2:8);
         wchar_t compact[3]={0};const wchar_t *label=caption;UINT alignment=d->CtlID==ID_SPACES?DT_LEFT:DT_CENTER;
         if(sidebar_collapsed&&d->CtlID==ID_SPACES){compact[0]=caption[0];if(caption[0]>=0xd800&&caption[0]<=0xdbff&&caption[1]>=0xdc00&&caption[1]<=0xdfff)compact[1]=caption[1];label=compact;alignment=DT_CENTER;}
         text(d->hDC,label,t,body_font,(d->itemState&ODS_DISABLED)?RGB(112,128,150):TEXT,DT_SINGLELINE|DT_VCENTER|DT_END_ELLIPSIS|alignment);
+        if(d->CtlID==ID_SPACES&&workspace_dragging&&(int)d->itemID==workspace_drag_to){RECT edge=d->rcItem;if(workspace_drag_to>workspace_drag_from)edge.top=edge.bottom-px(2);else edge.bottom=edge.top+px(2);HBRUSH mark=CreateSolidBrush(RGB(63,209,242));FillRect(d->hDC,&edge,mark);DeleteObject(mark);}
         if(d->itemState&ODS_FOCUS){RECT f=d->rcItem;InflateRect(&f,-3,-3);DrawFocusRect(d->hDC,&f);}return TRUE;
     }
     case WM_COMMAND:{int id=LOWORD(wp);
@@ -921,13 +1165,14 @@ static LRESULT CALLBACK window_proc(HWND hwnd,UINT msg,WPARAM wp,LPARAM lp){
         if(id==ID_CLOSE){PostMessageW(hwnd,WM_CLOSE,0,0);return 0;}
         if(id==ID_SYSTEM_DASHBOARD){open_task_manager();return 0;}
         if(id==ID_SETTINGS){settings_menu();return 0;}
+        if(id==ID_MONITOR_SETTINGS){monitor_settings();return 0;}
         if(id==ID_BATCH_TASKS){batch_tasks_open(main_window);return 0;}
         if(id==ID_SYNC_MANAGER){if(!sync_manager_open(main_window))error_message(nova_text(L"无法打开同步管理；本机配置可能损坏或来自更新版本，原文件保留。",L"Unable to open synchronization; local configuration may be damaged or newer. Original data preserved."));return 0;}
         if(id==ID_DESKTOP){set_desktop_mode(!desktop_mode);return 0;}
         if(id==ID_SIDEBAR){set_sidebar_collapsed(!sidebar_collapsed);return 0;}
         if(id==ID_LAUNCH_ALL){launch_workspace();return 0;}
         if(id==ID_FILES){if(active_space!=0){active_space=0;save_config();refresh_spaces();}open_file_manager();return 0;}
-        if(id==ID_SPACES&&HIWORD(wp)==LBN_SELCHANGE){end_name_edit(TRUE);int i=(int)SendMessageW(space_list,LB_GETCURSEL,0,0);if(i>=0){active_space=i;save_config();SetWindowTextW(search_edit,L"");if(active_space==0)open_file_manager();else{if(files_page)show_workspace_page();refresh_apps();}}return 0;}
+        if(id==ID_SPACES&&HIWORD(wp)==LBN_SELCHANGE){end_name_edit(TRUE);int i=workspace_at_row((int)SendMessageW(space_list,LB_GETCURSEL,0,0));if(i>=0){active_space=i;save_config();SetWindowTextW(search_edit,L"");if(active_space==0)open_file_manager();else{if(files_page)show_workspace_page();refresh_apps();}}return 0;}
         if(id==ID_SEARCH&&HIWORD(wp)==EN_CHANGE){refresh_apps();return 0;}
         if(id==ID_NAME&&HIWORD(wp)==EN_KILLFOCUS){end_name_edit(TRUE);return 0;}
         switch(id){case ID_ADD:pick_file();break;case ID_FOLDER:pick_folder();break;case ID_PIN:set_pinned(!pinned);break;case ID_STARTUP:toggle_startup();break;case ID_LANGUAGE_ZH:apply_language(FALSE);break;case ID_LANGUAGE_EN:apply_language(TRUE);break;case ID_NEW:new_space();break;case ID_RENAME:edit_name();break;case ID_DELETE:delete_space();break;case ID_REMOVE:remove_app();break;case ID_OPEN:restore_window();break;case ID_QUIT:DestroyWindow(hwnd);break;}return 0;
@@ -962,7 +1207,7 @@ static LRESULT CALLBACK window_proc(HWND hwnd,UINT msg,WPARAM wp,LPARAM lp){
     case WM_NOVA_BATCH_CHANGED:if(app_list)refresh_apps();return 0;
     case WM_TRAY:if(lp==WM_LBUTTONUP)restore_window();if(lp==WM_RBUTTONUP)tray_menu();return 0;
     case WM_CLOSE:file_manager_close();DestroyWindow(hwnd);return 0;
-    case WM_DESTROY:nova_log_write(NOVA_LOG_INFO,"app","shutdown_begin",L"workers_join_before_storage_close=1");sync_manager_shutdown();batch_tasks_shutdown();file_manager_close();save_config();KillTimer(hwnd,STATS_TIMER);KillTimer(hwnd,START_PIN_TIMER);KillTimer(hwnd,START_DESKTOP_TIMER);UnregisterHotKey(hwnd,ID_HOTKEY);if(!test_mode)Shell_NotifyIconW(NIM_DELETE,&tray);PostQuitMessage(0);return 0;
+    case WM_DESTROY:nova_log_write(NOVA_LOG_INFO,"app","shutdown_begin",L"workers_join_before_storage_close=1");sync_manager_shutdown();batch_tasks_shutdown();file_manager_close();save_config();KillTimer(hwnd,STATS_TIMER);monitor_shutdown();KillTimer(hwnd,START_PIN_TIMER);KillTimer(hwnd,START_DESKTOP_TIMER);UnregisterHotKey(hwnd,ID_HOTKEY);if(!test_mode)Shell_NotifyIconW(NIM_DELETE,&tray);PostQuitMessage(0);return 0;
     }return DefWindowProcW(hwnd,msg,wp,lp);
 }
 

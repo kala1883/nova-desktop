@@ -50,7 +50,7 @@ BOOL hold_drag_message(HoldDrag *d,UINT msg,WPARAM wp,LPARAM lp){
             update_workspace_hover(d,hover);ListView_SetItemState(d->list,-1,0,LVIS_DROPHILITED);
             RECT list_bounds;GetWindowRect(d->list,&list_bounds);BOOL over_list=PtInRect(&list_bounds,screen);
             if(hover<0&&over_list){LVHITTESTINFO hit={0};hit.pt=point;int row=ListView_HitTest(d->list,&hit);if(row>=0)ListView_SetItemState(d->list,row,LVIS_DROPHILITED,LVIS_DROPHILITED);}
-            SetCursor(LoadCursorW(NULL,(hover>0||over_list)?IDC_SIZEALL:IDC_NO));return TRUE;
+            SetCursor(LoadCursorW(NULL,((hover>=0&&hover!=d->fixed_workspace_row)||over_list)?IDC_SIZEALL:IDC_NO));return TRUE;
         }
     }
     if(msg==WM_LBUTTONUP&&d->armed){

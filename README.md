@@ -193,12 +193,22 @@ atomic publication and rollback. See [configuration format](config/README.md).
 - Use the chevron beside the NOVA wordmark, or press `Ctrl+B`, to collapse or
   expand the workspace sidebar. The compact rail keeps workspace switching
   available, and the chosen state is restored on the next launch.
-- The bottom of the sidebar shows CPU and memory gauges in one vertical column.
-  Chip and RAM icons replace visible labels; percentages remain readable. Click
-  anywhere on the card, or focus it with Tab and press Enter/Space, to open
-  Windows Task Manager. Hover for localized metric names. The compact rail keeps
-  both gauges; unavailable samples display an em dash. Updates use the existing
-  three-second visible-window sampling, without continuous animation.
+- The borderless sidebar monitor supports CPU, RAM, disk, GPU and network.
+  In **Settings > Hardware monitor**, select multiple attributes per hardware,
+  reorder the hardware with Move up/down or hold a sidebar icon for 350 ms and drag it to another grid cell, choose one to three columns and set
+  the sampling interval (250–3600000 ms; default 3000). Uncheck all attributes
+  to hide a hardware card. Changes take effect after Save and persist in JSON.
+  The compact rail uses one column. Hover for the full readings; click or
+  press Enter/Space on the monitor to open Windows Task Manager.
+  CPU/RAM use Win32 APIs; optional Windows performance counters provide disk
+  activity/rates, GPU busiest performance counter and dedicated-memory usage, and network
+  throughput; the Windows IP Helper API supplies the count and summed receive-link speed of active physical NICs. Capacity aggregates fixed drive-letter volumes. NVIDIA driver NVML, if
+  installed in the Windows system directory, provides GPU 0 temperature, clock
+  and power where supported. The Intel RAPL Package0 power counter reports CPU package watts where exposed. Windows Storage temperature queries read fixed volumes without elevation and report the hottest available sensor, with a one-second minimum polling interval. The ACPI thermal-zone temperature is separate from CPU core temperature; unsupported metrics show N/A, never estimates.
+  Only visible windows sample; no external monitoring service is installed.
+- Drag workspace names vertically or use their context menu to move up/down
+  or to the top/bottom. The display order is stored by stable workspace ID,
+  so even Files can move without changing its file-manager identity.
 - Press `Ctrl+K` to search the active workspace. Clear the search before
   reordering items. In an unfiltered workspace, drag an icon onto another icon
   to reorder it, or onto another normal workspace to move it. Dragging starts
